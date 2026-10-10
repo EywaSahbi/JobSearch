@@ -7,9 +7,6 @@ import { CANONICAL_STATES, statusDot } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { saveStatus } from "@/lib/pipeline-status.mjs";
 
-// Status writeback control. Updates the existing tracker row (status cell) via
-// /api/status — never adds rows. Reverts on failure; confirms with the
-// terminal-popup animation.
 type StatusSelectProps = {
   n: string;
   current: string;
@@ -74,10 +71,6 @@ function StatusEditor({ n, current, inline = false, applicationLabel, onSaved }:
     try {
       const confirmed = await saveStatus(n, prev, next);
       if (!confirmed) return;
-      // A filter may unmount this editor while the write is in flight. Still
-      // refresh; the parent's callback captures identity, never row position.
-      // Disabling a focused select can move focus to body. Restore it only
-      // if the user has not moved to search, tabs or another row meanwhile.
       const restoreFocus = hadFocus && (document.activeElement === document.body || document.activeElement === select.current);
       if (onSaved) onSaved(confirmed, restoreFocus);
       else router.refresh();
@@ -92,7 +85,7 @@ function StatusEditor({ n, current, inline = false, applicationLabel, onSaved }:
       }
     } catch (cause) {
       if (!mounted.current) return;
-      setStatus(prev); // revert on failure
+      setStatus(prev);
       setError(cause instanceof Error ? cause.message : "Could not save status. Please try again.");
     } finally {
       saving.current = false;

@@ -1,8 +1,3 @@
-/**
- * Content-level extract/patch for user-owned LaTeX CV templates.
- * v1 families: resumeSubheading | tabularx-itemize
- */
-
 import { escapeLatex } from './latex-escape.mjs';
 
 export const SUPPORTED_FAMILIES = ['resumeSubheading', 'tabularx-itemize'];
@@ -11,10 +6,6 @@ export const UNSUPPORTED_HINT =
   'Unsupported LaTeX CV layout. v1 supports \\resumeSubheading + \\resumeItem macros, ' +
   'or tabularx + itemize without resume macros. Use /career-ops latex (cv.md → career-ops template) instead.';
 
-/**
- * @param {string} tex
- * @returns {number}
- */
 export function findMatchingBrace(tex, openIdx) {
   if (tex[openIdx] !== '{') return -1;
   let depth = 0;
@@ -38,10 +29,6 @@ export function findMatchingBrace(tex, openIdx) {
   return -1;
 }
 
-/**
- * @param {string} tex
- * @returns {'resumeSubheading'|'tabularx-itemize'|null}
- */
 export function detectFamily(tex) {
   if (typeof tex !== 'string' || !tex.trim()) return null;
   if (/\\resumeSubheading\b/.test(tex) && /\\(resumeItem|resumeItemWithoutTitle|resumeSubItem)\b/.test(tex)) {
@@ -55,34 +42,16 @@ export function detectFamily(tex) {
   return null;
 }
 
-/**
- * Index where the document body starts, so extraction can skip macro
- * definitions in the preamble (e.g. `\newcommand{\resumeSubItem}[2]{\resumeItem{#1}{#2}}`
- * would otherwise be captured as a `#1` slot).
- *
- * @param {string} tex
- * @returns {number}
- */
 function bodyStart(tex) {
   const docStart = tex.indexOf('\\begin{document}');
   return docStart === -1 ? 0 : docStart;
 }
 
-/**
- * True when `idx` sits on a line that is commented out at that position —
- * i.e. an unescaped `%` appears earlier on the same line. Commented macro
- * calls are inert LaTeX (often old bullets kept for reference) and must not
- * become editable slots.
- *
- * @param {string} tex
- * @param {number} idx
- * @returns {boolean}
- */
 function isCommentedAt(tex, idx) {
   const lineStart = tex.lastIndexOf('\n', idx - 1) + 1;
   for (let i = lineStart; i < idx; i++) {
     if (tex[i] === '\\') {
-      i++; // skip escaped char (\% is a literal percent)
+      i++;
       continue;
     }
     if (tex[i] === '%') return true;
@@ -90,21 +59,6 @@ function isCommentedAt(tex, idx) {
   return false;
 }
 
-/**
- * Extract macro argument bodies as editable slots. Spans are absolute
- * offsets into `tex`; scanning starts at the document body.
- *
- * `useNextGroupIfEmpty` handles the common `\resumeItemWithoutTitle{}{Text}`
- * pattern (one-parameter macro called with an empty first group followed by a
- * plain braced group): when the captured group is empty/whitespace, the slot
- * points at the immediately following braced group instead.
- *
- * @param {string} tex
- * @param {string} macroName
- * @param {string} kind
- * @param {{useNextGroupIfEmpty?: boolean}} [opts]
- * @returns {Array<{id: string, kind: string, text: string, span: {start: number, end: number}}>}
- */
 function extractMacroBodies(tex, macroName, kind, { useNextGroupIfEmpty = false } = {}) {
   const slots = [];
   const needle = `\\${macroName}{`;
@@ -126,7 +80,7 @@ function extractMacroBodies(tex, macroName, kind, { useNextGroupIfEmpty = false 
     if (useNextGroupIfEmpty && !tex.slice(innerStart, innerEnd).trim()) {
       let cursor = closeBrace + 1;
       while (cursor < tex.length && /\s/.test(tex[cursor])) cursor++;
-      if (tex[cursor] !== '{') continue; // empty group with no follow-up group — nothing editable
+      if (tex[cursor] !== '{') continue;
       const openNext = cursor;
       const closeNext = findMatchingBrace(tex, openNext);
       if (closeNext === -1) break;
@@ -145,14 +99,6 @@ function extractMacroBodies(tex, macroName, kind, { useNextGroupIfEmpty = false 
   return slots;
 }
 
-/**
- * Extract the value argument of `\resumeSubItem{Category}{Items}` calls as
- * skill slots. The category (first group) is left untouched; only the second
- * group is editable.
- *
- * @param {string} tex
- * @returns {Array<{kind: string, text: string, span: {start: number, end: number}}>}
- */
 function extractSubItemValues(tex) {
   const slots = [];
   const needle = '\\resumeSubItem{';
@@ -186,10 +132,6 @@ function extractSubItemValues(tex) {
   return slots;
 }
 
-/**
- * @param {string} tex
- * @returns {Array<{id: string, kind: string, text: string, span: {start: number, end: number}}>}
- */
 function extractSkillValues(tex) {
   const slots = [];
   let searchFrom = bodyStart(tex);
@@ -234,10 +176,6 @@ function extractSkillValues(tex) {
   return slots;
 }
 
-/**
- * @param {string} tex
- * @returns {Array<{id: string, kind: string, text: string, span: {start: number, end: number}}>}
- */
 function extractItemizeItems(tex) {
   const docStart = tex.indexOf('\\begin{document}');
   const body = docStart === -1 ? tex : tex.slice(docStart);
@@ -277,11 +215,6 @@ function extractItemizeItems(tex) {
   return slots;
 }
 
-/**
- * @param {string} tex
- * @param {'resumeSubheading'|'tabularx-itemize'} family
- * @returns {Array<{id: string, kind: string, text: string, span: {start: number, end: number}}>}
- */
 export function extractSlots(tex, family) {
   if (family === 'resumeSubheading') {
     const byPosition = (a, b) => a.span.start - b.span.start;
@@ -310,11 +243,6 @@ export function extractSlots(tex, family) {
   return [];
 }
 
-/**
- * @param {string} texPath
- * @param {string} tex
- * @returns {{supported: boolean, family: string|null, source: string, slots: Array, error?: string, hint?: string}}
- */
 export function buildManifest(texPath, tex) {
   const family = detectFamily(tex);
   if (!family) {
@@ -337,13 +265,6 @@ export function buildManifest(texPath, tex) {
   };
 }
 
-/**
- * @param {string} tex
- * @param {Array<{id: string, text: string}>} patches
- * @param {Array<{id: string, span: {start: number, end: number}}>} slots
- * @param {{escape?: boolean}} [opts]
- * @returns {string}
- */
 export function applyPatches(tex, patches, slots, { escape = true } = {}) {
   const slotById = new Map(slots.map(s => [s.id, s]));
   const ordered = [...patches]

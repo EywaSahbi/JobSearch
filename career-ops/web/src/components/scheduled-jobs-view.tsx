@@ -143,7 +143,6 @@ export function ScheduledJobsView() {
 
   return (
     <div className="mx-auto max-w-5xl px-5 py-8 md:px-8 space-y-8">
-      {/* Header matching Explore & Portals format */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-6">
         <div>
           <div className="flex items-center gap-2.5">
@@ -185,7 +184,6 @@ export function ScheduledJobsView() {
       </div>
       {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-600 dark:text-rose-400">{error}</div>}
 
-      {/* Stats Cards */}
       <div className="grid gap-3.5 sm:grid-cols-4">
         <StatCard label="Active Scans" value={activeJobs.length} subtitle={`${jobsList.length} total jobs`} icon={<Zap className="size-4 text-emerald-500" />} />
         <StatCard label="Executed Runs" value={totalRuns} subtitle={`${successRuns} successful`} icon={<Layers className="size-4 text-brand" />} />
@@ -193,7 +191,6 @@ export function ScheduledJobsView() {
         <StatCard label="Success Rate" value={`${successRate}%`} subtitle={`${failedRuns} failed runs`} icon={<CheckCircle2 className="size-4 text-emerald-500" />} />
       </div>
 
-      {/* OS Task Scheduler Banner */}
       {scheduler && (
         <div className="co-rise rounded-2xl border border-border bg-surface/40 p-4 shadow-sm backdrop-blur-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -240,7 +237,6 @@ export function ScheduledJobsView() {
         </div>
       )}
 
-      {/* Filter Tabs & Search */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1 rounded-full border border-border bg-surface/60 p-1">
           <button
@@ -284,7 +280,6 @@ export function ScheduledJobsView() {
         </div>
       </div>
 
-      {/* Jobs Grid */}
       {filteredJobs.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border p-12 text-center">
           <CalendarClock className="mx-auto size-8 text-faint" />
@@ -313,7 +308,6 @@ export function ScheduledJobsView() {
         </div>
       )}
 
-      {/* Create Modal, Edit Modal & History Drawer */}
       <CreateJobModal
         isOpen={createModalOpen}
         onClose={() => setCreateModalOpen(false)}

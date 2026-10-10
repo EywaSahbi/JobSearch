@@ -1,34 +1,11 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
 import { decodeEntities } from './_html-entities.mjs';
 
-// Heckler & Koch provider — single-company (pattern: ibm/dassault/rheinmetall).
-// The vacancy list at heckler-koch.com/de/Karriere/Stellenangebote is a Nuxt
-// page whose job cards are SERVER-rendered, so a single bare-HTTP GET returns
-// every posting (small board, ~32 roles, all in Oberndorf a. N. / Vöhringen).
-// The apply backend lives on karriere.heckler-koch.com/jobposting/{hash}; the
-// listing links straight to it, so that hash is our stable id + job URL.
-//
-// Card markup:
-//   <a href="https://karriere.heckler-koch.com/jobposting/{hash}" …>
-//     <div class="text-secondary font-medium">
-//       <p> {Field} | {Type} </p>
-//       <h3 class="text-lg md:text-2xl">{Title}</h3>
-//     </div> …
-//   </a>
-//
-// The list carries no explicit location or date; H&K is effectively
-// single-site (Oberndorf), and titles often name the site, so we leave location
-// empty rather than guess. detect() claims the heckler-koch.com host.
+const MAX_JOBS = 500;
 
-const MAX_JOBS = 500; // generous cap; the board is tiny
-
-/** @param {string} s */
 function clean(s) {
   return decodeEntities(s.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-/** Resolve the vacancy-list URL from api:/careers_url; default the DE list. */
 export function resolveListUrl(entry) {
   const raw = entry.api || entry.careers_url || '';
   let u;
@@ -40,21 +17,12 @@ export function resolveListUrl(entry) {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
   const host = u.host.toLowerCase();
   if (host !== 'heckler-koch.com' && !host.endsWith('.heckler-koch.com')) return null;
-  // The apex 301s to www and http 301s to https (same registrable domain). Pin
-  // both here so the transport's redirect:'error' never refuses a URL detect() accepts.
   if (host === 'heckler-koch.com') u.host = 'www.heckler-koch.com';
   u.protocol = 'https:';
-  // A Stellenangebote path passes through; anything else on the host defaults.
   if (/Stellenangebote/i.test(u.pathname)) return `${u.origin}${u.pathname}`;
   return `${u.origin}/de/Karriere/Stellenangebote`;
 }
 
-/**
- * Parse the SSR listing into raw {id, title, url} records. Anchors on the
- * karriere.heckler-koch.com/jobposting/{hash} link (the stable id + URL), then
- * reads the sibling <h3> title inside the same anchor.
- * @param {string} html
- */
 export function parseListing(html) {
   if (typeof html !== 'string') return [];
   const out = [];
@@ -75,7 +43,6 @@ export function parseListing(html) {
   return out;
 }
 
-/** @type {Provider} */
 export default {
   id: 'hecklerkoch',
 

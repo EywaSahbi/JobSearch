@@ -1,23 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * prepare-application.mjs — ATS auto-fill for Greenhouse, Ashby, and Lever.
- *
- * Detects the ATS from the apply URL, reads candidate data from
- * config/profile.yml, and prints a prefill summary to stdout.
- * Never POSTs anything — the user reviews the output, opens the apply URL,
- * and submits themselves.
- *
- * Usage:
- *   node prepare-application.mjs --url <apply_url> --pdf output/<cv>.pdf
- *   node prepare-application.mjs --url <apply_url> --pdf output/<cv>.pdf --cover cover.txt
- *
- * Supported ATS:
- *   Greenhouse  boards.greenhouse.io / greenhouse.io
- *   Ashby       jobs.ashbyhq.com / ashbyhq.com
- *   Lever       jobs.(eu.)?lever.co / lever.co
- */
-
 import { readFileSync, existsSync, statSync } from 'fs';
 import { basename, resolve, dirname, relative, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
@@ -36,8 +18,6 @@ const ALLOWED_HOSTS = new Set([
   'lever.co',
 ]);
 
-// ── CLI args ─────────────────────────────────────────────────────────
-
 const args = process.argv.slice(2);
 const get = (flag) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : null; };
 
@@ -49,8 +29,6 @@ if (!applyUrl || !pdfPath) {
   console.error('Usage: node prepare-application.mjs --url <apply_url> --pdf <pdf_path> [--cover <cover_txt>]');
   process.exit(1);
 }
-
-// ── PDF validation ────────────────────────────────────────────────────
 
 const outputDir = resolve(DATA_ROOT, 'output');
 const absPdf    = resolve(DATA_ROOT, pdfPath);
@@ -68,8 +46,6 @@ if (!statSync(absPdf).isFile()) {
   console.error(`Error: ${pdfPath} is not a file`);
   process.exit(1);
 }
-
-// ── URL validation ────────────────────────────────────────────────────
 
 let parsedUrl;
 try {
@@ -90,14 +66,8 @@ if (!ALLOWED_HOSTS.has(parsedUrl.hostname)) {
   process.exit(1);
 }
 
-// ── ATS detection ─────────────────────────────────────────────────────
-
 const SAFE_SLUG = /^[a-zA-Z0-9._-]+$/;
 
-/**
- * @param {URL} url
- * @returns {{ ats: string, companySlug: string, jobId: string } | null}
- */
 function detectAts(url) {
   const path = url.pathname;
   const GH  = new Set(['boards.greenhouse.io', 'greenhouse.io']);
@@ -127,8 +97,6 @@ function detectAts(url) {
   return null;
 }
 
-// ── Profile reader ────────────────────────────────────────────────────
-
 function readProfile() {
   const profilePath = resolve(DATA_ROOT, 'config/profile.yml');
   if (!existsSync(profilePath)) return {};
@@ -152,8 +120,6 @@ function readProfile() {
   };
 }
 
-// ── Cover letter reader (optional) ────────────────────────────────────
-
 function readCover() {
   if (!coverPath) return null;
   const abs = resolve(DATA_ROOT, coverPath);
@@ -168,8 +134,6 @@ function readCover() {
   const text = readFileSync(abs, 'utf-8').trim();
   return { text, wordCount: text.split(/\s+/).filter(Boolean).length };
 }
-
-// ── Field maps per ATS ────────────────────────────────────────────────
 
 function buildGreenhouseFields(profile, cover, pdfFile) {
   return [
@@ -207,8 +171,6 @@ function buildLeverFields(profile, cover, pdfFile) {
     profile.portfolioUrl ? ['urls[Portfolio]', profile.portfolioUrl] : null,
   ].filter(Boolean);
 }
-
-// ── Main ──────────────────────────────────────────────────────────────
 
 const detected = detectAts(parsedUrl);
 if (!detected) {

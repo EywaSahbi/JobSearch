@@ -52,10 +52,10 @@ function runJob(runner: string, id: string) {
     timeoutTimer = setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      try { child.kill("SIGTERM"); } catch { /* close/error settles the promise */ }
+      try { child.kill("SIGTERM"); } catch { }
       killTimer = setTimeout(() => {
         if (settled) return;
-        try { child.kill("SIGKILL"); } catch { /* close/error settles the promise */ }
+        try { child.kill("SIGKILL"); } catch { }
       }, KILL_GRACE_MS);
     }, TIMEOUT_MS);
 

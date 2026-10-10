@@ -1,9 +1,3 @@
-// Full-viewport "magic processing" wallpaper for the apply page: the real form's
-// first screenshot, blurred + enlarged to fill the main area, under a dot grid
-// that drifting glow-halos light up (mix-blend screen). Fixed so the questions
-// scroll over it. CSS is co-located in a <style> tag (NOT globals.css) so it
-// can't be defeated by Tailwind v4's stale-CSS HMR. Pure CSS, GPU transforms,
-// respects prefers-reduced-motion.
 const CSS = `
 .co-bd{position:fixed;top:0;right:0;bottom:0;left:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--bg)}
 @media(min-width:768px){.co-bd{left:15rem}}

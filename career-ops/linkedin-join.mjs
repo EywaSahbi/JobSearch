@@ -1,74 +1,4 @@
 #!/usr/bin/env node
-/**
- * linkedin-join.mjs — Warm-intro finder: LinkedIn connections ⋈ job-search targets
- *
- * Joins a LinkedIn `Connections.csv` export (Settings → Data Privacy → Get a
- * copy of your data → Connections) against the two company lists the pipeline
- * already maintains:
- *
- *   - data/applications.md  → companies you have evaluated or applied to
- *   - portals.yml           → companies the scanner sweeps (tracked_companies)
- *
- * and reports only the intersection: the people you already know at a company
- * that is live in your funnel. Zero LLM cost, zero network.
- *
- * SCOPE (deliberate, see AGENTS.md "Source-of-Truth Boundary"): this is an
- * OPERATIONAL lookup — it changes who you contact and through which channel.
- * It is NOT an evaluation input (a connection does not make a role a better
- * fit; Blocks A-F own the score) and it is NOT a content source (nothing here
- * may produce a claim in a CV, cover letter, or form answer). The raw export
- * is third-party PII: it lives under data/ (user layer, outside this repo via
- * the data symlink) and only the handful of rows you promote by hand ever
- * reach data/contacts.tsv.
- *
- * MATCHING. LinkedIn company names are free text, so exact string equality
- * misses most real hits ("Siemens" vs "Siemens Digital Industries Software").
- * Names are tokenized, case/diacritic-folded, and split into all-tokens and
- * DISTINCTIVE tokens (generic industry/legal words removed), then tiered:
- *
- *   exact   full folded key equal          "GE HealthCare"  ~ "GE Healthcare"
- *   strong  distinctive token sets EQUAL,   "Siemens"        ~ "Siemens Digital
- *           only generic filler differs                        Industries Software"
- *   weak    distinctive tokens overlap      "Epic Systems"   ~ "Epic Games"
- *           but the sets are not equal
- *
- * Strong deliberately requires set EQUALITY, not containment: "Epic" ⊆ "Epic
- * Games" and "Blue" ⊆ "Blue Cloud Ventures" read as matches but name different
- * companies than Epic Systems and Optimal Blue. An extra distinctive token on
- * either side changes the entity; only generic filler may differ.
- *
- * Dropping generic tokens is what stops "Monogram Health" ~ "Advocate Health"
- * and substring matching is deliberately NOT used, so "Loop" never matches
- * "Loopio". A match whose only shared tokens are under 3 characters is demoted
- * to weak ("GE" ~ "GE Inc"). exact+strong show by default; weak needs
- * --include-weak. Every match prints both raw names — you are the last filter.
- *
- * SECOND DEGREE. The export carries first-degree contacts only; second-degree
- * edges live inside the platform UI and are not exportable. Every target
- * therefore also carries a prefilled people-search URL that career-ops builds
- * and never fetches, so the user opens it themselves in their own browser.
- *
- * Run: node linkedin-join.mjs                  (JSON: targets + quality + totals)
- *      node linkedin-join.mjs --company Acme --summary
- *                                              ("do I know anyone here?", one company;
- *                                               says so explicitly when the answer is no)
- *      node linkedin-join.mjs --summary        (human-readable, grouped by company)
- *      node linkedin-join.mjs --summary --include-weak
- *      node linkedin-join.mjs --tracker-only   (only companies in applications.md)
- *      node linkedin-join.mjs --portals-only   (only scanner targets, no application yet)
- *      node linkedin-join.mjs --since 2020     (connections made in/after 2020)
- *      node linkedin-join.mjs --tsv            (contacts.tsv-shaped rows on stdout)
- *      node linkedin-join.mjs --csv <path>     (override the export location)
- *      node linkedin-join.mjs --self-test
- *      node linkedin-join.mjs --help
- *
- * Argv goes through lib/cli-flags.mjs, so every flag accepts both `--flag value`
- * and `--flag=value`, an unrecognized flag exits 1 rather than falling through to
- * default behaviour, and a value flag with no operand is a usage error.
- *
- * --tsv PRINTS, never appends: review the rows, then paste the keepers into
- * data/contacts.tsv so contacts.mjs and `contacto` pick them up.
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -89,10 +19,6 @@ const CONTACTS_PATH = join(DATA_ROOT, 'data/contacts.tsv');
 
 const args = process.argv.slice(2);
 
-// lib/cli-flags.mjs rather than a local indexOf() lookup. A hand-rolled parser
-// cannot see `--flag=value`, so `--csv=/other.csv` silently discarded the path
-// and the tool read data/Connections.csv instead, printing a plausible report
-// about a file nobody asked for. Same defect class as #2401/#2402.
 const VALUE_FLAGS = ['--since', '--csv', '--company'];
 const KNOWN_FLAGS = [
   '--summary', '--tsv', '--self-test', '--include-weak',
@@ -122,67 +48,27 @@ const includeWeak = hasFlag(args, '--include-weak');
 const trackerOnly = hasFlag(args, '--tracker-only');
 const portalsOnly = hasFlag(args, '--portals-only');
 const sinceRaw = flagValue(args, '--since') ?? null;
-// parseInt('2020x') is 2020 and parseInt('abc') is NaN, which the truthiness
-// check below would read as "no filter" — a silently ignored flag is worse than
-// an error, because the output looks like a filtered result.
 const sinceYear = sinceRaw === null ? null : (/^\d{4}$/.test(sinceRaw) ? Number(sinceRaw) : NaN);
 const csvPath = flagValue(args, '--csv') || DEFAULT_CSV;
 const companyQuery = flagValue(args, '--company') ?? null;
 
-// --- Company name normalization -------------------------------------------
-
-/**
- * Tokens carrying no identifying signal: legal suffixes, corporate filler, and
- * the industry words that dominate this pipeline's verticals. Removing them is
- * what makes subset matching safe — two health companies must not match on
- * "health" alone. Placeholder markers (stealth, undisclosed, …) are included so
- * anonymized tracker rows reduce to zero distinctive tokens and drop out as
- * targets entirely rather than matching arbitrary connections.
- */
 const GENERIC = new Set([
-  // articles / conjunctions
   'the', 'a', 'an', 'and', 'of', 'for',
-  // legal forms
   'inc', 'incorporated', 'llc', 'llp', 'ltd', 'limited', 'corp', 'corporation',
   'co', 'company', 'gmbh', 'mbh', 'ag', 'kg', 'sa', 'sas', 'sarl', 'bv', 'nv',
   'ab', 'oy', 'as', 'aps', 'plc', 'pty', 'srl', 'spa', 'kk', 'pte', 'pvt',
-  // corporate filler
   'holdings', 'holding', 'group', 'groupe', 'international', 'global',
   'worldwide', 'enterprises', 'enterprise', 'ventures', 'capital', 'partners',
   'associates', 'consulting', 'consultancy', 'industries', 'industrial',
-  // sector words common enough to be noise in this funnel
   'technologies', 'technology', 'tech', 'software', 'systems', 'system',
   'solutions', 'solution', 'services', 'service', 'labs', 'lab', 'digital',
   'data', 'cloud', 'ai', 'health', 'healthcare', 'medical', 'media', 'network',
   'networks', 'platform', 'platforms', 'security', 'cybersecurity', 'cyber',
   'financial', 'finance', 'insurance', 'energy', 'studio', 'studios',
-  // anonymized-posting placeholders
   'stealth', 'startup', 'unknown', 'confidential', 'undisclosed', 'anon',
   'anonymous', 'client', 'various',
 ]);
 
-/**
- * Fold a single token to a comparison key.
- *
- * Delegates to lib/ascii-fold.mjs — the tree's canonical name-folding rule —
- * rather than hand-rolling one. A naive NFKD-plus-strip-marks fold silently
- * misses NON-DECOMPOSING Latin, where the stroke or bar is part of the glyph
- * and no combining mark exists to remove: `Ørsted` never matched `Orsted`,
- * `Işık` never matched `Isik`, `Straße` never matched `Strasse`. asciiFold
- * carries the vetted mapping for those (ø→o, æ→ae, ß→ss, ı→i, ŋ→ng, …).
- *
- * `punctuation: 'delete'` because this runs per-token, AFTER companyTokens has
- * already split on punctuation — the word-splitting asciiFold's default 'space'
- * mode provides has happened by then, and re-splitting here would silently
- * produce two tokens where the caller counted one.
- *
- * FALLBACK. asciiFold returns '' for text with no Latin content (CJK, Cyrillic,
- * Greek) — the right answer when the comparison target is an ASCII hostname or
- * ATS slug, but wrong here: both sides of this join are free text, so 株式会社X
- * must still match 株式会社X. When the ASCII fold empties a non-empty token, fall
- * back to normalizeTextKey, which preserves script (and with it the Devanagari
- * क/का distinction that tracker-parse.mjs exists to protect).
- */
 export function foldToken(token) {
   const raw = String(token);
   const folded = asciiFold(raw, { punctuation: 'delete' });
@@ -190,18 +76,6 @@ export function foldToken(token) {
   return normalizeTextKey(raw);
 }
 
-/**
- * Split a company name into folded tokens.
- *
- * Parentheticals are dropped: tracker rows carry agency or disambiguation
- * context inline ("FORT (client undisclosed)", "Anon Cybersecurity Co.
- * (Harnham)") and that text is not part of the employer's name. The bracketed
- * content is returned separately so callers can index it as its own target —
- * knowing someone at the agency is a warm intro too.
- *
- * @param {string} name
- * @returns {{all: string[], distinctive: string[], key: string, parenthetical: string|null}}
- */
 export function companyTokens(name) {
   const raw = String(name || '');
   const parens = [...raw.matchAll(/\(([^)]*)\)/g)].map(m => m[1].trim()).filter(Boolean);
@@ -214,59 +88,28 @@ export function companyTokens(name) {
   return {
     all,
     distinctive: all.filter(t => !GENERIC.has(t)),
-    // Concatenated deliberately, NOT space-joined. LinkedIn employer strings
-    // vary in spacing far more than they vary in words: "GoDaddy"/"Go Daddy",
-    // "PayPal"/"Pay Pal", "Salesforce"/"Sales Force", "ServiceNow"/"Service
-    // Now" are all the same employer typed two ways, and only a separator-free
-    // key matches them. The cost is that "A B" and "AB" collide; the benefit is
-    // five real variants per the tests below, and a contrived collision still
-    // has to survive a human reading both raw names in the output.
     key: all.join(''),
     parenthetical: parens.length ? parens.join(' ') : null,
   };
 }
 
-/**
- * Compare two tokenized company names.
- *
- * @returns {'exact'|'strong'|'weak'|null} null when the names are unrelated.
- */
 export function matchCompany(a, b) {
   if (!a.key || !b.key) return null;
   if (a.key === b.key) return 'exact';
 
   const da = new Set(a.distinctive);
   const db = new Set(b.distinctive);
-  // A name made entirely of generic words ("Stealth Startup") has no identity
-  // to match on — only full-key equality above can pair it.
   if (!da.size || !db.size) return null;
 
   const shared = [...da].filter(t => db.has(t));
   if (!shared.length) return null;
 
-  // Strong requires the distinctive sets to be EQUAL, not merely nested. Mere
-  // containment reads as a match but is not: "Epic" ⊆ "Epic Games" and "Blue" ⊆
-  // "Blue Cloud Ventures" are different companies from Epic Systems and Optimal
-  // Blue. An extra distinctive token on either side changes the entity; only
-  // generic filler may differ, which is exactly what "Siemens" ~ "Siemens
-  // Digital Industries Software" and "Akamai" ~ "Akamai Technologies" do.
   const identical = da.size === db.size && shared.length === da.size;
-  // Two-letter overlaps are coincidence as often as signal ("GE" ~ "GE Inc").
   const substantive = shared.some(t => t.length >= 3);
   if (identical && substantive) return 'strong';
   return 'weak';
 }
 
-// --- CSV parsing (RFC 4180) -----------------------------------------------
-
-/**
- * Parse CSV text into rows of raw cells. Handles quoted fields, doubled quotes
- * as escapes, and newlines inside quotes — LinkedIn quotes any Position or
- * Company containing a comma ("Director, Strategic Accounts").
- *
- * @param {string} text
- * @returns {string[][]}
- */
 export function parseCsv(text) {
   const s = String(text || '').replace(/^﻿/, '');
   const rows = [];
@@ -295,12 +138,6 @@ export function parseCsv(text) {
   return rows;
 }
 
-/**
- * Locate the real header row.
- *
- * The export opens with a free-text "Notes:" preamble whose length LinkedIn has
- * changed before, so the header is found by content rather than a fixed offset.
- */
 export function findHeaderRow(rows) {
   for (let i = 0; i < rows.length; i++) {
     const lower = rows[i].map(c => c.trim().toLowerCase());
@@ -314,13 +151,11 @@ const MONTHS = {
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
-/** True when an ISO yyyy-mm-dd names a day that actually exists. */
 function isRealDate(iso) {
   const d = new Date(`${iso}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso;
 }
 
-/** Parse LinkedIn's "03 Aug 2026" (or an ISO date) into `{iso, year, raw}`. */
 export function parseConnectedOn(value) {
   const s = String(value || '').trim();
   if (!s) return { iso: null, year: null, raw: '' };
@@ -333,22 +168,12 @@ export function parseConnectedOn(value) {
     const month = MONTHS[m[2].slice(0, 3).toLowerCase()];
     if (month) {
       const iso = `${m[3]}-${String(month).padStart(2, '0')}-${String(Number(m[1])).padStart(2, '0')}`;
-      // Regex shape is not calendar validity: "31 Feb" and "29 Feb 2026" (not a
-      // leap year) both match the pattern. Round-trip through Date so an
-      // impossible day is reported unparsed rather than becoming a real-looking
-      // ISO string that later date math silently accepts.
       if (isRealDate(iso)) return { iso, year: Number(m[3]), raw: s };
     }
   }
   return { iso: null, year: null, raw: s };
 }
 
-/**
- * Turn raw CSV rows into connection objects, mapping cells by HEADER NAME so a
- * column reorder upstream cannot silently shift every field.
- *
- * @returns {{connections: object[], quality: object}}
- */
 export function parseConnections(text) {
   const quality = { noHeader: false, noCompany: 0, noName: 0, unparsedDates: 0 };
   const rows = parseCsv(text);
@@ -379,7 +204,6 @@ export function parseConnections(text) {
     const name = [get('first'), get('last')].filter(Boolean).join(' ');
     const company = get('company');
     if (!name) { quality.noName++; continue; }
-    // No employer means nothing to join on — counted, not dropped silently.
     if (!company) { quality.noCompany++; continue; }
 
     const connected = parseConnectedOn(get('connected'));
@@ -399,12 +223,6 @@ export function parseConnections(text) {
   return { connections, quality };
 }
 
-// --- Target lists ----------------------------------------------------------
-
-/**
- * Companies from the tracker, one target per row (plus one for any inline
- * parenthetical, which is typically the agency).
- */
 export function parseTrackerTargets(content) {
   const lines = String(content || '').split('\n');
   const colmap = resolveColumns(lines);
@@ -417,10 +235,6 @@ export function parseTrackerTargets(content) {
 
     const tokens = companyTokens(row.company);
     const meta = { num: row.num, role: row.role, status: row.status, score: row.score };
-    // A row with no distinctive tokens is an anonymized posting ("?", "Stealth
-    // Startup", "Unknown Co."). Matching it against a connection whose employer
-    // happens to be typed the same way pairs two unrelated companies, so it is
-    // dropped as a target rather than left to full-key equality.
     if (tokens.distinctive.length) {
       targets.push({ company: row.company, source: 'tracker', tokens, tracker: meta });
     } else {
@@ -441,7 +255,6 @@ export function parseTrackerTargets(content) {
   return { targets, skipped };
 }
 
-/** Enabled companies from portals.yml `tracked_companies`. */
 export function parsePortalTargets(content) {
   let doc;
   try {
@@ -466,10 +279,6 @@ export function parsePortalTargets(content) {
   return { targets, skipped };
 }
 
-/**
- * Name+company keys already present in the phonebook, so the report can mark
- * connections you have already promoted instead of re-suggesting them.
- */
 export function parseKnownContacts(content) {
   const known = new Set();
   for (const raw of String(content || '').split('\n')) {
@@ -482,43 +291,14 @@ export function parseKnownContacts(content) {
   return known;
 }
 
-/**
- * Prefilled second-degree people-search URL for a company.
- *
- * The connections export carries first-degree contacts only. Second-degree
- * edges exist solely inside the platform UI and are not exportable, so the
- * honest answer is a link the USER opens in their own browser. career-ops
- * constructs the string and never fetches it, which keeps the feature clear of
- * any automated-access prohibition (#2679 acceptance criterion 3).
- *
- * @param {string} company - Target company display name.
- * @returns {string} linkedin.com people search, filtered to 2nd-degree.
- */
 export function secondDegreeSearchUrl(company) {
   const q = encodeURIComponent(String(company || '').trim());
   return `https://www.linkedin.com/search/results/people/?keywords=${q}&network=%5B%22S%22%5D`;
 }
 
-// --- Join ------------------------------------------------------------------
-
 const TIER_RANK = { exact: 0, strong: 1, weak: 2 };
 
-/**
- * Join connections against targets.
- *
- * Targets are deduped by folded key, preferring tracker rows over portals
- * entries so a company you have actually applied to keeps its tracker context.
- *
- * @returns {{targets: object[], matchedConnections: number}}
- */
 export function joinConnections(connections, targetList, { known = new Set(), includeWeak = false } = {}) {
-  // Deduplicate on MATCH EQUIVALENCE, not on identical keys. A tracker row
-  // "Akamai" and a portals entry "Akamai Technologies" are the same employer
-  // (a strong match — only generic filler differs) but have different keys, so
-  // keying alone leaves both. Every connection then matches both and is
-  // reported twice, with the portals copy captioned "no application yet" about
-  // a company the user has already applied to. Tracker targets are placed
-  // first so the surviving copy is the one carrying tracker context.
   const merged = [];
   const ordered = [...targetList].sort((a, b) =>
     (a.source === 'tracker' ? 0 : 1) - (b.source === 'tracker' ? 0 : 1));
@@ -527,9 +307,6 @@ export function joinConnections(connections, targetList, { known = new Set(), in
       const tier = matchCompany(m.tokens, t.tokens);
       return tier === 'exact' || tier === 'strong';
     });
-    // A weak twin is NOT merged: weak means the names may well be different
-    // companies, and collapsing them would invent an equivalence the matcher
-    // itself declines to assert.
     if (!twin) merged.push({ ...t, connections: [] });
   }
   const byKey = new Map(merged.map(t => [t.tokens.key, t]));
@@ -562,8 +339,6 @@ export function joinConnections(connections, targetList, { known = new Set(), in
       source: t.source,
       tracker: t.tracker,
       secondDegreeSearch: secondDegreeSearchUrl(t.company),
-      // Best match first, then most recent connection — recency is the closest
-      // thing the export carries to relationship strength.
       connections: t.connections.sort((a, b) =>
         TIER_RANK[a.match] - TIER_RANK[b.match] ||
         String(b.connectedOn || '').localeCompare(String(a.connectedOn || '')) ||
@@ -579,14 +354,8 @@ export function joinConnections(connections, targetList, { known = new Set(), in
       return a.company.localeCompare(b.company);
     });
 
-  // targetCount is merged.length, NOT the caller's raw list length: dedup
-  // collapses strong-equivalent targets, so counting the input would report two
-  // target companies for the single Akamai / Akamai Technologies target the
-  // output actually contains.
   return { targets, matchedConnections: matched.size, targetCount: merged.length };
 }
-
-// --- Output ----------------------------------------------------------------
 
 function renderSummary(result) {
   const { targets, totals, quality } = result;
@@ -646,7 +415,6 @@ function renderSummary(result) {
   return out.join('\n');
 }
 
-/** contacts.tsv-shaped rows — printed for review, never appended automatically. */
 function renderTsv(result) {
   const out = ['# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker#\tnotes'];
   for (const t of result.targets) {
@@ -657,10 +425,6 @@ function renderTsv(result) {
         c.match === 'exact' ? '' : `Name match ${c.match}: "${c.linkedinCompany}".`,
         'Verify current employer before outreach.',
       ].filter(Boolean).join(' ');
-      // Cells carry connection-controlled text (name, title, employer). A cell
-      // starting =, +, - or @ executes as a formula when the reviewed TSV is
-      // opened in a spreadsheet, so prefix it with an apostrophe. Applied AFTER
-      // trimming, or leading whitespace would hide the leading character.
       const clean = (v) => {
         const value = String(v || '').replace(/[\t\r\n]+/g, ' ').trim();
         return /^[=+\-@]/.test(value) ? `'${value}` : value;
@@ -675,14 +439,6 @@ function renderTsv(result) {
   return out.join('\n');
 }
 
-/**
- * Single-company answer to "do I know anyone here?" (#2679).
- *
- * Distinct from renderSummary because the interesting case is the EMPTY one: a
- * company with no connections must say so in words. The bulk report filters
- * zero-match targets out, which is right for a digest and wrong for a direct
- * question — a blank reads as "not checked" rather than "checked, nobody".
- */
 function renderCompanyAnswer(result, query) {
   const target = result.targets[0];
   const out = [`Do you know anyone at "${query}"?`, ''];
@@ -711,8 +467,6 @@ function renderCompanyAnswer(result, query) {
   return out.join('\n');
 }
 
-// --- Self-test -------------------------------------------------------------
-
 function selfTest() {
   let passed = 0;
   const failures = [];
@@ -731,17 +485,13 @@ function selfTest() {
   check('unrelated names', tier('Datavant', 'Snyk') === null);
   check('all-generic name is inert', tier('Stealth Startup', 'Acme Startup') === null);
   check('short shared token demoted', tier('GE', 'GE Inc') === 'weak');
-  // Nesting is not identity: the extra distinctive token names another company.
   check('extra distinctive token demotes', tier('Epic Systems', 'Epic Games') === 'weak');
   check('nested name demotes', tier('Optimal Blue', 'Blue Cloud Ventures') === 'weak');
   check('extra token demotes', tier('Red Cell Partners', 'Red Rock Cell Co') === 'weak');
-  // Neither side contains the other: one shared token, one unique each.
   check('partial overlap is weak', tier('Kixie Nimbus', 'Nimbus Chainguard') === 'weak');
   check('CJK preserved', companyTokens('株式会社テスト').key.length > 0);
   check('Cyrillic preserved', companyTokens('Яндекс').key.length > 0);
   check('CJK still matches itself', tier('株式会社テスト', '株式会社テスト') === 'exact');
-  // Non-decomposing Latin: no combining mark to strip, so an NFKD-only fold
-  // drops the letter entirely and the pair never matches (lib/ascii-fold.mjs).
   check('slashed O folds', tier('Ørsted', 'Orsted') === 'exact');
   check('dotless i folds', tier('Işık Holding', 'Isik Holding') === 'exact');
   check('eszett folds', tier('Straße GmbH', 'Strasse GmbH') === 'exact');
@@ -809,16 +559,6 @@ function selfTest() {
   return failures.length ? 1 : 0;
 }
 
-// --- Main ------------------------------------------------------------------
-
-/**
- * Read a file, or null when it cannot be read for ANY reason.
- *
- * Deliberately not `existsSync` + `readFileSync`: existsSync answers true for a
- * directory, and the read then throws a raw EISDIR stack at the user. Missing
- * optional inputs, an unreadable data/ mount and a permission error are all the
- * same answer here — "no input from this source".
- */
 function readOrNull(path) {
   try {
     return readFileSync(path, 'utf8');
@@ -828,10 +568,6 @@ function readOrNull(path) {
 }
 
 function main() {
-  // Inside main(), not at module scope: validateFlags exits the process, and a
-  // test importing this module for its exports must never trigger that on the
-  // test runner's argv. requireOperand catches `--csv --summary`, where the
-  // operand is missing and the next token is another flag.
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
 
   if (selfTestMode) return selfTest();
@@ -847,9 +583,6 @@ function main() {
     return 1;
   }
 
-  // existsSync is true for a directory, and readFileSync then throws EISDIR as
-  // a raw node:fs stack. Every input goes through readOrNull so a bad path,
-  // permission error or missing data/ dir is a CLI message, not a crash.
   const csvText = readOrNull(csvPath);
   if (csvText === null) {
     console.error(`Connections export not readable: ${csvPath}\n` +
@@ -878,13 +611,6 @@ function main() {
   const contactsText = readOrNull(CONTACTS_PATH);
   const known = contactsText === null ? new Set() : parseKnownContacts(contactsText);
 
-  // "connections made in/after YYYY" cannot be true of a connection with no
-  // parseable date, so undated rows are excluded rather than waved through.
-  // Counted, not silently dropped: this feature is judged on recall, and a
-  // vanished warm intro the user never learns about is the expensive failure.
-  // `sinceYear !== null`, not truthiness: --since 0000 passes the four-digit
-  // check and converts to 0, which a truthy test reads as "no filter" — the
-  // same silently-ignored-flag failure the NaN guard above exists to prevent.
   const sinceActive = sinceYear !== null;
   const undatedExcluded = sinceActive
     ? connections.filter(c => c.connectedYear == null).length
@@ -893,9 +619,6 @@ function main() {
     ? connections.filter(c => c.connectedYear != null && c.connectedYear >= sinceYear)
     : connections;
 
-  // --company answers a direct question about one name, which may not be in the
-  // tracker or portals.yml at all (the scan just surfaced it). Build an ad-hoc
-  // target so the answer does not depend on the company already being tracked.
   if (companyQuery) {
     const tokens = companyTokens(companyQuery);
     if (!tokens.distinctive.length) {
@@ -934,9 +657,6 @@ function main() {
   return 0;
 }
 
-// Entry guard (repo convention, cf. contacts.mjs / stats.mjs / invite-match.mjs):
-// without it, importing this module to unit-test its exports runs the whole CLI
-// and exits the test process.
 if (isMainModule(import.meta.url)) {
   process.exit(main());
 }

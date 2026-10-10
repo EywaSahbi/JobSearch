@@ -1,39 +1,10 @@
 #!/usr/bin/env node
-/**
- * discard-analytics.mjs — Analyze the discard log for filter tuning
- *
- * The discard log (data/discard.log, or batch/logs/discard.log for batch runs)
- * is the only record of what the filters threw away and why. This script reads
- * it and produces a summary of rejection reasons, domains, and daily volume,
- * plus the most frequent title_mismatch URLs for the candidate to review.
- *
- * Read-only: never modifies the log.
- *
- * The top title_mismatch section is deliberately dumb — it lists the URLs and
- * lets the candidate judge whether a keyword is costing them real roles. It
- * never infers which keyword to add; that is a guess wearing a number.
- *
- * Run: node discard-analytics.mjs [--log <path>] [--reason <pattern>] [--top N] [--since YYYY-MM-DD]
- *
- * --log defaults to data/discard.log. Pass batch/logs/discard.log to analyze
- * the batch variant (same shape, one extra id field per row).
- */
 
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
-/**
- * Parse a discard log's contents into entries.
- *
- * Interactive rows are 3 fields:  {timestamp}\t{url}\t{reason}
- * Batch rows are 4 fields:        {timestamp}\t{id}\t{url}\t{reason}
- * The URL is always the field before the reason; detected by field count.
- *
- * @param {string} text - Raw log contents.
- * @returns {Array<{timestamp:string, url:string, reason:string}>}
- */
 export function parseDiscardLog(text) {
   const out = [];
   for (const line of String(text).replace(/^\uFEFF/, '').split(/\r?\n/)) {
@@ -51,18 +22,6 @@ export function parseDiscardLog(text) {
   return out;
 }
 
-/**
- * Aggregate parsed entries into sorted reason/domain/day counts.
- *
- * @param {Array<{timestamp:string, url:string, reason:string}>} entries
- * @returns {{
- *   total: number,
- *   byReason: Array<[string, number]>,
- *   byDomain: Array<[string, number]>,
- *   byDay: Array<[string, number]>,
- *   titleMismatch: Array<[string, number]>
- * }}
- */
 export function aggregateDiscards(entries) {
   const reasonCounts = {};
   const domainCounts = {};
@@ -74,7 +33,7 @@ export function aggregateDiscards(entries) {
     try {
       const u = new URL(e.url);
       domainCounts[u.hostname] = (domainCounts[u.hostname] || 0) + 1;
-    } catch { /* malformed URL */ }
+    } catch { }
     const day = e.timestamp.slice(0, 10);
     dayCounts[day] = (dayCounts[day] || 0) + 1;
     if (e.reason.includes('title_mismatch')) {
@@ -90,14 +49,6 @@ export function aggregateDiscards(entries) {
   return { total: entries.length, byReason, byDomain, byDay, titleMismatch };
 }
 
-/**
- * Render the summary to a string (the CLI prints it).
- * @param {ReturnType<typeof aggregateDiscards>} agg
- * @param {number} topN - Number of domains/URLs to show.
- * @param {string} firstDate - Earliest timestamp in the filtered set.
- * @param {string} lastDate - Latest timestamp in the filtered set.
- * @returns {string}
- */
 export function renderSummary(agg, topN, firstDate, lastDate) {
   const pct = (n) => ((n / agg.total) * 100).toFixed(1);
   const pad = (s, n) => String(s).padEnd(n);
@@ -141,8 +92,6 @@ export function renderSummary(agg, topN, firstDate, lastDate) {
   }
   return lines.join('\n');
 }
-
-// ── CLI entry point ────────────────────────────────────────────────────────
 
 if (isMainModule(import.meta.url)) {
   if (process.argv.includes('-h') || process.argv.includes('--help')) {

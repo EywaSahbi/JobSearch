@@ -17,8 +17,6 @@ type Body = {
   output?: string;
 };
 
-// Persist a finished worker's log as markdown under a web-managed dir so the CLI
-// assistant can read past runs ("what did we find on that Anthropic role?").
 export async function POST(req: Request) {
   let b: Body;
   try {

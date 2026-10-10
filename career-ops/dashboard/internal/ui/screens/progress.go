@@ -12,10 +12,8 @@ import (
 	"github.com/santifer/career-ops/dashboard/internal/theme"
 )
 
-// ProgressClosedMsg is emitted when the progress screen is dismissed.
 type ProgressClosedMsg struct{}
 
-// ProgressModel implements the progress analytics screen.
 type ProgressModel struct {
 	metrics      model.ProgressMetrics
 	scrollOffset int
@@ -24,7 +22,6 @@ type ProgressModel struct {
 	theme        theme.Theme
 }
 
-// NewProgressModel creates a new progress screen.
 func NewProgressModel(t theme.Theme, metrics model.ProgressMetrics, width, height int) ProgressModel {
 	return ProgressModel{
 		metrics: metrics,
@@ -34,18 +31,15 @@ func NewProgressModel(t theme.Theme, metrics model.ProgressMetrics, width, heigh
 	}
 }
 
-// Init implements tea.Model.
 func (m ProgressModel) Init() tea.Cmd {
 	return nil
 }
 
-// Resize updates dimensions.
 func (m *ProgressModel) Resize(width, height int) {
 	m.width = width
 	m.height = height
 }
 
-// Update handles input for the progress screen.
 func (m ProgressModel) Update(msg tea.Msg) (ProgressModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -73,7 +67,6 @@ func (m ProgressModel) Update(msg tea.Msg) (ProgressModel, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the progress screen.
 func (m ProgressModel) View() string {
 	header := m.renderHeader()
 	funnel := m.renderFunnel()
@@ -82,7 +75,6 @@ func (m ProgressModel) View() string {
 	weekly := m.renderWeeklyActivity()
 	help := m.renderHelp()
 
-	// Combine panels
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		funnel,
 		"",
@@ -93,7 +85,6 @@ func (m ProgressModel) View() string {
 		weekly,
 	)
 
-	// Apply scroll
 	bodyLines := strings.Split(body, "\n")
 	offset := m.scrollOffset
 	if offset >= len(bodyLines) {
@@ -106,8 +97,7 @@ func (m ProgressModel) View() string {
 		bodyLines = bodyLines[offset:]
 	}
 
-	// Clamp to available height
-	availHeight := m.height - 4 // header + help + padding
+	availHeight := m.height - 4
 	if availHeight < 3 {
 		availHeight = 3
 	}
@@ -159,7 +149,6 @@ func (m ProgressModel) renderFunnel() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Find max count for bar scaling
 	maxCount := 0
 	for _, s := range m.metrics.FunnelStages {
 		if s.Count > maxCount {
@@ -168,12 +157,11 @@ func (m ProgressModel) renderFunnel() string {
 	}
 
 	labelW := 10
-	barMaxW := m.width - labelW - 20 // room for label, count, pct
+	barMaxW := m.width - labelW - 20
 	if barMaxW < 10 {
 		barMaxW = 10
 	}
 
-	// Colors for funnel stages (gradient from cool to warm)
 	stageColors := []lipgloss.Color{
 		m.theme.Blue,
 		m.theme.Sky,
@@ -228,7 +216,6 @@ func (m ProgressModel) renderScoreDistribution() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Find max count for bar scaling
 	maxCount := 0
 	for _, b := range m.metrics.ScoreBuckets {
 		if b.Count > maxCount {
@@ -242,7 +229,6 @@ func (m ProgressModel) renderScoreDistribution() string {
 		barMaxW = 10
 	}
 
-	// Colors for score ranges (green to red)
 	bucketColors := []lipgloss.Color{
 		m.theme.Green,
 		m.theme.Green,
@@ -307,7 +293,6 @@ func (m ProgressModel) renderRates() string {
 
 	lines = append(lines, padStyle.Render(rates))
 
-	// Active summary
 	dimStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext)
 	activeInfo := dimStyle.Render(fmt.Sprintf(
 		i18n.Current.ActiveInfo,
@@ -331,7 +316,6 @@ func (m ProgressModel) renderWeeklyActivity() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Find max count for bar scaling
 	maxCount := 0
 	for _, w := range m.metrics.WeeklyActivity {
 		if w.Count > maxCount {
@@ -358,7 +342,6 @@ func (m ProgressModel) renderWeeklyActivity() string {
 		labelStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext).Width(labelW)
 		countStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext)
 
-		// Show short week label (e.g., "W14" from "2026-W14")
 		shortWeek := week.Week
 		if idx := strings.Index(shortWeek, "-"); idx >= 0 {
 			shortWeek = shortWeek[idx+1:]
@@ -399,7 +382,6 @@ func (m ProgressModel) renderHelp() string {
 	return style.Render(keys + strings.Repeat(" ", gap) + brand)
 }
 
-// rateColor returns a color based on the rate value.
 func (m ProgressModel) rateColor(rate float64) lipgloss.Color {
 	switch {
 	case rate >= 30:

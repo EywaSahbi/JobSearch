@@ -1,16 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * reply-watch.mjs — Classify employer replies and generate a review digest (RFC #1585).
- *
- * Reads candidate replies from a JSON file, matches them against the application tracker,
- * classifies the reply types (e.g. Interview, Rejected, Noise), and prints a concise
- * review digest. Prompts the user to approve recommended tracker status updates.
- *
- * Usage:
- *   node reply-watch.mjs [path/to/candidates.json]
- */
-
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -25,16 +14,12 @@ import { localToday } from './lib/local-today.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { parseFollowups } from './followup-cadence.mjs';
 
-// Every file here is user layer, so it resolves against the data root
-// (CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR / .career-ops-data marker), never the
-// script's own directory — which is only the default when none is configured.
 const DATA_ROOT = getCareerOpsRoot();
 export const DEFAULT_CANDIDATES_PATH = process.env.CAREER_OPS_REPLY_CANDIDATES
   || path.join(DATA_ROOT, 'data', 'reply-candidates.json');
 export const APPS_FILE = resolveTrackerPath(DATA_ROOT);
 export const FOLLOWUPS_FILE = path.join(DATA_ROOT, 'data', 'follow-ups.md');
 
-// Helper to ask a question in the CLI
 function askQuestion(query) {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -46,7 +31,6 @@ function askQuestion(query) {
   }));
 }
 
-// Generate custom signal description based on keywords
 function getSignalDesc(text, signal) {
   const parts = [];
   if (text.includes('简历通过')) {
@@ -61,7 +45,6 @@ function getSignalDesc(text, signal) {
   return signal || 'none';
 }
 
-// Create a default set of mock candidates if the file doesn't exist
 function ensureCandidatesFile(filePath) {
   if (fs.existsSync(filePath)) return;
 
@@ -101,7 +84,6 @@ function ensureCandidatesFile(filePath) {
   console.log(`Created default mock candidates file at ${filePath}`);
 }
 
-// Load applications tracker rows
 function loadTrackerApps() {
   if (!fs.existsSync(APPS_FILE)) {
     return [];
@@ -119,7 +101,6 @@ function loadTrackerApps() {
   return apps;
 }
 
-// Load followups history
 function loadFollowups() {
   if (!fs.existsSync(FOLLOWUPS_FILE)) {
     return [];
@@ -127,9 +108,6 @@ function loadFollowups() {
   return parseFollowups(fs.readFileSync(FOLLOWUPS_FILE, 'utf-8'));
 }
 
-// Apply an approved batch in one locked read/modify/write transaction. Reading
-// after lock acquisition matters because the review prompt can remain open
-// while another process merges or updates tracker rows.
 function groupStatusRecommendations(recommendations) {
   const byApplication = new Map();
   for (const recommendation of recommendations) {
@@ -254,7 +232,6 @@ async function main() {
     console.log(`${index + 1}. ${headerStr}`);
     console.log(`   Type: ${classification.type}`);
 
-    // Print Signal for Interview classification when meaningful
     const signalDesc = getSignalDesc(cand.subject + ' ' + cand.body_snippet, cand.signal);
     if (classification.type === 'Interview' && signalDesc && signalDesc !== 'none') {
       console.log(`   Signal: ${signalDesc}`);
@@ -336,13 +313,11 @@ async function main() {
       }
       console.log('\n✅ Tracker review complete');
 
-      // Sync tracker DB if tracker.mjs exists
       try {
         const { execSync } = await import('child_process');
         execSync('node tracker.mjs sync', { stdio: 'ignore' });
         console.log('Synced database index (applications.db).');
       } catch (e) {
-        // ignore
       }
     } else {
       console.log('Updates skipped.');

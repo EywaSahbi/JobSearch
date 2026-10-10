@@ -19,19 +19,15 @@ import (
 	"github.com/santifer/career-ops/dashboard/internal/theme"
 )
 
-// ViewerClosedMsg is emitted when the viewer is dismissed.
 type ViewerClosedMsg struct{}
 
-// ViewerOpenCoverLetterMsg is emitted when the user requests to open the cover letter PDF.
 type ViewerOpenCoverLetterMsg struct{ Path string }
 
-// ViewerUpdateStatusMsg is emitted when a status update is requested from the viewer.
 type ViewerUpdateStatusMsg struct {
 	App       model.CareerApplication
 	NewStatus string
 }
 
-// ViewerModel implements an integrated file viewer screen.
 type ViewerModel struct {
 	lines           []string
 	renderedLines   []string
@@ -46,12 +42,9 @@ type ViewerModel struct {
 	jobURL          string
 	statusPicker    bool
 	statusCursor    int
-	// flash is a one-shot notice rendered in place of the footer, cleared on
-	// the next key press (same contract as the pipeline screen's flash).
-	flash string
+	flash           string
 }
 
-// NewViewerModel creates a new file viewer for the given path.
 func NewViewerModel(t theme.Theme, careerOpsPath, path, title string, width, height int, app model.CareerApplication) ViewerModel {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -78,8 +71,6 @@ func NewViewerModel(t theme.Theme, careerOpsPath, path, title string, width, hei
 	return m
 }
 
-// parseCoverLetterPath scans the report lines for a "PDF generated: output/..." line
-// inside a "## Cover Letter Draft" section and returns the relative path if the file exists.
 func parseCoverLetterPath(lines []string, careerOpsPath string) string {
 	inCoverSection := false
 	for _, line := range lines {
@@ -104,10 +95,6 @@ func parseCoverLetterPath(lines []string, careerOpsPath string) string {
 	return ""
 }
 
-// resolveJobURL returns the posting URL for the open report: the tracker row's
-// JobURL when it is a usable web URL, else the first usable **URL:** header
-// line in the report. Anything else (a hostless "https://?x", a local:jds/
-// pointer) is skipped rather than handed to the platform opener.
 func resolveJobURL(app model.CareerApplication, lines []string) string {
 	if isWebURL(app.JobURL) {
 		return app.JobURL
@@ -120,13 +107,11 @@ func resolveJobURL(app model.CareerApplication, lines []string) string {
 	return ""
 }
 
-// isWebURL reports whether raw is an absolute http(s) URL with a host.
 func isWebURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// rebuildRender recomputes renderedLines from raw lines using the current width.
 func (m *ViewerModel) rebuildRender() {
 	m.renderedLines = m.renderAll()
 	m.clampScrollOffset()
@@ -179,8 +164,6 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 
 		case "c":
 			m.statusPicker = true
-			// The picker's own current-status-first reordering (see
-			// getStatusPairs) always places this row's status at index 0.
 			m.statusCursor = 0
 			m.clampScrollOffset()
 			return m, nil
@@ -240,8 +223,6 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 		m.rebuildRender()
 
 	case PipelineOpenFailedMsg:
-		// Issue 3913: main.go routes this to the active screen; while the
-		// viewer is open, the pipeline's flash line is not on screen.
 		m.flash = "Could not open " + msg.Target + ": " + msg.Err
 	}
 
@@ -249,7 +230,7 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 }
 
 func (m ViewerModel) bodyHeight() int {
-	h := m.height - 4 // header + footer + padding
+	h := m.height - 4
 	if m.statusPicker {
 		h -= (len(m.currentStatusPairs()) + 1)
 	}
@@ -331,7 +312,6 @@ func (m ViewerModel) renderBody() string {
 	return padStyle.Render(strings.Join(flat, "\n"))
 }
 
-// renderAll converts every raw markdown line into visual terminal lines.
 func (m ViewerModel) renderAll() []string {
 	var styled []string
 	i := 0
@@ -422,7 +402,6 @@ func isTableLine(line string) bool {
 	return len(trimmed) > 1 && trimmed[0] == '|'
 }
 
-// isTableSeparator checks if a line is a table separator (|---|---|).
 func isTableSeparator(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "|") {
@@ -432,10 +411,8 @@ func isTableSeparator(line string) bool {
 	return cleaned == ""
 }
 
-// parseTableCells splits a table line into trimmed cells.
 func parseTableCells(line string) []string {
 	trimmed := strings.TrimSpace(line)
-	// Remove leading and trailing pipes
 	if len(trimmed) > 0 && trimmed[0] == '|' {
 		trimmed = trimmed[1:]
 	}
@@ -534,7 +511,7 @@ func (m ViewerModel) renderTableBlock(lines []string) []string {
 
 var (
 	reBold           = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	reLink           = regexp.MustCompile(`\[([^\]]+)\]\(((?:[^()]|\([^()]*\))+)\)`) // one level of balanced parens in the destination, as CommonMark allows
+	reLink           = regexp.MustCompile(`\[([^\]]+)\]\(((?:[^()]|\([^()]*\))+)\)`)
 	reBareURL        = regexp.MustCompile(`https?://\S*[^\s\)\]\.,;:!?]`)
 	reInlineCode     = regexp.MustCompile("`([^`]+)`")
 	reListNumber     = regexp.MustCompile(`^(\s*\d+\.\s+)(.*)$`)
@@ -577,9 +554,6 @@ func (m ViewerModel) renderInlineElements(line string) string {
 	return m.renderInlineElementsAs(line, m.theme.Subtext)
 }
 
-// renderInlineElementsAs walks the raw line once and reapplies baseColor around
-// every plain-text span, so resets emitted by inline tokens (code, bold, link,
-// bare URL) don't leak through to subsequent text.
 func (m ViewerModel) renderInlineElementsAs(line string, baseColor lipgloss.Color) string {
 	baseStyle := lipgloss.NewStyle().Foreground(baseColor)
 	codeStyle := lipgloss.NewStyle().Background(m.theme.Surface).Foreground(m.theme.Text)
@@ -652,7 +626,7 @@ func findInlineMatch(s string, codeStyle, boldStyle, linkStyle lipgloss.Style, c
 			}
 			forward := filepath.ToSlash(absPath)
 			if !strings.HasPrefix(forward, "/") {
-				forward = "/" + forward // Windows: C:/... → /C:/...
+				forward = "/" + forward
 			}
 			return hyperlink("file://"+forward, styled)
 		})
@@ -660,21 +634,12 @@ func findInlineMatch(s string, codeStyle, boldStyle, linkStyle lipgloss.Style, c
 	return best
 }
 
-// OSC 8 hyperlinks: ESC ] 8 ; params ; URI BEL text ESC ] 8 ; ; BEL.
-// Terminals that support them (iTerm2, WezTerm, kitty, VS Code, Windows
-// Terminal, recent GNOME Terminal) make the text clickable; others ignore the
-// sequence and show the text as before.
 const osc8Close = "\x1b]8;;\x07"
 
 const upperHex = "0123456789ABCDEF"
 
-// reOSC8 matches one OSC 8 sequence, terminated by BEL or ST (pipeline.go's
-// manifesto link uses ST). Group 2 is the URI; an empty URI closes the link.
 var reOSC8 = regexp.MustCompile("\x1b\\]8;([^;\x07\x1b]*);([^\x07\x1b]*)(?:\x07|\x1b\\\\)")
 
-// hyperlink wraps already-styled text in an OSC 8 hyperlink to target. When
-// the target cannot be carried safely it returns styled unchanged, so the text
-// still renders, just not as a link.
 func hyperlink(target, styled string) string {
 	uri, ok := osc8URI(target)
 	if !ok {
@@ -683,9 +648,6 @@ func hyperlink(target, styled string) string {
 	return "\x1b]8;;" + uri + "\x07" + styled + osc8Close
 }
 
-// webHyperlink links styled to rawURL only when rawURL is an absolute http(s)
-// URL. Report text is derived from job postings, which are untrusted input, so
-// a markdown link to javascript:, file:, data: or a relative path stays plain.
 func webHyperlink(rawURL, styled string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -694,9 +656,6 @@ func webHyperlink(rawURL, styled string) string {
 	return hyperlink(rawURL, styled)
 }
 
-// markdownLinkTarget extracts the destination from a markdown link's (...)
-// part, dropping an optional title (`[x](https://a "Title")`) and the angle
-// brackets of `[x](<https://a>)`.
 func markdownLinkTarget(dest string) string {
 	dest = strings.TrimSpace(dest)
 	if strings.HasPrefix(dest, "<") {
@@ -710,12 +669,6 @@ func markdownLinkTarget(dest string) string {
 	return ""
 }
 
-// osc8URI makes target safe to embed in an OSC 8 sequence. Any control
-// character (C0, DEL, C1) rejects the target outright: ESC or BEL would end
-// the sequence early and let the rest of the URL reach the terminal as
-// commands (see sanitizeFlash, #4027). The OSC 8 spec limits URIs to bytes
-// 32-126, so spaces and non-ASCII bytes are percent-encoded rather than
-// dropped, which keeps file:// links to paths like "My Drive" working.
 func osc8URI(target string) (string, bool) {
 	if target == "" || !utf8.ValidString(target) {
 		return "", false
@@ -738,17 +691,9 @@ func osc8URI(target string) (string, bool) {
 	return b.String(), true
 }
 
-// balanceHyperlinks makes every rendered line carry its own complete OSC 8
-// hyperlinks. ansi.Wrap keeps a link's opening and closing sequences where
-// they were, so a URL wrapped over three lines opens on the first and closes
-// on the last. The viewer draws and scrolls lines independently, so when the
-// first line is scrolled off the rest is not clickable, and when the last is
-// off the link never closes and the footer becomes part of it. This closes an
-// open link at the end of each line and reopens it at the start of the next.
-// Lines that are already balanced (lipgloss tables do this) are unchanged.
 func balanceHyperlinks(lines []string) []string {
 	out := make([]string, len(lines))
-	open := "" // opening sequence of the link still active at end of line
+	open := ""
 	for i, line := range lines {
 		carried := open
 		for _, sm := range reOSC8.FindAllStringSubmatch(line, -1) {
@@ -888,14 +833,13 @@ func (m ViewerModel) renderFooter() string {
 				keyStyle.Render("Esc/q") + descStyle.Render(i18n.Current.HelpCancel))
 	}
 
-	// Render standard footer shortcuts
-	footer := keyStyle.Render("↑↓") + descStyle.Render(i18n.Current.HelpScroll) + // nav
-		keyStyle.Render("PgUp/Dn") + descStyle.Render(i18n.Current.HelpPage) + // pagination
-		keyStyle.Render("g/G") + descStyle.Render(i18n.Current.HelpTopEnd) + // top/bottom
-		keyStyle.Render("c") + descStyle.Render(i18n.Current.HelpChange) + // status
-		m.openURLHint(keyStyle, descStyle) + // job posting
-		keyStyle.Render("t") + descStyle.Render(i18n.Current.HelpLanguage) + // language
-		keyStyle.Render("Esc") + descStyle.Render(i18n.Current.HelpBack) // exit
+	footer := keyStyle.Render("↑↓") + descStyle.Render(i18n.Current.HelpScroll) +
+		keyStyle.Render("PgUp/Dn") + descStyle.Render(i18n.Current.HelpPage) +
+		keyStyle.Render("g/G") + descStyle.Render(i18n.Current.HelpTopEnd) +
+		keyStyle.Render("c") + descStyle.Render(i18n.Current.HelpChange) +
+		m.openURLHint(keyStyle, descStyle) +
+		keyStyle.Render("t") + descStyle.Render(i18n.Current.HelpLanguage) +
+		keyStyle.Render("Esc") + descStyle.Render(i18n.Current.HelpBack)
 
 	if m.coverLetterPath != "" {
 		footer += "  " + keyStyle.Render("L") + descStyle.Render(" cover letter")
@@ -904,7 +848,6 @@ func (m ViewerModel) renderFooter() string {
 	return style.Render(footer)
 }
 
-// openURLHint shows the `o` shortcut only when the report has a posting URL.
 func (m ViewerModel) openURLHint(keyStyle, descStyle lipgloss.Style) string {
 	if m.jobURL == "" {
 		return ""
@@ -973,14 +916,10 @@ func (m ViewerModel) overlayStatusPicker(body string) string {
 	return strings.Join(bodyLines, "\n")
 }
 
-// currentStatusPairs resolves the status-change picker options for the
-// application currently open in the viewer, so the picker leads with this
-// row's own status (see getStatusPairs).
 func (m ViewerModel) currentStatusPairs() []StatusPair {
 	return getStatusPairs(data.NormalizeStatus(m.app.Status))
 }
 
-// UpdateAppStatus updates the status of the current application inside the viewer model.
 func (m *ViewerModel) UpdateAppStatus(newStatus string) {
 	m.app.Status = newStatus
 }

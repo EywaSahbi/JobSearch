@@ -20,8 +20,6 @@ import { pendingActOpenerStart } from "@/lib/act-envelope.mjs";
 import { cleanMessages } from "@/lib/assistant-history.mjs";
 import { cn } from "@/lib/cn";
 
-// ── message model: messages are PART arrays so a live worker card can render
-// inline next to text, both fed by the single JobsProvider store ──────────────
 type Part =
   | { type: "text"; text: string }
   | { type: "note"; text: string }
@@ -34,10 +32,6 @@ const CONFIG_KEY = "career-ops:config";
 const CHAT_KEY = "career-ops:chat";
 const SIZE_KEY = "career-ops:assistant-size";
 
-// Panel size. The 400×600 default is fine for a question; an onboarding
-// conversation or a long evaluation debrief is not a 400px-wide affair. Three
-// fixed steps rather than free drag: predictable on touch and small screens,
-// one click to cycle, remembered per browser.
 type PanelSize = "compact" | "wide" | "full";
 const SIZE_ORDER: PanelSize[] = ["compact", "wide", "full"];
 const PANEL_CLASS: Record<PanelSize, string> = {
@@ -45,18 +39,14 @@ const PANEL_CLASS: Record<PanelSize, string> = {
   wide: "bottom-5 right-5 h-[85vh] w-[720px] max-w-[calc(100vw-2.5rem)]",
   full: "inset-4 h-auto w-auto",
 };
-// The composer grows with its content (a pasted CV, a long answer) up to a cap
-// that scales with the panel, instead of staying a one-line box that scrolls.
 const INPUT_MAX_PX: Record<PanelSize, number> = { compact: 128, wide: 240, full: 360 };
 const SIZE_LABEL: Record<PanelSize, string> = { compact: "Wider", wide: "Full screen", full: "Compact" };
-// back-compat shims — the old directives still work, mapped onto the registry
 const NAV_RE = /<<\s*go:\s*(\/[a-z0-9/_-]*)\s*>>/gi;
 const REMEMBER_RE = /<<\s*remember:\s*([^>]+?)\s*>>/gi;
 
 const GREETING =
   "Hi — I'm your career-ops assistant. I can walk you through onboarding, answer questions about your pipeline, or take you where you need to go. What would you like to do?";
 
-// ── envelope parsing: act ONLY on complete <<act:ID {json}>> envelopes ────────
 function codeRanges(s: string): [number, number][] {
   const ranges: [number, number][] = [];
   const re = /```[\s\S]*?```/g;
@@ -92,9 +82,6 @@ function parseEnvelopes(acc: string): { complete: Env[]; hidePartialFrom: number
     }
     complete.push({ start, end: close + 2, id: m[1], argsJson: acc.slice(argsStart, close).trim() });
   }
-  // The regex above only sees an opener once its id letters AND trailing space
-  // have streamed in. Also hide a shorter trailing partial (`<<`, `<<act:sav`)
-  // so it doesn't flicker into the bubble before the space arrives (#2290-class).
   const pending = pendingActOpenerStart(acc);
   if (pending >= 0 && (hidePartialFrom === -1 || pending < hidePartialFrom)) hidePartialFrom = pending;
   return { complete, hidePartialFrom };
@@ -112,8 +99,6 @@ function removeRanges(s: string, cuts: [number, number][]): string {
   return out;
 }
 
-// Page awareness: describe the route so "this offer" / "apply" resolves to what
-// the user is looking at.
 function describePage(p: string): string {
   if (p === "/") return "Today / home — overview of the user's pipeline.";
   if (p === "/pipeline") return "Pipeline — the applications table + the inbox of pending job URLs.";
@@ -128,7 +113,6 @@ function describePage(p: string): string {
   return `Route ${p}.`;
 }
 
-// ── persistence migration: old {role,content:string} → parts[] ────────────────
 function msgText(m: Msg): string {
   return m.parts.filter((p): p is Extract<Part, { type: "text" }> => p.type === "text").map((p) => p.text).join(" ").trim();
 }
@@ -157,7 +141,6 @@ export function AssistantConsole() {
   const pipeline = usePipeline();
   const apply = useApply();
 
-  // refs so the streaming closure always sees the latest jobs/pipeline/apply/cli
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
   const pipelineRef = useRef(pipeline);
@@ -170,15 +153,12 @@ export function AssistantConsole() {
   const handledRef = useRef<Set<string>>(new Set());
   const confirmRuns = useRef<Map<string, () => DoneInfo>>(new Map());
 
-  // panel size: restored on mount (client-only, so SSR markup never mismatches),
-  // persisted on change
   const [size, setSize] = useState<PanelSize>("compact");
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SIZE_KEY) as PanelSize | null;
       if (raw && SIZE_ORDER.includes(raw)) setSize(raw);
     } catch {
-      /* ignore */
     }
   }, []);
   function cycleSize() {
@@ -187,14 +167,9 @@ export function AssistantConsole() {
     try {
       localStorage.setItem(SIZE_KEY, next);
     } catch {
-      /* ignore */
     }
   }
 
-  // composer auto-grow: height follows content up to the per-size cap; clearing
-  // the input (after send) shrinks it back to one line. Done in an effect, AFTER
-  // React has applied the style prop — an imperative height set inside onChange
-  // is wiped by the very next render.
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = inputRef.current;
@@ -203,7 +178,6 @@ export function AssistantConsole() {
     if (input) el.style.height = `${Math.min(el.scrollHeight, INPUT_MAX_PX[size])}px`;
   }, [input, size, open]);
 
-  // selected CLI from Config (reacts to changes in other tabs)
   useEffect(() => {
     function read() {
       try {
@@ -273,7 +247,6 @@ export function AssistantConsole() {
         if (legacy) {
           const migrated = cleanMessages(JSON.parse(legacy));
           if (migrated.some(m => m.role === "user")) {
-            // A stable migration id makes retrying a lost response safe.
             const key = `${CHAT_KEY}:migration-id`;
             const id = localStorage.getItem(key) || crypto.randomUUID();
             localStorage.setItem(key, id);
@@ -286,7 +259,7 @@ export function AssistantConsole() {
               });
             }
           }
-          localStorage.removeItem(CHAT_KEY); // only after a successful disk write
+          localStorage.removeItem(CHAT_KEY);
         }
         if (!restored && data.chats.length) restored = await chatRequest(`/api/assistant/chats?id=${data.chats[0].id}`);
         if (cancelled) return;
@@ -335,7 +308,6 @@ export function AssistantConsole() {
     finally { setChatPending(false); }
   }
   function exportChat() {
-    // Export the live draft even if it exceeds the storage limits.
     const blob = new Blob([JSON.stringify({ ...activeChat.current, messages: messagesRef.current, draft: input }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -349,7 +321,6 @@ export function AssistantConsole() {
     if (!window.confirm("Discard unsaved changes and start a new conversation? Saved conversations stay on disk. Export this conversation first if you want to keep the unsaved text.")) return;
     setChatPending(true);
     try {
-      // Let writes already in flight finish before changing the active id.
       await saveQueue.current.catch(() => {});
       activeChat.current = { id: crypto.randomUUID(), revision: 0 };
       savedSnapshot.current = "";
@@ -364,7 +335,7 @@ export function AssistantConsole() {
     const title = window.prompt("Conversation name", activeChat.current.title || "");
     if (!title?.trim()) return;
     setChatPending(true);
-    try { await flushChat(title.trim()); } catch { /* shown by flushChat */ }
+    try { await flushChat(title.trim()); } catch { }
     finally { setChatPending(false); }
   }
   async function removeChat() {
@@ -391,7 +362,6 @@ export function AssistantConsole() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  // ── message mutators (operate on the last assistant message) ──
   function patchLastAssistant(ms: Msg[], fn: (m: Msg) => Msg): Msg[] {
     const copy = [...ms];
     for (let i = copy.length - 1; i >= 0; i--) {
@@ -504,8 +474,6 @@ export function AssistantConsole() {
     );
   }
 
-  // compact pipeline snapshot for the model (counts + per-company pending — lets
-  // it offer/act on "all the Anthropic ones" without re-reading files)
   function pipelineContext(): string {
     const pending = pipelineRef.current.inbox.filter((j) => !j.done);
     if (!pending.length) return "";
@@ -517,8 +485,6 @@ export function AssistantConsole() {
       .join(", ")}. To evaluate every pending posting for one company, emit evaluateCompany with just the company name.`;
   }
 
-  // When the user is on /apply, expose the proxy form's fields + current answers
-  // so the assistant can write/revise any answer (setApplyField) on request.
   function applyContext(): string {
     const ap = applyRef.current;
     if (!pathname.startsWith("/apply") || !ap.fields.length) return "";
@@ -564,7 +530,6 @@ export function AssistantConsole() {
         if (hidePartialFrom >= 0) cuts.push([hidePartialFrom, acc.length]);
         let display = removeRanges(acc, cuts);
 
-        // back-compat shims (strip + queue) on the cleaned text
         const shimNavs: string[] = [];
         const shimRems: string[] = [];
         display = display.replace(NAV_RE, (_, p) => {
@@ -614,8 +579,6 @@ export function AssistantConsole() {
     }
   }
 
-  // Other surfaces (e.g. the onboarding banner) can open the assistant and kick
-  // off a turn via a window event.
   const sendRef = useRef<(m?: string) => void>(() => {});
   sendRef.current = send;
   useEffect(() => {
@@ -628,7 +591,6 @@ export function AssistantConsole() {
     return () => window.removeEventListener("co-assistant", onOpen);
   }, []);
 
-  // ── proactive suggestion chips (onboarding + offer-driven next steps) ──
   const suggestions = useMemo(() => {
     const chips: { label: string; send: string }[] = [];
     const rep = pathname.match(/^\/pipeline\/(.+)$/);
@@ -736,7 +698,6 @@ export function AssistantConsole() {
             })}
           </div>
 
-          {/* proactive suggestion chips — onboarding + offer-driven next steps */}
           {cliId && !busy && suggestions.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-3 pb-1 pt-0.5">
               {suggestions.map((s, i) => (
@@ -796,7 +757,6 @@ export function AssistantConsole() {
   );
 }
 
-// ── part renderers ──
 function PartView({
   part,
   jobs,

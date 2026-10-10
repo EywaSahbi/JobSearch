@@ -1,26 +1,4 @@
 #!/usr/bin/env node
-/**
- * archive-posting.mjs — Save a live job posting as PDF before it disappears.
- *
- * Job postings vanish after they're filled, reposted, or companies reorganise.
- * This captures the fully-rendered page via Playwright so you always have the
- * original requirements for interview prep and salary negotiation evidence.
- *
- * Usage:
- *   node archive-posting.mjs <url>
- *   node archive-posting.mjs <url> --company=Anthropic --role=senior-ai-engineer
- *   node archive-posting.mjs <url> --report=042    Key the capture to report #42
- *   node archive-posting.mjs --pipeline          Archive pending URLs in data/pipeline.md
- *   node archive-posting.mjs --dry-run <url>     Preview filename without saving
- *
- * Output:    jds/YYYY-MM-DD_company-slug_role-slug.pdf
- *            jds/NNN-YYYY-MM-DD_company-slug_role-slug.pdf   (with --report)
- * Reference: local:jds/{filename}  (paste into pipeline.md)
- *
- * Prefer --report. Without it the capture can only be found again by rebuilding
- * its filename from today's date and the scraped company and role, so it stops
- * resolving the next day. outcome.mjs looks captures up by report number.
- */
 
 import { chromium } from 'playwright';
 import { writeFile, readFile } from 'fs/promises';
@@ -43,18 +21,7 @@ const PIPELINE_PATH = join(DATA_ROOT, 'data', 'pipeline.md');
 const KNOWN_FLAGS = ['--company', '--role', '--report', '--pipeline', '--dry-run', '--help', '-h'];
 const VALUE_FLAGS = ['--company', '--role', '--report'];
 
-// A real posting page's rendered text — title, description, requirements,
-// nav/footer boilerplate — is reliably in the thousands of characters. A
-// genuine login-wall/404/paywall/challenge page is typically a couple of
-// sentences. A real posting can still legitimately CARRY one of those phrases
-// incidentally (e.g. a sidebar "sign in to save this job" prompt next to a
-// full JD) — refusing on phrase match alone would then reject a real capture.
-// Gating on total length as well means the marker only fires when the whole
-// page IS essentially the wall, not when a real posting merely mentions one
-// nearby.
 const NON_CONTENT_PAGE_MAX_CHARS = 600;
-
-// ── CLI parsing ──────────────────────────────────────────────────────────────
 
 const HELP_TEXT = `
 ╔══════════════════════════════════════════════════════════════════╗
@@ -104,15 +71,7 @@ let pipelineMode = false;
 let dryRun = false;
 let reportNum = null;
 
-// Parsing lives in a function, not at module scope, so importing this file for
-// its exports doesn't read process.argv or call process.exit — the repo's
-// standard direct-run guard at the bottom is what invokes it.
 function parseCliArgs(args) {
-  // Reject a mistyped flag (--comany, --reprot) before any work, and handle
-  // --help/-h wherever they appear. Inside the function, not at module scope:
-  // this file is imported for its exports (test-all.mjs does), and a
-  // module-scope call would read the IMPORTER's argv and exit(1) on flags that
-  // are perfectly valid for it.
   validateFlags(args, KNOWN_FLAGS, HELP_TEXT, {
     valueFlags: VALUE_FLAGS,
     requireOperand: true,
@@ -132,11 +91,6 @@ function parseCliArgs(args) {
     } else if (arg.startsWith('--company=')) {
       overrideCompany = arg.slice('--company='.length).trim();
     } else if (arg === '--company') {
-      // The old `args[i + 1]` truthiness check consumed the NEXT flag as the
-      // company name whenever --company was given with no value (e.g.
-      // `--company --pipeline` set overrideCompany to "--pipeline" and left
-      // pipeline mode off, silently, at exit 0 (#3087)). A value that starts
-      // with `--` is another flag, not a company name.
       if (args[i + 1] === undefined || args[i + 1].startsWith('--')) {
         console.error('--company requires a value.');
         process.exit(1);
@@ -153,12 +107,6 @@ function parseCliArgs(args) {
     } else if (arg.startsWith('--report=')) {
       reportNum = arg.slice('--report='.length).trim();
     } else if (arg === '--report') {
-      // Consume the value explicitly. Left unconsumed it would fall through to the
-      // bare-argument branch below and be mistaken for the URL. Consume it even
-      // when absent: a trailing `--report` used to be dropped silently, archiving
-      // the posting with no report prefix — unfindable, which is the failure this
-      // flag exists to prevent. The empty string reaches the validator below and
-      // exits non-zero instead.
       reportNum = args[++i]?.trim() ?? '';
     } else if (!arg.startsWith('--') && !targetUrl) {
       targetUrl = arg;
@@ -182,46 +130,25 @@ function parseCliArgs(args) {
   }
 }
 
-// ── Utilities ────────────────────────────────────────────────────────────────
-
-// The LOCAL calendar day. This names the capture file, and AGENTS.md is explicit
-// that a date-named capture "stops resolving the day after it is written" -- with
-// the UTC day an evening run west of Greenwich writes TOMORROW's date, so the
-// name is already stale at the moment it is created, before a single day passes.
 function today() {
   return localToday();
 }
 
-/**
- * Build the capture filename. With --report the name leads with the zero-padded
- * report number, which is what makes the capture findable later: the date and
- * the scraped company/role all change between runs, the report number does not.
- */
 function captureFilename(company, role) {
   const base = `${today()}_${captureSlug(company)}_${captureSlug(role)}.pdf`;
   return reportNum ? `${reportPrefix(reportNum)}-${base}` : base;
 }
 
-/**
- * Try to extract company/role from the rendered page title.
- * Handles common ATS patterns:
- *   "Senior AI Engineer at Anthropic"   → role + company
- *   "Anthropic | Senior AI Engineer"    → company + role
- *   "Senior AI Engineer - Anthropic"    → role + company
- */
 function parsePageTitle(title) {
   if (!title) return { company: null, role: null };
 
-  // Strip common ATS platform suffixes
   const cleaned = title
     .replace(/\s*[|–-]\s*(greenhouse|lever|ashby|workday|linkedin|indeed|wellfound|angellist)\s*$/i, '')
     .trim();
 
-  // "Role at Company"
   const atMatch = cleaned.match(/^(.+?)\s+at\s+(.+)$/i);
   if (atMatch) return { role: atMatch[1].trim(), company: atMatch[2].trim() };
 
-  // "Company | Role" or "Company – Role"
   const pipeMatch = cleaned.match(/^([^|–]+?)\s*[|–]\s*(.+)$/);
   if (pipeMatch) {
     const left = pipeMatch[1].trim();
@@ -232,17 +159,12 @@ function parsePageTitle(title) {
     return { company: left, role: right };
   }
 
-  // "Role - Company"
   const dashMatch = cleaned.match(/^(.+?)\s+-\s+(.+)$/);
   if (dashMatch) return { role: dashMatch[1].trim(), company: dashMatch[2].trim() };
 
   return { company: null, role: cleaned };
 }
 
-/**
- * Extract company from known ATS URL patterns as a fallback when the page
- * title doesn't yield a clear company name.
- */
 function extractCompanyFromUrl(url) {
   try {
     const { hostname, pathname } = new URL(url);
@@ -257,14 +179,6 @@ function extractCompanyFromUrl(url) {
   }
 }
 
-// ── Pipeline URL extraction ──────────────────────────────────────────────────
-
-/**
- * Parse data/pipeline.md and return pending entries.
- * Handles both plain and annotated forms:
- *   - [ ] https://example.com/job/123
- *   - [ ] https://example.com/job/456 | Acme Corp | Senior PM
- */
 async function extractPipelineEntries() {
   if (!existsSync(PIPELINE_PATH)) {
     console.error('data/pipeline.md not found. Add URLs there first.');
@@ -291,19 +205,6 @@ async function extractPipelineEntries() {
   return entries;
 }
 
-// ── Core archive function ────────────────────────────────────────────────────
-
-/**
- * Register the egress guard on a Playwright context.
- *
- * Registered on the *context* rather than the page: a route bound to a single
- * page doesn't cover requests the flow makes outside it, and the context is
- * what owns the whole navigation. Both layers of the shared guard run here —
- * the literal-host check first (cheap, no network), then the DNS re-check that
- * catches a public hostname resolving into private space.
- *
- * @param {import('playwright').BrowserContext} context - Context to guard.
- */
 export async function installEgressGuard(context) {
   await context.route('**/*', async (route) => {
     const requestUrl = route.request().url();
@@ -327,8 +228,6 @@ export async function installEgressGuard(context) {
 export async function archiveUrl(browser, url, { company: companyHint, role: roleHint } = {}) {
   console.log(`\n🔗  ${url}`);
 
-  // Refuse before launching any navigation, so an obviously-internal target
-  // never reaches Playwright at all.
   const preGuard = rejectPrivateOrInvalid(url);
   if (preGuard) {
     throw new Error(`refusing to archive restricted destination: ${preGuard.reason}`);
@@ -342,41 +241,18 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     const httpStatus = response?.status() ?? 0;
 
-    // Re-check where we actually landed. The route guard already inspects every
-    // redirect hop, so this is defence-in-depth: a first-hop-only check is the
-    // classic miss here, and asserting on the settled URL costs nothing.
     const landedUrl = page.url();
     const postGuard = rejectPrivateOrInvalid(landedUrl);
     if (postGuard) {
       throw new Error(`refusing to archive restricted destination after redirect: ${postGuard.reason}`);
     }
 
-    // Give SPAs (Ashby, Lever, Workday) time to hydrate
     await page.waitForTimeout(2000);
 
     const pageTitle = await page.title();
     const h1Text = await page.$eval('h1', el => el.innerText.trim()).catch(() => '');
     const urlCompany = extractCompanyFromUrl(url);
 
-    // check-jd-archive.mjs already knows how to recognize a login wall, a 404
-    // shell, a paywall interstitial, or a "please enable JavaScript" page —
-    // but only at AUDIT time, well after the fact. Applying the same
-    // detection HERE, before anything is written, means a capture never
-    // silently reports success on a non-content page in the first place — a
-    // login-wall PDF sitting in jds/ is worse than no capture at all, since
-    // it reads as "archived" until someone happens to open it or run a
-    // separate audit (#4526). Checked against the rendered page's own text,
-    // not the report-section text detectNonContentMarker was written for —
-    // the same phrase patterns apply to either, and body innerText is what a
-    // login/paywall/404 shell actually renders as its visible content.
-    // Deliberately NOT `.catch(() => '')` here: an empty string is treated as
-    // "nothing to inspect, proceed" (matches on no marker pattern) — but a
-    // rejected evaluate() means the page's actual content is UNKNOWN, not
-    // confirmed empty. Silently coercing that to "proceed" would let a page
-    // whose content genuinely couldn't be inspected reach page.pdf() without
-    // ever having been checked — a capture-time gap in the exact protection
-    // this block exists to add. Fail closed: propagate the error, refusing
-    // to archive rather than archiving blind.
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
     if (!bodyText.trim()) {
       throw new Error('refusing to archive: page has no visible text');
@@ -388,13 +264,10 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
       throw new Error(`refusing to archive: page ${nonContentMarker.reason}`);
     }
 
-    // Parse page title first — it usually has "Role | Company" or "Company | Role".
-    // Fall back to h1 for the role when the page title doesn't yield one cleanly.
     const detected = parsePageTitle(pageTitle);
     const resolvedCompany = overrideCompany || companyHint || detected.company || urlCompany || 'unknown';
     const resolvedRole = overrideRole || roleHint || detected.role || h1Text || 'job';
 
-    // Strip noisy prefixes common on Greenhouse/Lever ("Job Application for …")
     const company = resolvedCompany.replace(/^job\s+application\s+for\s+/i, '').trim();
     const role = resolvedRole.replace(/^job\s+application\s+for\s+/i, '').trim();
 
@@ -435,10 +308,7 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-
 async function main() {
-  // Build the list of targets upfront
   let targets;
   if (pipelineMode) {
     const entries = await extractPipelineEntries();
@@ -459,7 +329,6 @@ async function main() {
   let failed = 0;
 
   if (dryRun) {
-    // Dry-run: no browser needed — use URL-based detection only
     for (const { url, company, role } of targets) {
       const urlCompany = extractCompanyFromUrl(url);
       const resolvedCompany = overrideCompany || company || urlCompany || 'unknown';
@@ -474,7 +343,6 @@ async function main() {
       results.push({ url, filename, reference, skipped: true });
     }
   } else {
-    // Sequential — project convention: never Playwright in parallel
     const browser = await chromium.launch({ headless: true });
     try {
       for (const { url, company, role } of targets) {
@@ -492,7 +360,6 @@ async function main() {
     }
   }
 
-  // Summary
   const saved = results.filter(r => !r.error && !r.skipped).length;
   const skipped = results.filter(r => r.skipped).length;
 

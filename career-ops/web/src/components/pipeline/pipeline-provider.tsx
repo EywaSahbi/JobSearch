@@ -3,10 +3,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 
-// A thin client mirror of the pipeline so BOTH the pages and the assistant
-// console (a different subtree) can read inbox/applications. Hydrated once from
-// /api/pipeline; refetches on window focus and on demand (refetch()) so the
-// snapshot doesn't go stale after a status writeback or a new scan.
 type Snapshot = {
   inbox: InboxJob[];
   applications: Application[];

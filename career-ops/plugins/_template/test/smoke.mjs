@@ -1,5 +1,3 @@
-// Zero-network smoke test: the entry imports cleanly and exposes only valid
-// hooks that match the manifest. Run by `plugins.mjs add` + the registry CI.
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

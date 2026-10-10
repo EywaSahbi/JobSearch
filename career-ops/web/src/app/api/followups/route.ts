@@ -6,11 +6,6 @@ import { selectDueFollowups, pickNextUpcoming } from "@/lib/core/followup-view.m
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// The DEMAND loop: surface follow-ups due, via the core's own
-// followup-cadence.mjs --json (the SAME calculator the CLI uses) — we never
-// reimplement the cadence logic, we read its verdict (mirrors /api/doctor).
-// Default: capped list for the home card. `?full=1`: the complete cadence
-// (entries + metadata + cadenceConfig) for the /followups tracker page.
 export async function GET(req: Request) {
   const full = new URL(req.url).searchParams.get("full") === "1";
   const script = rootScript("followup-cadence");
@@ -30,10 +25,6 @@ export async function GET(req: Request) {
         cadenceConfig: j.cadenceConfig ?? null,
       });
     }
-    // Due now (urgency 'urgent'/'overdue') — 'waiting'/'cold' are NOT due,
-    // and must never be shown as if they were (#86). When nothing is due,
-    // surface the single nearest upcoming follow-up instead of falling back
-    // to an unfiltered list.
     const due = selectDueFollowups(entries, 8);
     const nextUpcoming = due.length ? null : pickNextUpcoming(entries);
     return Response.json({ available: true, metadata: j.metadata ?? null, entries: due, nextUpcoming });

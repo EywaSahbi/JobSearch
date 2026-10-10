@@ -1,8 +1,3 @@
-/**
- * Parse an application or follow-up identifier without prefix coercion.
- * @param {unknown} value
- * @returns {number | null}
- */
 export function parseFollowupId(value) {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && value > 0 ? value : null;

@@ -1,23 +1,3 @@
-// @ts-check
-// ── Reference seed ── This bundled plugin is a stable, reviewed example. To
-// extend it, publish career-ops-plugin-<id> with "supersedesBundled": true and
-// your version takes precedence once installed (see docs/PLUGINS.md). Bundled
-// seeds take only security/compat fixes — feature work happens in the successor repo.
-//
-// Gmail ingest plugin — pulls job leads from a Gmail label into your pipeline.
-//
-// Ported from the email-driven ingestion contributed by @SparshGarg999 in #1203
-// (with thanks), reshaped to the plugin contract: OAuth credentials come from
-// the scoped ctx.env (not credential files), the label/days_back come from
-// ctx.settings (config/plugins.yml), and the hook RETURNS Job[] — the engine
-// (plugins.mjs), not this plugin, writes them to pipeline.md canonically. No
-// `search://` rows are emitted (they aren't real URLs the pipeline can open).
-//
-// Enable in config/plugins.yml:
-//   gmail: { enabled: true, label: "Job Leads", days_back: 7 }
-// Add to .env: GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN.
-// Run:  node plugins.mjs run gmail
-
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import {
   extractUrls, isCleanUrl, isAuthenticEmail, parseRoleAtCompany,
@@ -26,9 +6,8 @@ import {
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
-const STATE_PATH = 'data/gmail-state.json'; // the plugin's own processed-id cursor
+const STATE_PATH = 'data/gmail-state.json';
 
-/** Exchange the long-lived refresh token for a short-lived access token. */
 async function getAccessToken({ clientId, clientSecret, refreshToken }, fetchFn = globalThis.fetch) {
   const res = await fetchFn(TOKEN_URL, {
     method: 'POST',
@@ -67,7 +46,6 @@ function saveProcessedIds(ids) {
   }
 }
 
-/** @type {{ ingest: (ctx: any) => Promise<object[]> }} */
 export default {
   async ingest(ctx) {
     const clientId = ctx?.env?.GMAIL_CLIENT_ID;
@@ -88,8 +66,6 @@ export default {
     const query = `label:"${label}" newer_than:${daysBack}d`;
     ctx.log(`gmail: querying ${query}`);
 
-    // List message ids (paginated). ctx.fetch throws on a non-2xx (with the body
-    // in the message), so a failed page surfaces a clear error.
     const messages = [];
     let pageToken = null;
     do {
@@ -106,7 +82,6 @@ export default {
 
     for (const m of messages) {
       if (processedIds.has(m.id)) continue;
-      // Per-message resilience: a single bad detail fetch is skipped, not fatal.
       let msg;
       try {
         msg = await (await ctx.fetch(`${GMAIL_API}/messages/${m.id}?format=full`, { headers: auth })).json();
@@ -117,7 +92,6 @@ export default {
       const headers = msg.payload?.headers || [];
       const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
 
-      // Fail-closed on spoofed mail (DMARC).
       if (!isAuthenticEmail(headers)) {
         console.warn(`gmail: skipping spoofed/unauthenticated email "${subject}"`);
         processedIds.add(m.id);

@@ -1,66 +1,4 @@
 #!/usr/bin/env node
-// @ts-check
-/**
- * scan-dayforce.mjs — Dayforce (Ceridian) Recruiting scanner via Playwright
- *
- * Dayforce's job-search API sits behind Cloudflare (`cf_clearance`/`__cf_bm`
- * cookies) plus a NextAuth CSRF token. A bare Node `fetch()` — even with a
- * spoofed browser User-Agent/Origin/Referer — gets a hard 403; a real
- * Chromium session against the same endpoint gets 200 every time (confirmed
- * live, 2026-09-02). So this does NOT fit scan.mjs's HTTP-only provider
- * contract (`providers/*.mjs`, ctx.fetchJson/fetchText/fetchResponse, no
- * browser) — it's a standalone script, same architectural pattern as
- * scan-interamt.mjs (Interamt.de, also Playwright-driven because its host
- * has no bare-HTTP-reachable API).
- *
- * Flow per (tenant, jobBoardCode, culture) board:
- *   1. page.goto() the canonical board URL — bootstraps the Cloudflare
- *      cookies and the NextAuth session automatically via the browser.
- *   2. GET /api/auth/csrf via page.request (Playwright's APIRequestContext
- *      bound to the page's BrowserContext — it shares that context's cookie
- *      jar automatically, so the request rides the session bootstrapped in
- *      step 1 without the CORS/CSP exposure of a page.evaluate(fetch)).
- *   3. POST /api/geo/{tenant}/jobposting/search with X-CSRF-TOKEN, paginating
- *      by the *returned* offset+count (never a hardcoded +25) until
- *      offset+count >= maxCount or a short/empty page comes back.
- *   4. Only for postings that already pass all list-level title, location,
- *      content, country-eligibility, and visa filters: GET the per-posting
- *      detail endpoint for the full JD text. This is an explicit design
- *      requirement from issue #3726, not an optimization — minimize load on
- *      the browser session by never fetching detail for a posting that would
- *      be filtered out anyway.
- *
- * Session hygiene: never persists cf_clearance/session cookies to disk —
- * each run launches a fresh browser context per tenant and closes it when
- * that tenant is done. On 403/429 the context is discarded and a fresh one
- * is bootstrapped for one retry rather than hammering the stale session.
- *
- * No bypass (providers/ADDING_A_PROVIDER.md §2, rule 3): if the board is
- * still showing an interactive challenge (Turnstile, "Just a moment...",
- * hCaptcha) once the page settles, scanBoard() throws DayforceChallengeError
- * and the board is skipped — never retried, never solved, never relayed.
- *
- * Reads `dayforce_boards` from portals.yml:
- *   dayforce_boards:
- *     - name: Give & Go Prepared Foods
- *       tenant: gnghcm
- *       board: CANDIDATEPORTAL   # jobBoardCode; optional, default CANDIDATEPORTAL
- *       culture: en-US           # optional, default en-US
- *       jobBoardId: 1            # optional, default 1 — see NOTE below
- *
- * NOTE on jobBoardId: the detail endpoint's path segment
- * `/jobposting/{tenant}/{culture}/{jobBoardId}/{jobPostingId}` uses a small
- * integer distinct from jobBoardCode (a string like CANDIDATEPORTAL). This
- * was confirmed to exist and be small (e.g. `1`) but not confirmed across
- * every tenant this session — if a tenant's detail fetches all 404, set
- * `jobBoardId` explicitly in portals.yml for that entry.
- *
- * Usage:
- *   node scan-dayforce.mjs
- *   node scan-dayforce.mjs --dry-run
- *   node scan-dayforce.mjs --debug
- *   node scan-dayforce.mjs --tenant gnghcm   # scan a single configured tenant
- */
 
 import { chromium } from 'playwright';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
@@ -89,47 +27,29 @@ import { htmlToText } from './providers/_html-to-text.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
 import { BOT_CHALLENGE_PATTERNS } from './liveness-core.mjs';
 
-// ── Constants ────────────────────────────────────────────────────────
-
 export const ALLOWED_HOST = 'jobs.dayforcehcm.com';
 const DEFAULT_BOARD_CODE = 'CANDIDATEPORTAL';
 const DEFAULT_CULTURE = 'en-US';
 const DEFAULT_JOB_BOARD_ID = '1';
-const MAX_PAGES_PER_BOARD = 200; // 25/page observed → 5000 postings ceiling; a real cap, not a magic number
+const MAX_PAGES_PER_BOARD = 200;
 const RETRY_DELAY_MS = 3000;
 
 const DATA_ROOT = getCareerOpsRoot();
 
-// Alphanumeric + `_`/`-` only — same discipline as providers/_trust-validator.mjs
-// and the SSRF/injection guard every other provider in this codebase applies
-// before interpolating an operator-supplied value into a URL.
 const TENANT_RE = /^[A-Za-z0-9_-]+$/;
 const BOARD_CODE_RE = /^[A-Za-z0-9_-]+$/;
 const CULTURE_RE = /^[a-z]{2}-[A-Z]{2}$/;
 const JOB_BOARD_ID_RE = /^\d+$/;
 const JOB_POSTING_ID_RE = /^\d+$/;
 
-// Markup that only exists on Cloudflare's own interstitial challenge page.
 const INTERSTITIAL_SELECTORS = ['#challenge-form', '#challenge-stage'];
 
-// Widgets a normal page can embed, with the field each one fills in once
-// solved. A widget only blocks while it's visible and that field is empty:
-// invisible/non-interactive Turnstile, or one already completed, does not.
 const CHALLENGE_WIDGETS = [
   { selector: '.cf-turnstile', response: 'cf-turnstile-response' },
   { selector: '.h-captcha', response: 'h-captcha-response' },
 ];
 
-// ── Challenge detection ──────────────────────────────────────────────
-
-/**
- * The board answered with an interactive challenge instead of its listings,
- * whether goto() settled on it or timed out on it.
- * Never retriable: a fresh session would just meet the same wall, and working
- * around it is exactly what the "No bypass" rule forbids.
- */
 export class DayforceChallengeError extends Error {
-  /** @param {string} tenant @param {string} board @param {string} signal */
   constructor(tenant, board, signal) {
     super(`board ${tenant}/${board} is behind an interactive challenge (${signal}) — skipped, not retried`);
     this.name = 'DayforceChallengeError';
@@ -138,14 +58,6 @@ export class DayforceChallengeError extends Error {
   }
 }
 
-/**
- * Inspect the settled page for an interactive challenge. Runs after
- * `waitUntil: 'networkidle'`, so a non-interactive JS check that clears on
- * its own has already navigated to the real board and is not reported.
- *
- * @param {import('playwright').Page} page
- * @returns {Promise<string | null>} the matching signal, or null for a normal board
- */
 export async function detectChallenge(page) {
   const title = await page.title().catch(() => '');
   if (BOT_CHALLENGE_PATTERNS.some(re => re.test(title))) return `title "${title}"`;
@@ -168,42 +80,27 @@ export async function detectChallenge(page) {
   return null;
 }
 
-// ── Validation ───────────────────────────────────────────────────────
-
-/** @param {unknown} v */
 export function validateTenant(v) {
   return typeof v === 'string' && TENANT_RE.test(v);
 }
 
-/** @param {unknown} v */
 export function validateBoardCode(v) {
   return typeof v === 'string' && BOARD_CODE_RE.test(v);
 }
 
-/** @param {unknown} v */
 export function validateCulture(v) {
   return typeof v === 'string' && CULTURE_RE.test(v);
 }
 
-/** @param {unknown} v */
 export function validateJobBoardId(v) {
   return typeof v === 'string' && JOB_BOARD_ID_RE.test(v);
 }
 
-/** @param {unknown} v */
 export function validateJobPostingId(v) {
   const s = typeof v === 'number' ? String(v) : v;
   return typeof s === 'string' && JOB_POSTING_ID_RE.test(s);
 }
 
-/**
- * Validate and normalize one portals.yml `dayforce_boards` entry.
- * Returns null (never throws) for a malformed entry so one bad row does not
- * abort the whole scan — the caller logs and skips it.
- *
- * @param {any} entry
- * @returns {{ name: string, tenant: string, board: string, culture: string, jobBoardId: string } | null}
- */
 export function normalizeBoardEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
@@ -223,15 +120,6 @@ export function normalizeBoardEntry(entry) {
   return { name, tenant, board, culture, jobBoardId };
 }
 
-/**
- * Parse a URL and assert it is exactly https://jobs.dayforcehcm.com — pins
- * the host so a redirect or a crafted response field can never send a
- * request (or a job link handed to the user) to another host.
- *
- * Exported for tests; every URL builder below routes through it.
- *
- * @param {string} url
- */
 export function assertDayforceUrl(url) {
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.hostname !== ALLOWED_HOST) {
@@ -240,16 +128,12 @@ export function assertDayforceUrl(url) {
   return parsed;
 }
 
-// ── URL builders ─────────────────────────────────────────────────────
-
-/** @param {string} culture @param {string} tenant @param {string} board */
 export function buildBoardUrl(culture, tenant, board) {
   const url = `https://${ALLOWED_HOST}/${culture}/${tenant}/${board}`;
   assertDayforceUrl(url);
   return url;
 }
 
-/** @param {string} culture @param {string} tenant @param {string} board @param {string|number} jobPostingId */
 export function buildJobUrl(culture, tenant, board, jobPostingId) {
   const url = `https://${ALLOWED_HOST}/${culture}/${tenant}/${board}/jobs/${jobPostingId}`;
   assertDayforceUrl(url);
@@ -260,51 +144,26 @@ export function buildCsrfUrl() {
   return `https://${ALLOWED_HOST}/api/auth/csrf`;
 }
 
-/** @param {string} tenant */
 export function buildSearchUrl(tenant) {
   const url = `https://${ALLOWED_HOST}/api/geo/${tenant}/jobposting/search`;
   assertDayforceUrl(url);
   return url;
 }
 
-/** @param {string} tenant @param {string} culture @param {string} jobBoardId @param {string|number} jobPostingId */
 export function buildDetailUrl(tenant, culture, jobBoardId, jobPostingId) {
   const url = `https://${ALLOWED_HOST}/api/geo/${tenant}/jobposting/${tenant}/${culture}/${jobBoardId}/${jobPostingId}`;
   assertDayforceUrl(url);
   return url;
 }
 
-// ── Pagination ───────────────────────────────────────────────────────
-
-/**
- * Compute the next `paginationStart`, or null when the board is exhausted.
- * Always advances by the *returned* offset+count (never a hardcoded step),
- * per the issue spec — the list endpoint's own accounting is the only
- * trustworthy stop condition.
- *
- * @param {number} offset
- * @param {number} count
- * @param {number} maxCount
- * @returns {number | null}
- */
 export function nextPaginationStart(offset, count, maxCount) {
   if (!Number.isFinite(offset) || !Number.isFinite(count) || !Number.isFinite(maxCount)) return null;
-  if (count <= 0) return null; // empty/short page — nothing more to fetch
+  if (count <= 0) return null;
   const next = offset + count;
   if (next >= maxCount) return null;
   return next;
 }
 
-// ── Location / description shaping ──────────────────────────────────
-
-/**
- * Join postingLocations[] into one display string. Prefers each location's
- * formattedAddress; falls back to [city, state, country] when absent (either
- * field can legitimately be missing per-location, not just board-wide).
- *
- * @param {any[] | undefined} postingLocations
- * @returns {string}
- */
 export function joinLocations(postingLocations) {
   if (!Array.isArray(postingLocations) || postingLocations.length === 0) return '';
   const parts = postingLocations.map(loc => {
@@ -317,15 +176,6 @@ export function joinLocations(postingLocations) {
   return parts.join(' | ');
 }
 
-/**
- * Concatenate header→body→footer JD content. Any of the three can
- * legitimately be empty — don't assume all are populated. Runs the shared
- * htmlToText pipeline once over the joined text (safe on plain-text pieces
- * too: no tags to strip, entities still decode, whitespace still collapses).
- *
- * @param {{ jobDescriptionHeader?: string, jobDescription?: string, jobDescriptionFooter?: string } | undefined} content
- * @returns {string}
- */
 export function buildJobDescriptionText(content) {
   if (!content || typeof content !== 'object') return '';
   const pieces = [content.jobDescriptionHeader, content.jobDescription, content.jobDescriptionFooter]
@@ -333,14 +183,6 @@ export function buildJobDescriptionText(content) {
   return htmlToText(pieces.join('\n\n'));
 }
 
-// ── Args ─────────────────────────────────────────────────────────────
-
-/**
- * Parse CLI options at execution time so importing this module never reads the
- * caller's argv or exits its process.
- *
- * @param {string[]} [argv]
- */
 export function parseArgs(argv = process.argv.slice(2)) {
   const tenantIdx = argv.indexOf('--tenant');
   if (tenantIdx !== -1 && (argv[tenantIdx + 1] === undefined || argv[tenantIdx + 1].startsWith('--'))) {
@@ -353,16 +195,6 @@ export function parseArgs(argv = process.argv.slice(2)) {
   };
 }
 
-// ── Load portals.yml ─────────────────────────────────────────────────
-
-/**
- * Read user configuration only when the CLI actually runs. Keeping this out
- * of module initialization makes the exported pure helpers safe to import in
- * tests and from other tooling, regardless of the caller's user-layer files.
- *
- * @param {string} [portalsPath]
- * @param {string|null} [singleTenant]
- */
 export function loadConfig(portalsPath = PORTALS_PATH, singleTenant = null) {
   let config = {};
   if (existsSync(portalsPath)) {
@@ -391,11 +223,6 @@ export function loadConfig(portalsPath = PORTALS_PATH, singleTenant = null) {
   return { boards, invalidCount, filters };
 }
 
-// ── Fetch helpers (all run through page.request — same context, same cookies) ──
-
-/**
- * @param {import('playwright').Page} page
- */
 async function fetchCsrfToken(page) {
   const resp = await page.request.get(buildCsrfUrl(), { maxRedirects: 0 });
   if (!resp.ok()) throw new Error(`csrf fetch failed: HTTP ${resp.status()}`);
@@ -406,12 +233,6 @@ async function fetchCsrfToken(page) {
   return json.csrfToken;
 }
 
-/**
- * @param {import('playwright').Page} page
- * @param {{ tenant: string, board: string, culture: string }} boardCfg
- * @param {string} csrfToken
- * @param {number} paginationStart
- */
 async function fetchSearchPage(page, boardCfg, csrfToken, paginationStart) {
   const resp = await page.request.post(buildSearchUrl(boardCfg.tenant), {
     maxRedirects: 0,
@@ -426,7 +247,6 @@ async function fetchSearchPage(page, boardCfg, csrfToken, paginationStart) {
   });
   if (resp.status() === 403 || resp.status() === 429) {
     const err = new Error(`search HTTP ${resp.status()}`);
-    // @ts-ignore
     err.retriable = true;
     throw err;
   }
@@ -434,17 +254,11 @@ async function fetchSearchPage(page, boardCfg, csrfToken, paginationStart) {
   return resp.json();
 }
 
-/**
- * @param {import('playwright').Page} page
- * @param {{ tenant: string, culture: string, jobBoardId: string }} boardCfg
- * @param {string|number} jobPostingId
- */
 async function fetchDetail(page, boardCfg, jobPostingId) {
   const resp = await page.request.get(buildDetailUrl(boardCfg.tenant, boardCfg.culture, boardCfg.jobBoardId, jobPostingId), { maxRedirects: 0 });
-  if (resp.status() === 404 || resp.status() === 410) return null; // closed between list and detail — skip, don't abort
+  if (resp.status() === 404 || resp.status() === 410) return null;
   if (resp.status() === 403 || resp.status() === 429) {
     const err = new Error(`detail HTTP ${resp.status()}`);
-    // @ts-ignore
     err.retriable = true;
     throw err;
   }
@@ -452,14 +266,6 @@ async function fetchDetail(page, boardCfg, jobPostingId) {
   return resp.json();
 }
 
-// ── Per-board scan ───────────────────────────────────────────────────
-
-/**
- * @param {import('playwright').Page} page
- * @param {{ name: string, tenant: string, board: string, culture: string, jobBoardId: string }} boardCfg
- * @param {{ titleFilter: Function, locationFilter: Function, contentFilter: Function, countryEligibilityFilter: Function, visaFilter: Function, matchedTitleKeywords: Function }} [filters]
- * @param {{ debug?: boolean }} [options]
- */
 export async function scanBoard(page, boardCfg, filters = {}, { debug = false } = {}) {
   filters = {
     titleFilter: () => true,
@@ -476,9 +282,6 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
   try {
     await page.goto(boardUrl, { waitUntil: 'networkidle', timeout: 30000 });
   } catch (err) {
-    // A live challenge page keeps polling Cloudflare, so the network never
-    // goes idle and goto times out (seen on real "Just a moment..." and
-    // Turnstile pages). Look at what's on screen before reporting the timeout.
     const challenge = await detectChallenge(page);
     if (challenge) throw new DayforceChallengeError(boardCfg.tenant, boardCfg.board, challenge);
     throw err;
@@ -514,8 +317,6 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
   }
   if (debug) console.log(`  [debug] ${boardCfg.tenant}: ${listRows.length} listing row(s) across ${pageCount} page(s)`);
 
-  // Filter pass on list-level data only — zero extra requests for anything
-  // that would be filtered out anyway (explicit design requirement, #3726).
   const shortlisted = [];
   const titleSkipped = [];
   const locationSkipped = [];
@@ -524,8 +325,6 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
   const visaSkipped = [];
 
   for (const row of listRows) {
-    // Titles arrive HTML-entity-escaped (e.g. "Strategy &amp; Acquisition") —
-    // decode without stripMarkup's tag handling, since a title is plain text.
     const title = decodeEntities(String(row.jobTitle || row.title || '')).trim();
     const jobPostingId = row.jobPostingId ?? row.id;
     if (!title || !validateJobPostingId(jobPostingId)) continue;
@@ -544,10 +343,9 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
     shortlisted.push({ jobPostingId, title, listLocation, listDescription, url });
   }
 
-  // Detail fetch only for the shortlist.
   for (const item of shortlisted) {
     const detail = await fetchDetail(page, boardCfg, item.jobPostingId);
-    if (!detail) continue; // 404/410 — closed between list and detail
+    if (!detail) continue;
 
     const description = buildJobDescriptionText(detail.jobPostingContent) || item.listDescription;
     const location = joinLocations(detail.postingLocations) || item.listLocation;
@@ -575,20 +373,6 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
   };
 }
 
-// ── Per-board retry ──────────────────────────────────────────────────
-
-/**
- * Scan one board in a fresh browser context, retrying once with a new
- * context on a retriable (403/429) error. A non-retriable error — including
- * DayforceChallengeError — ends the board on the first attempt.
- *
- * `launch` and `retryDelayMs` are injectable for tests.
- *
- * @param {{ name: string, tenant: string, board: string, culture: string, jobBoardId: string }} boardCfg
- * @param {any} filters
- * @param {{ debug?: boolean, launch?: () => Promise<any>, retryDelayMs?: number }} [options]
- * @returns {Promise<{ result: any, error: null } | { result: null, error: any }>}
- */
 export async function scanBoardWithRetry(boardCfg, filters, {
   debug = false,
   launch = () => chromium.launch({ headless: true }),
@@ -596,8 +380,6 @@ export async function scanBoardWithRetry(boardCfg, filters, {
 } = {}) {
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    // Browser startup sits inside the try so a launch failure is reported
-    // for this board like any other error, instead of aborting the whole scan.
     let browser = null;
     let context = null;
     try {
@@ -607,20 +389,16 @@ export async function scanBoardWithRetry(boardCfg, filters, {
       return { result: await scanBoard(page, boardCfg, filters, { debug }), error: null };
     } catch (err) {
       lastError = err;
-      // @ts-ignore
       if (!(err && err.retriable) || attempt === 2) break;
       if (debug) console.log(`\n  [debug] ${boardCfg.tenant}: ${err.message} — re-bootstrapping session and retrying once`);
       await new Promise(r => setTimeout(r, retryDelayMs));
     } finally {
-      // Close only what was opened; a failing close must not hide the real error.
       await context?.close().catch(() => {});
       await browser?.close().catch(() => {});
     }
   }
   return { result: null, error: lastError };
 }
-
-// ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
   const { dryRun, debug, singleTenant } = parseArgs();
@@ -721,10 +499,6 @@ async function main() {
   console.log('\n→ Run /career-ops pipeline to evaluate new offers.');
 }
 
-// Guarded like every sibling scanner (scan-hn.mjs, scan-interamt.mjs,
-// scan-ats-full.mjs) — merely importing this module must not drive a live
-// browser scan and mutate the user's pipeline/scan history as a side effect
-// of the import (#3510).
 if (isMainModule(import.meta.url)) {
   main().catch(err => {
     console.error('Fatal:', err.message);

@@ -1,5 +1,3 @@
-// Shared by the browser and route. History is conversational context, never a
-// new source of verified CV facts. Keep storage complete; bound model input only.
 export const MAX_CHAT_BYTES = 1_000_000;
 
 export function cleanMessages(input) {
@@ -13,7 +11,6 @@ export function cleanMessages(input) {
       if (['text', 'note'].includes(p.type) && typeof p.text === 'string') return [{ type: p.type, text: p.text }];
       if (p.type === 'card' && typeof p.jobId === 'string') return [{ type: p.type, jobId: p.jobId }];
       if (p.type === 'batch' && typeof p.batchId === 'string' && Array.isArray(p.jobIds) && p.jobIds.every(id => typeof id === 'string')) return [{ type: p.type, batchId: p.batchId, jobIds: p.jobIds }];
-      // Confirm callbacks exist only in the live component; never resurrect them.
       if (p.type === 'confirm' && p.state === 'pending') return [];
       if (p.type === 'confirm' && ['done', 'cancelled'].includes(p.state) && typeof p.summary === 'string') return [{ type: 'note', text: `${p.summary} (${p.state})` }];
       throw new Error('Invalid message part');
@@ -29,8 +26,6 @@ export function buildConversationContext(input = []) {
   if (!Array.isArray(input) || input.length > 2000 || input.some(m => !m || !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string')) {
     throw new Error('Invalid conversation history');
   }
-  // Reserve a separate budget for earlier user statements, including the first
-  // onboarding turn. Excerpts are literal, labelled, and never model summaries.
   const recent = input.slice(-24);
   const older = input.slice(0, -24).filter(m => m.role === 'user');
   const excerpts = older.map(m => `User excerpt: ${m.content.slice(0, 400)}`).join('\n').slice(0, 8000);

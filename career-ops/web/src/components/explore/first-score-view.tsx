@@ -10,9 +10,6 @@ import { useJobs, type Job } from "@/components/jobs/job-store";
 
 const SEEN_KEY = "career-ops:first-score-seen";
 
-// THE AHA — fires once, the first time an evaluation completes. The maintainer's
-// north star: the WHY is the hero (a sentence that clearly read THIS CV and reasoned
-// about THIS job), the grade is large-but-secondary. A celebration, not a report.
 const STYLE = `
 .co-aha{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:1.2rem;background:color-mix(in srgb, var(--bg) 70%, rgba(0,0,0,.5));-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);animation:co-aha-in .35s ease both}
 .co-aha__card{position:relative;width:min(34rem,100%);border-radius:1.3rem;border:1px solid var(--border,hsl(0 0% 50% /.2));background:var(--bg);box-shadow:0 24px 70px -20px rgba(0,0,0,.5);overflow:hidden}
@@ -22,8 +19,6 @@ const STYLE = `
 @media(prefers-reduced-motion:reduce){.co-aha{animation:none}}
 `;
 
-/** Pull the strongest "why this person" line out of the worker output. Prefer the
- *  VERDICT summary; else the first substantive sentence of the report body. */
 function extractWhy(job: Job): string {
   const s = (job.result?.summary || "").trim();
   if (s.length > 30) return s.replace(/\.$/, "") + ".";
@@ -39,7 +34,7 @@ export function FirstScoreView() {
   const router = useRouter();
   const { jobs } = useJobs();
   const [dismissed, setDismissed] = useState(false);
-  const [seen, setSeen] = useState(true); // assume seen until we read localStorage (avoid flash)
+  const [seen, setSeen] = useState(true);
 
   useEffect(() => {
     try {
@@ -54,8 +49,6 @@ export function FirstScoreView() {
     [jobs],
   );
 
-  // A11y for the emotional-peak modal: focus into it on open, trap Tab, Escape to
-  // close, restore focus on close (mirrors the MobileNav pattern).
   const panelRef = useRef<HTMLDivElement>(null);
   const open = !seen && !dismissed && !!firstDone;
   useEffect(() => {
@@ -65,9 +58,8 @@ export function FirstScoreView() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         try {
-          localStorage.setItem(SEEN_KEY, "1"); // dismiss = seen (don't re-pop on reload)
+          localStorage.setItem(SEEN_KEY, "1");
         } catch {
-          /* ignore */
         }
         setDismissed(true);
         return;
@@ -108,7 +100,6 @@ export function FirstScoreView() {
     try {
       localStorage.setItem(SEEN_KEY, "1");
     } catch {
-      /* ignore */
     }
     setDismissed(true);
   };
@@ -147,7 +138,6 @@ export function FirstScoreView() {
             )}
           </div>
 
-          {/* THE WHY — the hero. A sentence that read THIS CV against THIS job. */}
           <blockquote className={`${instrumentSerif.className} mt-5 border-l-2 border-brand/40 pl-4 text-[19px] leading-snug text-foreground`}>
             <Sparkles className="mb-1 inline size-4 text-brand" /> {why}
           </blockquote>

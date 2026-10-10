@@ -1,42 +1,4 @@
 #!/usr/bin/env node
-/**
- * add-entry.mjs — Deterministic dedup + insertion for `/career-ops add`.
- *
- * The `add` mode (agent) does the fetching, extraction, ATS-bullet writing,
- * preview, and confirm-before-write gate. This helper does ONE thing: take a
- * structured payload of already-written markdown and insert it into the user's
- * `cv.md` and/or `article-digest.md` idempotently — skipping anything that is
- * already there. It never fabricates or rewrites content; it only places the
- * blocks the agent produced.
- *
- * Usage:
- *   node add-entry.mjs <payload.json> [--dry-run]
- *   node add-entry.mjs --stdin [--dry-run]        (read payload JSON from stdin)
- *
- * Payload shape (both keys optional, at least one required):
- *   {
- *     "cv": {
- *       "section": "Projects",                 // heading to insert under (## Projects)
- *       "dedupKey": "FraudShield",             // used to detect an existing entry
- *       "entry": "- **FraudShield** (Open Source) -- Real-time fraud detection..."
- *     },
- *     "articleDigest": {
- *       "dedupKey": "FraudShield",
- *       "entry": "## FraudShield -- Real-Time Fraud Detection\n\n**Hero metrics:** ..."
- *     }
- *   }
- *
- * Output: a JSON result to stdout, e.g.
- *   { "dryRun": false,
- *     "cv": { "status": "added", "section": "Projects" },
- *     "articleDigest": { "status": "duplicate" } }
- *
- * Exit codes: 0 on success (including a no-op "duplicate"); non-zero only on a
- * hard error (bad/empty payload, a requested target file missing, unwritable).
- *
- * Test isolation: CAREER_OPS_CV / CAREER_OPS_ARTICLE_DIGEST override the target
- * files so tests never touch a real user CV.
- */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -58,28 +20,10 @@ const USAGE = `Usage:
   node add-entry.mjs --stdin [--dry-run]
   node add-entry.mjs --help                    # print this usage block and exit (-h is an alias)`;
 
-// Normalize a title/heading for duplicate detection: lowercase, collapse to
-// letters and digits. "FraudShield", "Fraud-Shield", "fraud shield" all match.
-//
-// Delegates to the shared normalizeTextKey rather than keeping a private
-// `[^a-z0-9]` strip. That strip deleted every non-Latin character, so a CV
-// written in Japanese, Russian or Hindi keyed EVERY heading and dedup key to
-// '' — which made `add` unusable rather than inaccurate: the non-empty-dedupKey
-// guard below rejected a key the user had actually supplied ("payload.cv
-// requires a non-empty dedupKey"), and two different section headings both
-// keying to '' matched each other, so an entry could land under the wrong
-// heading (#2849).
-//
-// Latin behaviour is unchanged except that an accented word now keys
-// faithfully: "Café" was truncated to "caf" (it never matched "Cafe" either
-// way), and now keys as "café".
 export function normalizeKey(s) {
   return typeof s === 'string' ? normalizeTextKey(s) : '';
 }
 
-// Split a markdown doc into the block belonging to a `## <section>` heading:
-// { before, heading, body, after }. `body` runs up to the next `## ` heading
-// (or EOF). Returns null when the section is absent.
 export function locateSection(md, section) {
   const target = normalizeKey(section);
   const lines = md.split('\n');
@@ -99,10 +43,6 @@ export function locateSection(md, section) {
   return null;
 }
 
-// The identifiers an entry can be recognized by within a section: bold spans
-// (**Name**) and any sub-headings (### / ####). Matching dedup against these
-// discrete names — not the raw section text — stops a short key like "AI" from
-// colliding with an unrelated substring (e.g. the "ai" inside "email").
 export function extractIdentifiers(body) {
   const ids = [];
   for (const m of body.matchAll(/\*\*([^*]+)\*\*/g)) ids.push(m[1]);
@@ -110,9 +50,6 @@ export function extractIdentifiers(body) {
   return ids;
 }
 
-// Does the named CV section already contain an entry matching dedupKey?
-// Compares the key against each entry's identifier (normalized equality), not a
-// substring of the whole section body.
 export function cvHasEntry(md, section, dedupKey) {
   const key = normalizeKey(dedupKey);
   if (!key) return false;
@@ -121,9 +58,6 @@ export function cvHasEntry(md, section, dedupKey) {
   return extractIdentifiers(loc.body).some(id => normalizeKey(id) === key);
 }
 
-// Insert a pre-formatted entry under `## <section>`, creating the section at
-// end-of-file when absent. Trailing whitespace inside the section is trimmed so
-// entries stack cleanly with a single blank line between the heading and body.
 export function insertIntoCvSection(md, section, entry) {
   const block = entry.replace(/\s+$/, '');
   const loc = locateSection(md, section);
@@ -139,10 +73,6 @@ export function insertIntoCvSection(md, section, entry) {
   return rebuilt.replace(/\n{3,}/g, '\n\n');
 }
 
-// article-digest.md is a sequence of `## <name> -- <tagline>` blocks separated
-// by `---`. Dedup on the name (the heading text before the dash), matched by
-// normalized equality so "## FraudShield -- Detection" matches the key
-// "FraudShield" without a short key colliding on other project names.
 export function articleDigestHasEntry(md, dedupKey) {
   const key = normalizeKey(dedupKey);
   if (!key) return false;
@@ -157,15 +87,9 @@ export function articleDigestHasEntry(md, dedupKey) {
 export function appendArticleDigest(md, entry) {
   const block = entry.replace(/\s+$/, '');
   const base = md.replace(/\s+$/, '');
-  // Keep the existing `---`-separated block rhythm.
   return `${base}\n\n---\n\n${block}\n`;
 }
 
-/**
- * Pure core: given the current file contents and a payload, compute the new
- * contents and a per-target status. No I/O — this is what the tests exercise.
- * @returns {{ cv: string, articleDigest: string, result: object }}
- */
 export function applyAdd(payload, { cvText = null, articleText = null } = {}) {
   if (!payload || typeof payload !== 'object' || (!payload.cv && !payload.articleDigest)) {
     throw new Error('payload must include at least one of: cv, articleDigest');
@@ -178,8 +102,6 @@ export function applyAdd(payload, { cvText = null, articleText = null } = {}) {
   if (payload.cv) {
     const { section, dedupKey, entry } = payload.cv;
     if (!section || !entry) throw new Error('payload.cv requires { section, entry }');
-    // dedupKey is what makes the insert idempotent — refuse to add without one
-    // rather than silently allowing duplicate re-runs.
     if (!normalizeKey(dedupKey)) throw new Error('payload.cv requires a non-empty dedupKey (used for dedup/idempotency)');
     if (cvText === null) throw new Error(`cv.md not found — cannot add to a CV that does not exist`);
     if (cvHasEntry(cvText, section, dedupKey)) {
@@ -194,7 +116,6 @@ export function applyAdd(payload, { cvText = null, articleText = null } = {}) {
     const { dedupKey, entry } = payload.articleDigest;
     if (!entry) throw new Error('payload.articleDigest requires { entry }');
     if (!normalizeKey(dedupKey)) throw new Error('payload.articleDigest requires a non-empty dedupKey (used for dedup/idempotency)');
-    // article-digest.md is optional; create it from a header when missing.
     const current = articleText === null
       ? '# Article Digest -- Proof Points\n\nCompact proof points from portfolio projects. Read by career-ops at evaluation time.\n'
       : articleText;
@@ -219,8 +140,6 @@ async function readStdin() {
 async function main() {
   const args = process.argv.slice(2);
 
-  // Migrated to shared validateFlags to reject mistyped flags (#3112).
-  // Inside the main-module guard so importers are unaffected (#3088).
   validateFlags(args, KNOWN_FLAGS, USAGE);
 
   const dryRun = args.includes('--dry-run');
@@ -253,8 +172,6 @@ async function main() {
   }
 
   if (!dryRun) {
-    // Track what actually landed so a failure on the second write reports which
-    // file was already mutated (the two writes aren't transactional).
     const written = [];
     try {
       if (payload.cv && out.result.cv?.status === 'added') {
@@ -274,7 +191,6 @@ async function main() {
   console.log(JSON.stringify({ dryRun, ...out.result }, null, 2));
 }
 
-// Only run main() when invoked directly, not when imported by tests.
 if (isMainModule(import.meta.url)) {
   main();
 }

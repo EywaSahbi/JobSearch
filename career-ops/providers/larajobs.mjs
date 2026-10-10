@@ -1,22 +1,8 @@
-// @ts-check
 import { decodeEntities } from './_html-entities.mjs';
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// LaraJobs provider — the board-wide public RSS feed at
-// https://larajobs.com/feed (Laravel / PHP jobs). The feed is public, no-auth,
-// and XML, so it is parsed in-process with the same tiny tag extractor as
-// providers/nodesk.mjs rather than adding an XML dependency.
-//
-// Each <item> carries the standard RSS fields plus a `job:` namespace with
-// `<job:company>` and `<job:location>`, so company and location come straight
-// from the feed (no title-splitting heuristics needed).
-//
-// Wire in via a `job_boards:` entry with `provider: larajobs`.
 
 const FEED_URL = 'https://larajobs.com/feed';
 const TRUSTED_HOST = 'larajobs.com';
 
-/** @param {string} url */
 function assertLarajobsUrl(url) {
   let parsed;
   try {
@@ -31,7 +17,6 @@ function assertLarajobsUrl(url) {
   return url;
 }
 
-// NaN-safe Date.parse - `|| undefined` would also coerce a valid epoch 0.
 function toEpochMs(value) {
   if (!value) return undefined;
   const parsed = Date.parse(value);
@@ -42,7 +27,6 @@ function fallbackCompany(entry) {
   return typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : 'LaraJobs';
 }
 
-/** @type {Provider} */
 export default {
   id: 'larajobs',
 
@@ -52,28 +36,22 @@ export default {
 
   async fetch(entry, ctx) {
     const feedUrl = assertLarajobsUrl(FEED_URL);
-    // redirect:'error' prevents SSRF via server-side redirects; combined with
-    // assertLarajobsUrl above it keeps the request pinned to larajobs.com.
     const text = await ctx.fetchText(feedUrl, { redirect: 'error' });
     return parseLarajobsFeed(text, fallbackCompany(entry));
   },
 };
 
-// Resolve a tag's inner text: unwrap a CDATA section, else decode entities.
 function extractText(inner) {
   const cdata = inner.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
   if (cdata) return cdata[1].trim();
   return decodeEntities(inner).trim();
 }
 
-// Extract the text of the first <tag>...</tag> in a block. Returns '' when
-// absent. Tag names may carry a namespace colon (e.g. job:company).
 function tagText(block, tag) {
   const m = block.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i'));
   return m ? extractText(m[1]) : '';
 }
 
-// Keep only absolute HTTPS links hosted on the trusted board domain.
 function cleanUrl(value) {
   if (!value) return '';
   try {
@@ -86,18 +64,6 @@ function cleanUrl(value) {
   }
 }
 
-/**
- * Parse LaraJobs' public RSS jobs feed. Exported for unit tests.
- *
- * Shape: `<rss><channel><item>...</item>...</channel></rss>`. Each item exposes
- * `<title>`, `<link>` (larajobs.com/job/<id>), `<pubDate>`, and a `job:`
- * namespace with `<job:company>` and `<job:location>`. Company falls back to
- * `<dc:creator>` then the entry name; location may be empty.
- *
- * @param {string} xml - raw RSS feed body
- * @param {string} [defaultCompany] - fallback company when the feed omits one
- * @returns {Array<{title: string, url: string, company: string, location: string, postedAt?: number}>}
- */
 export function parseLarajobsFeed(xml, defaultCompany = 'LaraJobs') {
   if (typeof xml !== 'string') return [];
   const fallback = typeof defaultCompany === 'string' && defaultCompany.trim() ? defaultCompany.trim() : 'LaraJobs';

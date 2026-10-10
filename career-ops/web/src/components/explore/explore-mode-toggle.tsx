@@ -5,9 +5,6 @@ import { cn } from "@/lib/cn";
 import { CostBadge } from "@/components/cost/cost-badge";
 import type { ExploreMode } from "@/lib/explore";
 
-// Cost honesty rendered at the POINT OF CHOICE: free deterministic Scan (default)
-// vs token-spending AI search. The AI segment stays selectable even with no CLI —
-// selecting it reveals the blocked state (more discoverable than a dead tab).
 export function ExploreModeToggle({
   mode,
   onChange,

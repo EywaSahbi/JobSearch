@@ -9,36 +9,16 @@ version: 1.0.0
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{NAME}} — CV</title>
 <style>
-  /* Profile style overrides are injected later by the PDF pipeline (#1837).
-     Keep each surface's existing font and color as its fallback: this template
-     has different defaults from the standard CV, including within its own
-     typography and palette. With no profile override those defaults stay put. */
   :root {
     --tag-color: hsl(187, 74%, 28%);
     --tag-bg: hsl(187, 40%, 95%);
     --tag-border: hsl(187, 40%, 88%);
   }
 
-  /* ATS-safe typography (#font-extraction fix):
-     The bundled variable woff2 fonts (Space Grotesk / DM Sans) render with
-     glyph advances that make PDF text extractors inject spurious spaces inside
-     words (e.g. "SUM M ARY", "Germ any") — which corrupts ATS keyword parsing.
-     This template's job is clean machine-readable parsing, so we use a standard
-     static system sans stack instead. Verified clean via pypdf text extraction.
-     The lang="ja" rules reuse this Latin base stack (with a CJK fallback added);
-     the lang="ar" rules below intentionally define their own Arabic stack. */
-
   * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    /* Disable fi/fl/ffi ligatures. Headless Chromium substitutes these letter
-       pairs with the Unicode glyphs U+FB01/FB02/FB03 at PDF layout time, and PDF
-       text extractors (what ATS systems read) decode them back to those
-       codepoints, so "verification" becomes "veriﬁcation" and a literal keyword
-       search misses it. Setting this on every element covers headings and
-       competency tags too. Required ligatures (rlig) stay on, so Arabic shaping
-       is unaffected. */
     font-variant-ligatures: none;
     font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
   }
@@ -56,7 +36,6 @@ version: 1.0.0
     background: #ffffff;
     padding: 0;
     margin: 0;
-    /* Disable ligatures here as well; see the * rule above. */
     font-variant-ligatures: none;
     font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
   }
@@ -68,7 +47,6 @@ version: 1.0.0
     padding: 2px 0;
   }
 
-  /* === HEADER === */
   .header {
     margin-bottom: 20px;
   }
@@ -84,11 +62,6 @@ version: 1.0.0
   }
 
   .header-title {
-    /* No own font-family: inherits from .header/body, so every locale
-       override below (ar, ja, AND zh/zh-CN/zh-TW, which only override body
-       and never declare an explicit .header h1 rule) reaches it for free.
-       Default value is identical to the stack this replaced, so unlocalized
-       output is unchanged (CodeRabbit, #3763). */
     font-size: 16px;
     font-weight: 600;
     text-transform: uppercase;
@@ -120,20 +93,12 @@ version: 1.0.0
     text-decoration: none;
   }
 
-  /* Generated on the item BEFORE it, so a wrap cannot start a line with the
-     separator. See cv-template.html for the full rationale. */
   .contact-row > *:not(:last-child)::after {
     content: "|";
     color: #ccc;
-    margin-inline-start: 14px;   /* matches the 14px column gap above */
+    margin-inline-start: 14px;
   }
 
-  /* === OPTIONAL PROFILE PHOTO (opt-in, DACH/European markets — #264) ===
-     Off by default: with no candidate.photo the {{PHOTO}} slot is empty, no
-     <img> is emitted, and the layout is byte-identical to a photoless CV.
-     When opted in (candidate.photo in config/profile.yml) the photo floats into
-     the top corner and the header/summary text wraps beside it. Photos are
-     penalized by US/UK/many-market ATS, so this is never on by default. */
   .cv-photo {
     float: right;
     width: 80px;
@@ -144,7 +109,6 @@ version: 1.0.0
     border: 1px solid #e2e2e2;
   }
 
-  /* === SECTIONS === */
   .section {
     margin-bottom: 18px;
   }
@@ -162,7 +126,6 @@ version: 1.0.0
     line-height: 1.2;
   }
 
-  /* === PROFESSIONAL SUMMARY === */
   .summary-text {
     font-size: var(--font-size, 11px);
     line-height: 1.7;
@@ -174,13 +137,11 @@ version: 1.0.0
     color: #1a1a1a;
   }
 
-  /* Keep long contact values inside the printable A4 box. */
   a {
     overflow-wrap: anywhere;
     word-break: break-word;
   }
 
-  /* === CORE COMPETENCIES === */
   .competencies-grid {
     display: flex;
     flex-wrap: wrap;
@@ -198,14 +159,11 @@ version: 1.0.0
     border: 1px solid var(--tag-border);
   }
 
-  /* === WORK EXPERIENCE === */
   .job {
     margin-bottom: 14px;
   }
 
   .job-header {
-    /* Normal flow preserves company -> period -> role order in ATS extraction.
-       Flex can group several headers before their role and bullet text. */
     display: block;
     margin-bottom: 4px;
   }
@@ -260,7 +218,6 @@ version: 1.0.0
     font-weight: 600;
   }
 
-  /* === PROJECTS === */
   .project {
     margin-bottom: 12px;
   }
@@ -295,7 +252,6 @@ version: 1.0.0
     margin-top: 3px;
   }
 
-  /* === EDUCATION === */
   .edu-item {
     margin-bottom: 8px;
   }
@@ -336,7 +292,6 @@ version: 1.0.0
     line-height: 1.5;
   }
 
-  /* === CERTIFICATIONS === */
   .cert-table {
     display: table;
     width: 100%;
@@ -371,7 +326,6 @@ version: 1.0.0
     width: 44px;
   }
 
-  /* === AWARDS === */
   .award-table {
     display: table;
     width: 100%;
@@ -406,7 +360,6 @@ version: 1.0.0
     width: 44px;
   }
 
-  /* === SKILLS === */
   .skills-grid {
     display: flex;
     flex-wrap: wrap;
@@ -424,30 +377,17 @@ version: 1.0.0
     font-size: var(--font-size, 10.5px);
   }
 
-  /* === PRINT === */
   @media print {
     body {
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
 
-    /* Keep a small right gutter for the print box. Right-aligned content
-       (job periods, education years) right-aligns to the content-box edge,
-       and the rightmost glyph's side bearing can spill ~1px past it and get
-       clipped by Chromium's print clip. A plain `.page` padding is reset to 0
-       here for print, which is why padding set outside @media print has no
-       effect; restoring a right gutter inside the print rule fixes it without
-       re-centering the page or hard-coding a per-format max-width. See #1341. */
     .page {
       padding: 0 0.18in 0 0;
     }
   }
 
-  /* === PAGE BREAK CONTROL === */
-  /* Only avoid breaking small atomic units (a cert row, an education line, the
-     header, a single competency or skill).  Sections and multi-bullet roles are
-     allowed to flow across a page boundary so content packs tight instead of
-     jumping wholesale and leaving large bottom gaps. */
   .header,
   .edu-item,
   .cert-item,
@@ -457,27 +397,16 @@ version: 1.0.0
     page-break-inside: avoid;
   }
 
-  /* #3242: opt-in, unchanged default (see templates/cv-template.html). This
-     template's :root block (its --zhm-* palette) does not declare
-     --job-break-inside, so the fallback below is the only default; a
-     config/profile.yml style.job_break_inside override still reaches it via
-     the injected :root block. */
   .job {
     page-break-inside: var(--job-break-inside, auto);
     break-inside: var(--job-break-inside, auto);
   }
 
-  /* Opt-in — unchanged default (a project may split across a page break).
-     Override via config/profile.yml style.project_break_inside: avoid. This
-     template's :root token block does not declare --project-break-inside, so
-     the fallback below is the only default. */
   .project {
     page-break-inside: var(--project-break-inside, auto);
     break-inside: var(--project-break-inside, auto);
   }
 
-  /* Keep a heading attached to the content that follows it, so headings are not
-     orphaned at the bottom of a page. */
   .section-title,
   .job-company,
   .job-role,
@@ -489,16 +418,11 @@ version: 1.0.0
     page-break-after: avoid;
   }
 
-  /* Keep a project's tech line attached to the description above it.  A project
-     may still split across pages, but not at the one opportunity that strands a
-     bare "Python | github.com/..." line at the top of the next page with no
-     title or description to identify it. */
   .project-tech {
     break-before: avoid;
     page-break-before: avoid;
   }
 
-  /* === RTL (Arabic) Support === */
   html[lang="ar"] body {
     direction: rtl;
     text-align: right;
@@ -541,13 +465,6 @@ version: 1.0.0
     margin: 0 14px 8px 0;
   }
 
-  /* === CJK (Japanese) font fallback === */
-  /* The bundled webfonts are Latin-only (see #951). Without a CJK fallback,
-     Japanese text renders as tofu (□) in headless Chromium on any system
-     without a CJK system font (Linux/CI, minimal containers). The Latin brand
-     fonts are kept first so ASCII still uses Space Grotesk / DM Sans, then the
-     browser's per-glyph fallback picks the first installed CJK face for kana
-     and kanji. Mirrors the lang="ar" precedent above. */
   html[lang="ja"] body {
     font-family: var(--font-family, 'Liberation Sans'), 'Helvetica Neue', Arial, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN',
       'Yu Gothic', 'YuGothic', 'Noto Sans CJK JP', 'Noto Sans JP',
@@ -565,9 +482,6 @@ version: 1.0.0
       Meiryo, 'MS PGothic', sans-serif;
   }
 
-  /* === CHINESE MINIMAL DESIGN ===
-     An opt-in, restrained visual system for Chinese and mixed-language
-     technical CVs. The document stays single-column and ATS-readable. */
   :root {
     --zhm-ink: var(--secondary-color, #172033);
     --zhm-text: #2f3747;
@@ -579,11 +493,6 @@ version: 1.0.0
   body,
   html[lang="zh-CN"] body,
   html[lang="zh"] body {
-    /* Keep Chinese and Latin text in one font run where possible. Splitting
-       mixed-language lines across Liberation Sans plus a CJK fallback makes
-       Chromium PDFs look correct while text extractors reorder Latin tokens.
-       A profile font replaces only the var() default: PingFang SC is repeated
-       so the Simplified Chinese fallback chain stays intact behind it. */
     font-family: var(--font-family, 'PingFang SC'), 'PingFang SC', 'Hiragino Sans GB',
       'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC',
       'Arial Unicode MS', sans-serif;
@@ -593,11 +502,6 @@ version: 1.0.0
     overflow-wrap: break-word;
   }
 
-  /* Traditional Chinese. `html[lang="zh"]` does not match `zh-TW`, and this
-     template's default stack is Simplified — which substitutes the wrong glyph
-     forms for TC text — so zh-TW needs TC faces explicitly. modes/zh-TW/ ships
-     as a supported locale. (No `ko` rule here on purpose: this is the Chinese
-     minimal template, not a general one.) */
   html[lang="zh-TW"] body,
   html[lang="zh-TW"] .contact-row {
     font-family: var(--font-family, 'Liberation Sans'), 'Helvetica Neue', Arial, 'PingFang TC',

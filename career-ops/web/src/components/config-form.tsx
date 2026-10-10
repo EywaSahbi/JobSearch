@@ -44,41 +44,27 @@ export function ConfigForm() {
   const [logos, setLogos] = useState(true);
   const [saved, setSaved] = useState(false);
 
-  // Load saved prefs
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const v = JSON.parse(raw);
-        // key/manual are not wired yet (nothing reads them) → never restore into
-        // those dead panels; only the Installed-CLI path is functional.
         if (v.mode === "cli") setMode("cli");
         if (v.cliId) setCliId(v.cliId);
         if (v.provider) setProvider(v.provider);
         if (typeof v.logos === "boolean") setLogos(v.logos);
       }
     } catch {
-      /* ignore */
     }
   }, []);
 
-  // Detect installed CLIs
   useEffect(() => {
     fetch("/api/clis")
       .then((r) => r.json())
       .then((d) => {
         const list: Cli[] = d.clis ?? [];
         setClis(list);
-        // Highlight + persist the default installed CLI when Config was never
-        // saved. Highlight-only looks configured while jobs still read empty
-        // localStorage -- so whatever is rendered as selected must be written.
-        // This applies at ANY installed count: restricting it to a SOLE install
-        // left every multi-CLI machine (claude + codex, say) in exactly the
-        // broken state the highlight was meant to avoid.
         setCliId((prev) => {
-          // A restored id whose CLI is no longer installed must not stick: it
-          // would stay selected and save() would write it straight back, so
-          // "open Config and click Save config" could never clear it (#4012).
           if (keepIfInstalled(prev, list)) return prev;
           const auto = pickDefaultInstalled(list);
           if (!auto) return "";
@@ -90,9 +76,6 @@ export function ConfigForm() {
   }, []);
 
   function save() {
-    // The API key is deliberately NOT persisted: nothing reads it yet (the
-    // key/manual panel is unwired) and a secret must never sit in clear-text
-    // localStorage. Keys belong in the user's own CLI/provider config.
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, cliId, provider, logos }));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -107,7 +90,6 @@ export function ConfigForm() {
         Run career-ops on your own AI, right on your computer. Your CV and data never leave your machine.
       </p>
 
-      {/* Engine mode */}
       <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
         AI Engine
       </label>
@@ -283,7 +265,6 @@ export function ConfigForm() {
         )}
       </div>
 
-      {/* Appearance / privacy */}
       <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
         Appearance
       </label>

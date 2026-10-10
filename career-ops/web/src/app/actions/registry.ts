@@ -1,21 +1,10 @@
-// The ONE action registry — the single source of truth for "what can be done".
-// Both UI controls and the assistant dispatch the SAME entries via dispatch(),
-// so the human UI and the agentic UI can never drift. Pure module (no React
-// hooks): the caller assembles `ctx` from its hooks and passes it in.
-//
-// The model emits intents as a vendor-neutral text envelope (<<act:ID {json}>>),
-// parsed CLIENT-SIDE; the registry validates args by hand (no zod dep) and gates
-// side-effects. Resolution of "all the Anthropic ones" happens here, off the
-// client pipeline snapshot — the model never sees or invents URLs.
-
 import type { Application, InboxJob } from "@/lib/career-ops";
 import type { Job } from "@/components/jobs/job-store";
 import { normalizeTextKey } from "@/lib/core/normalize-text-key.mjs";
 import { formatBatchSpendConfirmation, requiresBatchSpendConfirmation } from "@/lib/run-cost-estimate.mjs";
 
-export const BATCH_CAP = 12; // hard ceiling on a single fan-out
+export const BATCH_CAP = 12;
 
-// Canonical states (templates/states.yml) — the web validates against the same set.
 const CANON_STATUS = ["Evaluated", "Applied", "Responded", "Interview", "Offer", "Hired", "Rejected", "Discarded", "SKIP"];
 
 const TAB_VALUES = [
@@ -33,20 +22,20 @@ export type StartJobInput = {
 };
 
 export type ActionCtx = {
-  push: (path: string) => void; // router.push — section/detail change
-  replace: (path: string) => void; // router.replace — incremental filter tweak
+  push: (path: string) => void;
+  replace: (path: string) => void;
   startJob: (opts: StartJobInput) => string | null;
   inbox: InboxJob[];
-  applications: Application[]; // tracker snapshot — resolve #n → company/role for confirms
-  jobForUrl: (url: string) => Job | undefined; // skip-if-done / retry logic
+  applications: Application[];
+  jobForUrl: (url: string) => Job | undefined;
   estimateCost?: (kind: string, count: number) => { tokens?: number; usd?: number };
   rememberFact: (fact: string) => void;
-  writeStatus: (n: string, status: string) => void; // UPDATE-only writeback via /api/status
-  setApplyField: (idOrLabel: string, value: string) => void; // edit an apply-proxy answer
-  startApply: (url: string) => void; // open the apply form-proxy for a posting URL
-  applyExplore?: (patch: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void; // build a FREE discovery search
-  writeProfile?: (patch: Record<string, unknown>) => void; // merge-safe config/profile.yml write
-  writePortals?: (roles: string[], location?: string[]) => void; // merge-safe portals.yml title_filter write
+  writeStatus: (n: string, status: string) => void;
+  setApplyField: (idOrLabel: string, value: string) => void;
+  startApply: (url: string) => void;
+  applyExplore?: (patch: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void;
+  writeProfile?: (patch: Record<string, unknown>) => void;
+  writePortals?: (roles: string[], location?: string[]) => void;
 };
 
 export type ProfilePatch = {
@@ -61,7 +50,6 @@ export type ProfilePatch = {
   seniority?: string;
 };
 
-// House-style hand validation (no zod). Keeps only well-formed, confident fields.
 function coerceProfile(raw: Record<string, unknown>): ProfilePatch {
   const out: ProfilePatch = {};
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -84,13 +72,9 @@ export type DispatchResult =
   | { status: "ignored"; note?: string }
   | { status: "confirm"; summary: string; run: () => DoneInfo };
 
-// ── helpers ──────────────────────────────────────────────────────────────
 const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0;
-// Same shape as core normalizeTextKey(s, " ") — keeps accents/CJK, strips punct (#2666).
 const normCompany = (s: string) => normalizeTextKey(s, " ");
 
-// Allow only in-app routes (with optional :segment and ?query). Blocks anything
-// that isn't one of the app's own sections — the model can't navigate offsite.
 function isAllowedPath(p: string): boolean {
   if (!p.startsWith("/")) return false;
   if (/^(https?:)?\/\//i.test(p)) return false;
@@ -103,10 +87,8 @@ function genBatchId(): string {
   return `batch-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 }
 
-// ── actions ──────────────────────────────────────────────────────────────
 type ActionDef = {
   sideEffect: "none" | "spend" | "write";
-  // parse returns typed args or null (invalid → envelope ignored)
   run: (raw: Record<string, unknown>, ctx: ActionCtx) => DispatchResult;
 };
 
@@ -167,7 +149,6 @@ const ACTIONS: Record<string, ActionDef> = {
       const rerun = raw.rerun === true;
       const cap = Number.isFinite(Number(raw.max)) ? Math.min(BATCH_CAP, Number(raw.max)) : BATCH_CAP;
 
-      // statusScope: only 'inbox' is supported (Application rows carry no URL).
       const matches = ctx.inbox.filter((j) => {
         if (j.done) return false;
         const c = normCompany(j.company);
@@ -216,8 +197,6 @@ const ACTIONS: Record<string, ActionDef> = {
   },
 
   explore: {
-    // FREE: opens the Explorer and builds a discovery search. Zero tokens — it
-    // never spends, so it bypasses the confirm gate. The provider clamps/validates.
     sideEffect: "none",
     run: (raw, ctx) => {
       if (!ctx.applyExplore) return { status: "ignored", note: "explore unavailable here" };
@@ -306,9 +285,6 @@ const ACTIONS: Record<string, ActionDef> = {
     },
   },
 
-  // Propose the user's profile → on confirm, merge-safe write to config/profile.yml
-  // AND seed the scanner (portals.yml title_filter) so the very first scan has roles.
-  // DATA_CONTRACT: deep-merge only proposed keys; never clobber archetypes/narrative.
   setProfile: {
     sideEffect: "write",
     run: (raw, ctx) => {

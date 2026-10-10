@@ -1,7 +1,5 @@
 import localFont from "next/font/local";
 
-// Body / UI — Inter, same as the career-ops-docs home. The latin variable
-// subset is vendored so an offline production build never contacts Google.
 export const inter = localFont({
   src: [{
     path: "../assets/fonts/inter/Inter-Latin-Variable.woff2",
@@ -12,8 +10,6 @@ export const inter = localFont({
   display: "swap",
 });
 
-// Editorial display — Instrument Serif. Regular and italic mirror the docs
-// typography while remaining fully local at build and runtime.
 export const instrumentSerif = localFont({
   src: [{
     path: "../assets/fonts/instrument-serif/InstrumentSerif-Latin-Regular.woff2",

@@ -1,8 +1,6 @@
 import { LayoutDashboard, Compass, ListChecks, Send, Radar, BarChart3, FileText, Settings, CalendarClock } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 
-// Single source of truth for the app's primary destinations — shared by the
-// desktop sidebar and the mobile nav so they can never drift.
 export type NavItem = {
   href: string;
   label: string;

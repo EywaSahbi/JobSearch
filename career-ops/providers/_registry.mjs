@@ -1,26 +1,7 @@
-// Provider registry — loading and routing shared by the scanner and the portal
-// health check. Files prefixed with _ are never loaded as providers by scan.mjs,
-// so this helper module lives safely alongside the provider plugins.
-//
-// Extracted from scan.mjs (#1451-era inline definitions) so verify-portals.mjs
-// can route non-ATS boards through the SAME provider layer the scanner uses,
-// without importing scan.mjs itself (which has top-level side effects and would
-// form an import cycle via classifyFetchError).
-
 import { existsSync, readdirSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 
-/**
- * Load every provider plugin in a directory into an id→provider Map.
- *
- * Alphabetical order so detect() priority is deterministic across machines.
- * Malformed modules (wrong shape, duplicate id, import error) are logged and
- * skipped, never fatal.
- *
- * @param {string} dir - Absolute path to the providers directory.
- * @returns {Promise<Map<string, object>>}
- */
 export async function loadProviders(dir) {
   const providers = new Map();
   if (!existsSync(dir)) return providers;
@@ -50,21 +31,6 @@ export async function loadProviders(dir) {
   return providers;
 }
 
-/**
- * Resolve which provider handles a portals.yml entry (tracked_companies or job_boards).
- *   1. Explicit `provider:` field wins (skips detect()).
- *   2. local-parser when parser.command + script are configured (before API detect).
- *   3. Otherwise each provider's detect() runs in load order; first hit wins.
- *
- * @param {object} entry - portals.yml entry (tracked_companies or job_boards).
- * @param {Map<string, object>} providers - id→provider Map from loadProviders().
- * @param {{skipIds?: string[]}} [opts] - Provider ids to skip (e.g. 'local-parser'
- *   so a network-only health check never execs a configured local command). A
- *   skipped id is skipped however the entry reached it: an explicit `provider:`
- *   naming one resolves as if the field were absent, the same way the same
- *   entry resolves when it relies on detect().
- * @returns {{provider: object}|{error: string}|null}
- */
 export function resolveProvider(entry, providers, { skipIds = [] } = {}) {
   if (entry.provider && !skipIds.includes(entry.provider)) {
     const p = providers.get(entry.provider);

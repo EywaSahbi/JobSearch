@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-// @ts-check
-/**
- * plugins.mjs — explicit CLI host for the non-provider plugin hooks.
- *
- *   node plugins.mjs list                       # discovered plugins + status
- *   node plugins.mjs run <id> [hook] [args…]    # run one hook of one plugin
- *   node plugins.mjs run gmail                  # ingest (the plugin's only hook)
- *   node plugins.mjs run notion search "staff platform engineer"
- *   node plugins.mjs run notion export [--dry-run]
- *
- * Provider plugins are NOT run here — they ride `node scan.mjs` via a
- * `provider: <id>` entry in portals.yml. Keeping ingest/search/notify/export
- * behind this explicit CLI is deliberate: a plain `node scan.mjs` never silently
- * hits email/Notion/a paid API, and this file (not the plugin) OWNS every write
- * to the web-facing data files, so a plugin can't break their format.
- */
 
 import path from 'path';
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs';
@@ -38,14 +22,10 @@ const DATA_ROOT = getCareerOpsRoot();
 const APPLICATIONS_PATH = path.join(DATA_ROOT, 'data', 'applications.md');
 const PIPELINE_PATH = path.join(DATA_ROOT, 'data', 'pipeline.md');
 
-// A misbehaving plugin's stray rejection should be attributed and not silently
-// crash the host (the engine's per-hook try/catch handles the common case; this
-// is the backstop for an async leak after a hook resolves).
 process.on('unhandledRejection', (reason) => {
   console.error(`⚠️  unhandled rejection from a plugin: ${reason instanceof Error ? reason.message : reason}`);
 });
 
-/** Keep only the canonical Job fields — drop any extra keys a plugin returns. */
 function sanitizeJob(job) {
   if (!job || typeof job !== 'object') return null;
   const title = typeof job.title === 'string' ? job.title.trim() : '';
@@ -58,14 +38,13 @@ function sanitizeJob(job) {
   return out;
 }
 
-/** Generic markdown-table parser → rows keyed by lowercased header. READ-ONLY. */
 function parseMarkdownTable(md) {
   const lines = md.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
   if (lines.length < 2) return [];
   const headers = lines[0].split('|').slice(1, -1).map(h => h.trim().toLowerCase());
   const rows = [];
   for (const line of lines.slice(1)) {
-    if (/^\|[\s|:-]+\|?$/.test(line)) continue; // separator row
+    if (/^\|[\s|:-]+\|?$/.test(line)) continue;
     const cells = line.split('|').slice(1, -1).map(c => c.trim());
     if (cells.length === 0) continue;
     const row = {};
@@ -75,7 +54,6 @@ function parseMarkdownTable(md) {
   return rows;
 }
 
-/** URLs already present in data/pipeline.md, for additive de-duplication. */
 function existingPipelineUrls() {
   const urls = new Set();
   if (!existsSync(PIPELINE_PATH)) return urls;
@@ -84,12 +62,9 @@ function existingPipelineUrls() {
   return urls;
 }
 
-/** Frozen, read-only view of the user's tracker for `export` hooks. No file handle. */
 function buildSnapshot() {
   const applications = existsSync(APPLICATIONS_PATH)
     ? parseMarkdownTable(readFileSync(APPLICATIONS_PATH, 'utf8')) : [];
-  // pipeline.md uses a checklist format (`- [ ] url`), not a markdown table —
-  // parseMarkdownTable would always return [] here.
   const pipeline = existsSync(PIPELINE_PATH)
     ? [...readFileSync(PIPELINE_PATH, 'utf8').matchAll(/- \[[ xX]\]\s+(\S+)/g)]
         .map(m => Object.freeze({ url: m[1] }))
@@ -104,7 +79,7 @@ async function cmdList() {
   warnConfigLeftInCodeRoot(ROOT, DATA_ROOT);
   const cfg = await loadPluginConfig(DATA_ROOT);
   await loadDotenvOnce(DATA_ROOT);
-  const overridden = resolveSuccessorIds(ROOT); // ids where an installed successor is active
+  const overridden = resolveSuccessorIds(ROOT);
   const manifests = discoverPlugins(pluginRoots(ROOT), overridden);
   if (manifests.length === 0) {
     console.log('No plugins discovered. Bundled plugins live in plugins/; your own in plugins.local/.');
@@ -116,7 +91,6 @@ async function cmdList() {
     const state = enabled ? '✅ enabled'
       : !configured ? '○ disabled (config/plugins.yml)'
         : `⚠️  missing env: ${missingEnv.join(', ')}`;
-    // Annotate the seed/successor relationship.
     const isLocal = !m.dir.startsWith(path.join(ROOT, 'plugins') + path.sep);
     const succ = successorFor(ROOT, m.id);
     const tag = overridden.has(m.id) && isLocal ? '  🔁 maintained successor (overriding the bundled reference)'
@@ -139,14 +113,12 @@ async function cmdRun(args) {
   const manifest = discoverPlugins(pluginRoots(ROOT), resolveSuccessorIds(ROOT)).find(m => m.id === id);
   if (!manifest) { console.error(`Unknown plugin "${id}". Run \`node plugins.mjs list\`.`); process.exit(1); }
 
-  // Provider hooks ride scan, never this CLI.
   const runnable = manifest.hooks.filter(h => h !== 'provider');
   if (runnable.length === 0) {
     console.error(`Plugin "${id}" only exposes a provider hook — run it via scan with a \`provider: ${id}\` entry in portals.yml.`);
     process.exit(1);
   }
 
-  // Pick the hook: explicit 2nd arg, else the single runnable hook.
   let hook = positional[1] && HOOK_KINDS.includes(positional[1]) ? positional[1] : null;
   const hookArgStart = hook ? 2 : 1;
   if (!hook) {
@@ -155,11 +127,8 @@ async function cmdRun(args) {
   }
   if (!manifest.hooks.includes(hook)) { console.error(`Plugin "${id}" does not expose a "${hook}" hook (has: ${manifest.hooks.join(', ')}).`); process.exit(1); }
 
-  // The user-layer .env belongs beside config/plugins.yml under DATA_ROOT.
-  // Load it before the gate so a configured key is not reported as missing.
   await loadDotenvOnce(DATA_ROOT);
 
-  // Two-gate check with an actionable message before doing any work.
   const status = pluginStatus(manifest, cfg);
   if (!status.configured) { console.error(`Plugin "${id}" is not enabled. Set plugins.${id}.enabled: true in config/plugins.yml.`); process.exit(1); }
   if (status.missingEnv.length) { console.error(`Plugin "${id}" is missing ${status.missingEnv.join(', ')} in .env. See .env.example.`); process.exit(1); }
@@ -169,7 +138,6 @@ async function cmdRun(args) {
     if (hook === 'search' && !payload) { console.error(`search needs a query: node plugins.mjs run ${id} search "<query>"`); process.exit(1); }
     const results = filterResultsForId(await runHook(hook, payload, { root: ROOT, dataRoot: DATA_ROOT, dryRun, pluginId: id }), id);
     const found = results.filter(r => r.ok && Array.isArray(r.result)).flatMap(r => r.result).map(sanitizeJob).filter(Boolean);
-    // Additive de-dup: never re-add a URL already in the pipeline.
     const known = existingPipelineUrls();
     const seen = new Set();
     const jobs = found.filter(j => !known.has(j.url) && !seen.has(j.url) && seen.add(j.url));
@@ -181,9 +149,6 @@ async function cmdRun(args) {
 
   if (hook === 'export') {
     const snapshot = buildSnapshot();
-    // Export upserts one-by-one over the network (query + create/update per
-    // row), so the default 15s hook timeout only covers a handful of rows.
-    // Scale with tracker size so a growing applications.md doesn't age out.
     const rowCount = snapshot.applications.length;
     const timeoutMs = Math.min(120_000, Math.max(15_000, rowCount * 3_000));
     const results = filterResultsForId(await runHook('export', snapshot, { root: ROOT, dataRoot: DATA_ROOT, dryRun, timeoutMs, pluginId: id }), id);
@@ -206,38 +171,8 @@ function findManifest(id) {
   return discoverPlugins(pluginRoots(ROOT), resolveSuccessorIds(ROOT)).find(m => m.id === id) || null;
 }
 
-/**
- * Parse an existing config/plugins.yml into the object setEnabled merges into.
- *
- * Split out and exported so the guard below is testable without driving the CLI
- * at a real config file.
- *
- * THROWS rather than returning {} when the file will not parse. setEnabled's
- * contract is "merging (never clobbering the user's other plugins or non-secret
- * settings)", and a merge is only a merge if the read succeeded: a swallowed
- * parse error left cfg as {}, and the write put that empty object back over the
- * file. Every other plugin's enabled state and settings went with it, including
- * any non-secret value stored there, and nothing was printed.
- *
- * The trigger is a YAML typo — the most likely reason a hand-edited config does
- * not parse, and precisely when the file is most in need of not being replaced.
- * config/plugins.yml is a USER path in update-system.mjs, so there is no copy to
- * restore from.
- *
- * @param {string|null} raw - File contents, or null when the file does not exist.
- * @param {string} file - Path, for the error message only.
- * @returns {object} Parsed config; {} for an absent file.
- */
 export function parsePluginConfig(raw, file) {
-  // Absent is not unreadable: no file means a first enable, which is the whole
-  // point of the function. Only an existing-but-unparseable file is a refusal.
   if (raw == null) return {};
-  // An empty or comment-only file is "no config yet", not a corrupt one, and it
-  // must take the same path as an absent one. Decided from the text rather than
-  // from what the parser does with it: js-yaml 4 returns undefined for an empty
-  // document and js-yaml 5 throws "expected a document, but the input is empty",
-  // so inferring it from the parser would make this refuse to write over a
-  // comment-only config on one major and not the other.
   const hasContent = raw.split('\n').some((line) => {
     const t = line.trim();
     return t !== '' && !t.startsWith('#');
@@ -252,17 +187,13 @@ export function parsePluginConfig(raw, file) {
       + 'Fix the file and re-run; nothing was changed.',
     );
   }
-  if (cfg == null) return {};   // empty file: same as absent
-  // A scalar or a list parses cleanly and is still not a config. Spreading one
-  // below would discard it just as silently as the empty object did.
+  if (cfg == null) return {};
   if (typeof cfg !== 'object' || Array.isArray(cfg)) {
     throw new Error(`${file} does not contain a YAML mapping — refusing to overwrite it. Nothing was changed.`);
   }
   return cfg;
 }
 
-// Write enabled:true/false into config/plugins.yml, merging (never clobbering
-// the user's other plugins or non-secret settings).
 export function setPluginEnabled(root, id, on, settings) {
   const file = path.join(root, 'config', 'plugins.yml');
   const cfg = parsePluginConfig(existsSync(file) ? readFileSync(file, 'utf8') : null, file);
@@ -275,7 +206,6 @@ export function setPluginEnabled(root, id, on, settings) {
 
 const setEnabled = (id, on, settings) => setPluginEnabled(DATA_ROOT, id, on, settings);
 
-// The capability card a user must consent to before a plugin runs.
 function capabilityCard(manifest, source) {
   return [
     `\n  Plugin:        ${manifest.id}  (${sourceBadge(source)})`,
@@ -366,11 +296,6 @@ function cmdRemove(args) {
   const dir = path.join(ROOT, 'plugins.local', id);
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   removeLockEntry(ROOT, id);
-  // The files and the lock entry are already gone, so a config problem must not
-  // fail the command — but it must not be invisible either. This catch used to
-  // swallow nothing worth seeing; now it can catch a real, actionable one, and
-  // a user told "disabled" while the config still says enabled: true has been
-  // told the wrong thing.
   let disabled = true;
   try {
     setEnabled(id, false);
@@ -446,7 +371,6 @@ async function main() {
   }
 }
 
-// Named exports for the test suite — not part of the CLI API.
 export const _testPaths = Object.freeze({ APPLICATIONS_PATH, PIPELINE_PATH });
 export { buildSnapshot as _testBuildSnapshot };
 

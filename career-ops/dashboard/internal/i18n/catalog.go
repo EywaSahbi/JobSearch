@@ -7,16 +7,12 @@ import (
 	"time"
 )
 
-// Catalog holds all localized UI strings, labels, table headers, and formats
-// for the Go TUI Dashboard. It provides a static, zero-dependency translation architecture.
 type Catalog struct {
-	// Screen banners & general
 	AppTitle       string
 	OffersSummary  string
 	NoOffersMatch  string
 	LoadingPreview string
 
-	// Tabs & filters
 	TabAll       string
 	TabEvaluated string
 	TabApplied   string
@@ -27,7 +23,6 @@ type Catalog struct {
 	TabRejected  string
 	TabDiscarded string
 
-	// Table column headers
 	ColFit      string
 	ColDate     string
 	ColCompany  string
@@ -38,20 +33,17 @@ type Catalog struct {
 	ColPosted   string
 	ColLast     string
 
-	// Preview labels
 	LabelLoc     string
 	LabelPay     string
 	LabelLast    string
 	LabelRemote  string
 	LabelOutcome string
 
-	// Work modes
 	ModeRemote     string
 	ModeRemoteFlex string
 	ModeHybrid     string
 	ModeFull       string
 
-	// Progress screen
 	ProgressTitle   string
 	ProgressSummary string
 	FunnelTitle     string
@@ -60,7 +52,6 @@ type Catalog struct {
 	WeeklyTitle     string
 	ActiveInfo      string
 
-	// Stats screen
 	StatsTitle             string
 	StatsSummary           string
 	StatsStrategicInsights string
@@ -86,7 +77,6 @@ type Catalog struct {
 	InsightWorkMode        string
 	InsightPayBenchmark    string
 
-	// Seniority levels
 	SeniorityExecutive      string
 	SeniorityStaffPrincipal string
 	SeniorityLeadManager    string
@@ -94,12 +84,10 @@ type Catalog struct {
 	SeniorityMidLevel       string
 	SeniorityJuniorEntry    string
 
-	// Relative dates
 	TimeToday     string
 	TimeYesterday string
 	TimeDaysAgo   string
 
-	// Status display names
 	StatusEvaluated string
 	StatusApplied   string
 	StatusResponded string
@@ -110,14 +98,12 @@ type Catalog struct {
 	StatusSkip      string
 	StatusHired     string
 
-	// Additional UI strings
 	NoData        string
 	EmptyFile     string
 	RateResponse  string
 	RateInterview string
 	RateOffer     string
 
-	// Footer descriptions & hints
 	HelpNav        string
 	HelpTabs       string
 	HelpSearch     string
@@ -148,7 +134,6 @@ type Catalog struct {
 	HelpKeep       string
 	HelpClear      string
 
-	// Picker overlay titles & bar hints
 	PickerChangeStatus string
 	PickerColumnsTitle string
 	SearchHintInput    string
@@ -160,7 +145,6 @@ type Catalog struct {
 	ColReport          string
 	ColPDF             string
 
-	// Sort & view modes
 	SortScore    string
 	SortDate     string
 	SortCompany  string
@@ -173,7 +157,6 @@ type Catalog struct {
 	ViewFlat     string
 }
 
-// SortModeLabel returns the localized display label for a sort mode ("score", "date", etc.).
 func (c *Catalog) SortModeLabel(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "score":
@@ -197,7 +180,6 @@ func (c *Catalog) SortModeLabel(mode string) string {
 	}
 }
 
-// ViewModeLabel returns the localized display label for a view mode ("grouped" or "flat").
 func (c *Catalog) ViewModeLabel(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "grouped":
@@ -209,9 +191,6 @@ func (c *Catalog) ViewModeLabel(mode string) string {
 	}
 }
 
-// StatusLabel returns the localized display label for a canonical status ID
-// (interview, offer, hired, responded, applied, evaluated, skip, rejected,
-// discarded).
 func (c *Catalog) StatusLabel(norm string) string {
 	switch strings.ToLower(strings.TrimSpace(norm)) {
 	case "interview":
@@ -237,11 +216,8 @@ func (c *Catalog) StatusLabel(norm string) string {
 	}
 }
 
-// NowFunc allows injecting a mock clock for testing.
 var NowFunc = time.Now
 
-// FormatTimeAgo renders an ISO date as a relative duration in calendar days using localized strings:
-// "today", "yesterday", or "Nd ago" (or Turkish equivalents).
 func (c *Catalog) FormatTimeAgo(dateStr string) string {
 	t, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
 	if err != nil {
@@ -261,12 +237,10 @@ func (c *Catalog) FormatTimeAgo(dateStr string) string {
 	}
 }
 
-// PieChartSectionTitle formats a section title with the standard pie chart icon.
 func PieChartSectionTitle(title string) string {
 	return "🎯 " + title
 }
 
-// SeniorityLabel returns the localized display label for a seniority category.
 func (c *Catalog) SeniorityLabel(s string) string {
 	switch s {
 	case "Executive":
@@ -286,15 +260,12 @@ func (c *Catalog) SeniorityLabel(s string) string {
 	}
 }
 
-// En is the static English translation catalog.
 var En = Catalog{
-	// Screen banners & general
 	AppTitle:       "CAREER PIPELINE",
 	OffersSummary:  "%d offers | Avg %s/5",
 	NoOffersMatch:  "No offers match this filter",
 	LoadingPreview: "Loading preview...",
 
-	// Tabs & filters
 	TabAll:       "ALL",
 	TabEvaluated: "EVALUATED",
 	TabApplied:   "APPLIED",
@@ -305,7 +276,6 @@ var En = Catalog{
 	TabRejected:  "REJECTED",
 	TabDiscarded: "DISCARDED",
 
-	// Table column headers
 	ColFit:      "FIT",
 	ColDate:     "DATE",
 	ColCompany:  "COMPANY",
@@ -316,20 +286,17 @@ var En = Catalog{
 	ColPosted:   "POSTED",
 	ColLast:     "LAST",
 
-	// Preview labels
 	LabelLoc:     "Loc: ",
 	LabelPay:     "Pay: ",
 	LabelLast:    "Last contact: ",
 	LabelRemote:  "Remote: ",
 	LabelOutcome: "Outcome: ",
 
-	// Work modes
 	ModeRemote:     "Remote",
 	ModeRemoteFlex: "RemoteFlex",
 	ModeHybrid:     "Hybrid",
 	ModeFull:       "Full",
 
-	// Progress screen
 	ProgressTitle:   "SEARCH PROGRESS",
 	ProgressSummary: "%d tracked | %.1f avg score",
 	FunnelTitle:     "Pipeline Funnel",
@@ -338,7 +305,6 @@ var En = Catalog{
 	WeeklyTitle:     "Weekly Activity",
 	ActiveInfo:      "%d active applications | %d total offers",
 
-	// Stats screen
 	StatsTitle:             "SEARCH STATS",
 	StatsSummary:           "%d evaluated | %d archetypes",
 	StatsStrategicInsights: "STRATEGIC INSIGHTS",
@@ -364,7 +330,6 @@ var En = Catalog{
 	InsightWorkMode:        "Workplace distribution: %.0f%% of roles operate as %s",
 	InsightPayBenchmark:    "Compensation benchmark: Median top pay is $%.0fK (peak $%.0fK) across %d data points",
 
-	// Seniority levels
 	SeniorityExecutive:      "Executive",
 	SeniorityStaffPrincipal: "Staff / Principal",
 	SeniorityLeadManager:    "Lead / Manager",
@@ -372,12 +337,10 @@ var En = Catalog{
 	SeniorityMidLevel:       "Mid-Level",
 	SeniorityJuniorEntry:    "Junior / Entry",
 
-	// Relative dates
 	TimeToday:     "today",
 	TimeYesterday: "yesterday",
 	TimeDaysAgo:   "%dd ago",
 
-	// Status display names
 	StatusEvaluated: "Evaluated",
 	StatusApplied:   "Applied",
 	StatusResponded: "Responded",
@@ -388,14 +351,12 @@ var En = Catalog{
 	StatusSkip:      "SKIP",
 	StatusHired:     "Hired",
 
-	// Additional UI strings
 	NoData:        "No data",
 	EmptyFile:     "(empty file)",
 	RateResponse:  "Response Rate: ",
 	RateInterview: "Interview Rate: ",
 	RateOffer:     "Offer Rate: ",
 
-	// Footer descriptions & hints
 	HelpNav:        " nav  ",
 	HelpTabs:       " tabs  ",
 	HelpSearch:     " search  ",
@@ -426,7 +387,6 @@ var En = Catalog{
 	HelpKeep:       " keep  ",
 	HelpClear:      " clear  ",
 
-	// Picker overlay titles & bar hints
 	PickerChangeStatus: "Change status:",
 	PickerColumnsTitle: "─── Columns (SPACE toggle · ESC close) ───",
 	SearchHintInput:    "   Enter: keep   Esc: cancel   Ctrl+U: clear",
@@ -438,7 +398,6 @@ var En = Catalog{
 	ColReport:          "RPT",
 	ColPDF:             "PDF",
 
-	// Sort & view modes
 	SortScore:    "score",
 	SortDate:     "date",
 	SortCompany:  "company",
@@ -451,15 +410,12 @@ var En = Catalog{
 	ViewFlat:     "flat",
 }
 
-// Tr is the static Turkish translation catalog.
 var Tr = Catalog{
-	// Screen banners & general
 	AppTitle:       "KARİYER HATTI",
 	OffersSummary:  "%d ilan | Ort %s/5",
 	NoOffersMatch:  "Bu filtreye uyan ilan yok",
 	LoadingPreview: "Önizleme yükleniyor...",
 
-	// Tabs & filters
 	TabAll:       "TÜMÜ",
 	TabEvaluated: "DEĞERLENDİRİLDİ",
 	TabApplied:   "BAŞVURULDU",
@@ -470,7 +426,6 @@ var Tr = Catalog{
 	TabRejected:  "REDDEDİLDİ",
 	TabDiscarded: "İPTAL",
 
-	// Table column headers
 	ColFit:      "UYUM",
 	ColDate:     "TARİH",
 	ColCompany:  "ŞİRKET",
@@ -481,20 +436,17 @@ var Tr = Catalog{
 	ColPosted:   "YAYIN",
 	ColLast:     "SON",
 
-	// Preview labels
 	LabelLoc:     "Konum: ",
 	LabelPay:     "Ücret: ",
 	LabelLast:    "Son iletişim: ",
 	LabelRemote:  "Çalışma Şekli: ",
 	LabelOutcome: "Sonuç: ",
 
-	// Work modes
 	ModeRemote:     "Uzaktan",
 	ModeRemoteFlex: "Uzaktan (Esnek)",
 	ModeHybrid:     "Hibrit",
 	ModeFull:       "Ofiste",
 
-	// Progress screen
 	ProgressTitle:   "TAKİP İLERLEMESİ",
 	ProgressSummary: "%d takipte | %.1f ort. puan",
 	FunnelTitle:     "Pipeline Hunisi",
@@ -503,7 +455,6 @@ var Tr = Catalog{
 	WeeklyTitle:     "Haftalık Aktivite",
 	ActiveInfo:      "%d aktif başvuru | %d toplam teklif",
 
-	// Stats screen
 	StatsTitle:             "TAKİP İSTATİSTİKLERİ",
 	StatsSummary:           "%d değerlendirildi | %d arketip",
 	StatsStrategicInsights: "STRATEJİK İÇGÖRÜLER",
@@ -529,7 +480,6 @@ var Tr = Catalog{
 	InsightWorkMode:        "Çalışma yeri dağılımı: ilanların %%%.0f'i %s olarak çalışıyor",
 	InsightPayBenchmark:    "Ücret karşılaştırması: medyan üst maaş $%.0fK (en yüksek $%.0fK) — %d veri noktası",
 
-	// Seniority levels
 	SeniorityExecutive:      "Yönetici",
 	SeniorityStaffPrincipal: "Kıdemli Uzman / Lider",
 	SeniorityLeadManager:    "Takım Lideri / Müdür",
@@ -537,12 +487,10 @@ var Tr = Catalog{
 	SeniorityMidLevel:       "Orta Seviye",
 	SeniorityJuniorEntry:    "Başlangıç / Giriş",
 
-	// Relative dates
 	TimeToday:     "bugün",
 	TimeYesterday: "dün",
 	TimeDaysAgo:   "%d gün önce",
 
-	// Status display names
 	StatusEvaluated: "Değerlendirildi",
 	StatusApplied:   "Başvuruldu",
 	StatusResponded: "Yanıt Verildi",
@@ -553,14 +501,12 @@ var Tr = Catalog{
 	StatusSkip:      "Uygun Değil",
 	StatusHired:     "İşe Alındı",
 
-	// Additional UI strings
 	NoData:        "Veri yok",
 	EmptyFile:     "(boş dosya)",
 	RateResponse:  "Yanıt Oranı: ",
 	RateInterview: "Mülakat Oranı: ",
 	RateOffer:     "Teklif Oranı: ",
 
-	// Footer descriptions & hints
 	HelpNav:        " gezin  ",
 	HelpTabs:       " sekmeler  ",
 	HelpSearch:     " ara  ",
@@ -591,7 +537,6 @@ var Tr = Catalog{
 	HelpKeep:       " kaydet  ",
 	HelpClear:      " temizle  ",
 
-	// Picker overlay titles & bar hints
 	PickerChangeStatus: "Durumu değiştir:",
 	PickerColumnsTitle: "─── Sütunlar (SPACE değiştir · ESC kapat) ───",
 	SearchHintInput:    "   Enter: kaydet   Esc: iptal   Ctrl+U: temizle",
@@ -603,7 +548,6 @@ var Tr = Catalog{
 	ColReport:          "RAP",
 	ColPDF:             "PDF",
 
-	// Sort & view modes
 	SortScore:    "puan",
 	SortDate:     "tarih",
 	SortCompany:  "şirket",
@@ -616,15 +560,12 @@ var Tr = Catalog{
 	ViewFlat:     "düz",
 }
 
-// Es is the static Spanish translation catalog.
 var Es = Catalog{
-	// Screen banners & general
 	AppTitle:       "FLUJO DE CARRERA",
 	OffersSummary:  "%d ofertas | Prom %s/5",
 	NoOffersMatch:  "Ninguna oferta coincide con este filtro",
 	LoadingPreview: "Cargando vista previa...",
 
-	// Tabs & filters
 	TabAll:       "TODAS",
 	TabEvaluated: "EVALUADAS",
 	TabApplied:   "APLICADAS",
@@ -635,7 +576,6 @@ var Es = Catalog{
 	TabRejected:  "RECHAZADAS",
 	TabDiscarded: "DESCARTADAS",
 
-	// Table column headers
 	ColFit:      "AJUSTE",
 	ColDate:     "FECHA",
 	ColCompany:  "EMPRESA",
@@ -646,20 +586,17 @@ var Es = Catalog{
 	ColPosted:   "PUBLIC.",
 	ColLast:     "ÚLTIMO",
 
-	// Preview labels
 	LabelLoc:     "Ubic: ",
 	LabelPay:     "Salario: ",
 	LabelLast:    "Último contacto: ",
 	LabelRemote:  "Remoto: ",
 	LabelOutcome: "Resultado: ",
 
-	// Work modes
 	ModeRemote:     "Remoto",
 	ModeRemoteFlex: "Remoto (Flex)",
 	ModeHybrid:     "Híbrido",
 	ModeFull:       "Presencial",
 
-	// Progress screen
 	ProgressTitle:   "PROGRESO DE BÚSQUEDA",
 	ProgressSummary: "%d en seguimiento | %.1f puntuación media",
 	FunnelTitle:     "Embudo del proceso",
@@ -668,7 +605,6 @@ var Es = Catalog{
 	WeeklyTitle:     "Actividad semanal",
 	ActiveInfo:      "%d solicitudes activas | %d ofertas totales",
 
-	// Stats screen
 	StatsTitle:             "ESTADÍSTICAS DE BÚSQUEDA",
 	StatsSummary:           "%d evaluadas | %d arquetipos",
 	StatsStrategicInsights: "INSIGHTS ESTRATÉGICOS",
@@ -694,7 +630,6 @@ var Es = Catalog{
 	InsightWorkMode:        "Distribución laboral: el %.0f%% de los puestos opera como %s",
 	InsightPayBenchmark:    "Referencia salarial: La mediana de salario máximo es $%.0fK (pico $%.0fK) en %d puntos de datos",
 
-	// Seniority levels
 	SeniorityExecutive:      "Ejecutivo",
 	SeniorityStaffPrincipal: "Staff / Principal",
 	SeniorityLeadManager:    "Líder / Manager",
@@ -702,12 +637,10 @@ var Es = Catalog{
 	SeniorityMidLevel:       "Nivel Medio",
 	SeniorityJuniorEntry:    "Junior / Inicial",
 
-	// Relative dates
 	TimeToday:     "hoy",
 	TimeYesterday: "ayer",
 	TimeDaysAgo:   "hace %dd",
 
-	// Status display names
 	StatusEvaluated: "Evaluada",
 	StatusApplied:   "Aplicada",
 	StatusResponded: "Respondida",
@@ -718,14 +651,12 @@ var Es = Catalog{
 	StatusSkip:      "OMITIR",
 	StatusHired:     "Contratada",
 
-	// Additional UI strings
 	NoData:        "Sin datos",
 	EmptyFile:     "(archivo vacío)",
 	RateResponse:  "Tasa de respuesta: ",
 	RateInterview: "Tasa de entrevistas: ",
 	RateOffer:     "Tasa de ofertas: ",
 
-	// Footer descriptions & hints
 	HelpNav:        " navegar  ",
 	HelpTabs:       " pestañas  ",
 	HelpSearch:     " buscar  ",
@@ -756,7 +687,6 @@ var Es = Catalog{
 	HelpKeep:       " guardar  ",
 	HelpClear:      " limpiar  ",
 
-	// Picker overlay titles & bar hints
 	PickerChangeStatus: "Cambiar estado:",
 	PickerColumnsTitle: "─── Columnas (SPACE alternar · ESC cerrar) ───",
 	SearchHintInput:    "   Enter: guardar   Esc: cancelar   Ctrl+U: limpiar",
@@ -768,7 +698,6 @@ var Es = Catalog{
 	ColReport:          "INF",
 	ColPDF:             "PDF",
 
-	// Sort & view modes
 	SortScore:    "puntuación",
 	SortDate:     "fecha",
 	SortCompany:  "empresa",
@@ -781,11 +710,8 @@ var Es = Catalog{
 	ViewFlat:     "plano",
 }
 
-// Current points to the active language catalog. Defaults to English (&En).
 var Current = &En
 
-// SetLang sets the active catalog based on language code prefix
-// (e.g., "tr", "tr_TR" -> &Tr; "es", "es_ES" -> &Es; anything else -> &En).
 func SetLang(lang string) {
 	l := strings.ToLower(strings.TrimSpace(lang))
 	switch {
@@ -798,7 +724,6 @@ func SetLang(lang string) {
 	}
 }
 
-// ToggleLang switches Current between &En and &Tr.
 func ToggleLang() {
 	if Current == &En {
 		Current = &Tr
@@ -807,8 +732,6 @@ func ToggleLang() {
 	}
 }
 
-// GetLang returns the active language code ("tr" if Current == &Tr, "es" if
-// Current == &Es, else "en").
 func GetLang() string {
 	if Current == &Tr {
 		return "tr"

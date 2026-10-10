@@ -7,9 +7,6 @@ import { FRESHNESS_WINDOWS, SENIORITY_LABEL, type Seniority } from "@/lib/inbox"
 import { CostBadge } from "@/components/cost/cost-badge";
 import { cn } from "@/lib/cn";
 
-// Free, client-side facets over the raw firehose — 0 tokens, instant. Mirrors the
-// Explore chip language so the two surfaces read as one system. On mobile the chip
-// row scrolls INSIDE its own container (never the page).
 export function FacetChips({
   within,
   setWithin,
@@ -47,7 +44,6 @@ export function FacetChips({
 }) {
   return (
     <div className="space-y-2.5">
-      {/* keyword search + live count */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
@@ -64,9 +60,7 @@ export function FacetChips({
         </span>
       </div>
 
-      {/* chip row — desktop wraps, mobile scrolls inside the container */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
-        {/* freshness (single-select segmented; click active to clear) */}
         <div className="inline-flex shrink-0 rounded-lg border border-border bg-surface/40 p-0.5">
           {FRESHNESS_WINDOWS.map((w) => (
             <button
@@ -95,7 +89,6 @@ export function FacetChips({
           </Pill>
         ))}
 
-        {/* location contains */}
         <input
           value={locQ}
           onChange={(e) => setLocQ(e.target.value)}
@@ -114,8 +107,6 @@ export function FacetChips({
         )}
       </div>
 
-      {/* Token-honesty is bidirectional: the "free" reassurance is as always-visible
-          as the tray's "spend" cue (mobile + desktop) — never desktop-only. */}
       <div className="flex items-center gap-1.5">
         <CostBadge kind="free" size="xs" />
         <span className="text-[11px] text-faint">Filtering is free — only scoring uses tokens.</span>

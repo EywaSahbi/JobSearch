@@ -10,21 +10,11 @@ import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 import { codexFencingSupported } from "@/lib/cli-fencing-probe.mjs";
 
-// Deny list DERIVED, never hand-written: every one of the six advisor argvs
-// that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
-// then auto-approves (#2185, #2507).
 const ADVISOR_SCOPE = scopeFrom("Read,WebFetch,WebSearch,Glob,Grep");
 
-// Isolation and output flags this route adds to the exec argv itself — not
-// permission, so not fencing's (#2507), but a Codex build missing one breaks the
-// run just as thoroughly, so the capability gate below checks them too.
 const CODEX_ISOLATION_FLAGS = ["--strict-config", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check"];
 const CODEX_OUTPUT_FLAG = "--output-last-message";
 
-// AI search orchestrates modes/discover.md by running the USER'S configured CLI
-// headless (CLI-agnostic, like the assistant). Web hunting is slow → generous
-// budget. The agent is a PROPOSER: Write/Edit/Bash are disabled so it structurally
-// cannot persist; the only writes happen when the user later ADDs a candidate.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
@@ -57,13 +47,9 @@ export async function POST(req: Request) {
   const resolved = resolveCliOrFallback(requestedCliId);
   if (!resolved) return Response.json(cliUnavailableError(requestedCliId), { status: 404 });
   const { spec, binPath } = resolved;
-  // The CLI actually running: the Codex isolation probe, fencing and argv below
-  // are all keyed on it.
   const cliId = spec.id;
   const substitution = cliSubstitutionNotice(resolved);
 
-  // Read the CANONICAL mode at request time — single source of truth, never a
-  // homegrown prompt. Missing (older core) → graceful 400 so the Scan tab stays usable.
   let mode: string;
   try {
     mode = fs.readFileSync(path.join(careerOpsRoot(), "modes", "discover.md"), "utf8");
@@ -91,10 +77,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // The complete mode, memory and dedup context are embedded in `prompt`.
-  // Codex runs in an empty temporary cwd and writes only its final assistant
-  // response to a dedicated file. Its normal console transcript includes the
-  // full prompt and must never be forwarded to the Web UI.
   let childCwd: string;
 
   if (isCodex) {
@@ -129,10 +111,6 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
-        // --strict-mcp-config with no --mcp-config loads ZERO MCP servers, so the
-        // tool lists here describe everything this agent can reach. Required for a
-        // non-writing worker: without it a user MCP server could supply a write tool
-        // the capability record forbids, and cli-fencing refuses to certify that (#2507).
         "--strict-mcp-config",
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
@@ -141,10 +119,6 @@ export async function POST(req: Request) {
       ]
     : isCodex
       ? [
-          // Isolation and output only. Approval policy, the sandbox and web
-          // access were spelled here by #2361 and now come from fencing, which
-          // applies them to every Codex spawn instead of the one route that
-          // remembered — and refuses this argv outright if it spells them again.
           "exec",
           ...CODEX_ISOLATION_FLAGS,
           CODEX_OUTPUT_FLAG,
@@ -153,30 +127,17 @@ export async function POST(req: Request) {
         ]
       : spec.args(prompt);
 
-  // POSIX detached children become process-group leaders. Keeping stdio
-  // piped means Node still tracks the Codex process normally.
   const useCodexProcessGroup =
     isCodex && process.platform !== "win32";
 
-  // Declared BEFORE the spawn: fencing can refuse the argv, and the temporary
-  // workspace already exists by then. Without this the refusal path would leak
-  // one directory per rejected request.
   const cleanupChildCwd = () => {
     if (!isCodex) return;
     try {
       fs.rmSync(childCwd, { recursive: true, force: true });
     } catch {
-      /* best-effort temporary-directory cleanup */
     }
   };
 
-  // Proposer-not-writer, as the Claude branch above spells it: Read + WebFetch +
-  // WebSearch allowed, every write tool denied. Its web use is search-shaped —
-  // it hunts for postings rather than being handed a url to retrieve — so
-  // `search`, not the costlier `networkReadOnly`: that is what lets Codex keep
-  // the genuine read-only sandbox #2361 gave this route instead of trading it
-  // for a writable workspace. Claude is unaffected; its tools are not sandboxed
-  // and it still gets WebFetch (see ADVISOR_SCOPE).
   let child;
   try {
     child = spawnHeadlessCli(
@@ -186,17 +147,11 @@ export async function POST(req: Request) {
       { cliId, capabilities: CAPS.webSearchOnly },
     );
   } catch (e) {
-    // Fencing refuses an argv that contradicts the capability record. Report it
-    // in this route's own error shape rather than letting the throw escape POST
-    // as an unhandled rejection and an unstructured 500.
     cleanupChildCwd();
     return Response.json({ error: e instanceof Error ? e.message : "failed to start the CLI" }, { status: 500 });
   }
 
   const encoder = new TextEncoder();
-  // `closed` + kill timer in the OUTER scope so cancel() can flip `closed` before
-  // the child's late handlers run — otherwise they enqueue onto an already-closed
-  // controller and throw an uncaught "Controller is already closed" (see #1155).
   let closed = false;
   let killer: ReturnType<typeof setTimeout> | undefined;
   let forceKill: ReturnType<typeof setTimeout> | undefined;
@@ -218,8 +173,6 @@ export async function POST(req: Request) {
       killer = undefined;
     }
 
-    // If the group leader exited but a descendant ignored SIGTERM, retain the
-    // SIGKILL fallback until the remaining process group is gone.
     if (forceKill && !isCodexProcessGroupAlive()) {
       clearTimeout(forceKill);
       forceKill = undefined;
@@ -232,7 +185,6 @@ export async function POST(req: Request) {
         process.kill(-child.pid, signal);
         return true;
       } catch {
-        /* group may already be gone; fall back to the direct child */
       }
     }
 
@@ -271,7 +223,6 @@ export async function POST(req: Request) {
           try {
             controller.close();
           } catch {
-            /* already closed */
           }
         }
       };
@@ -281,17 +232,13 @@ export async function POST(req: Request) {
           controller.enqueue(encoder.encode(s));
           return true;
         } catch {
-          closed = true; // controller already closed underneath us — stop, never crash
+          closed = true;
           return false;
         }
       };
       const emit = (s: string) => {
         if (safeEnqueue(s)) emitted = true;
       };
-      // Same honesty as /api/run: a runtime with no verified fencing mechanism
-      // runs with its default access, and that must be visible rather than
-      // inferred from which CLI happens to be selected (#2507). This stream is
-      // plain text, so the notice is a leading line rather than an event.
       const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.webSearchOnly });
       if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
 
@@ -301,8 +248,6 @@ export async function POST(req: Request) {
       child.stdout.on("data", (d: Buffer) => {
         if (closed) return;
 
-        // Codex's authoritative response is read from codexResultFile after
-        // process completion. Drain but do not forward its console transcript.
         if (isCodex) return;
 
         if (!isClaude) {
@@ -322,7 +267,6 @@ export async function POST(req: Request) {
               if (typeof text === "string") emit(text);
             }
           } catch {
-            /* partial / non-json line — skip */
           }
         }
       });
@@ -330,9 +274,6 @@ export async function POST(req: Request) {
         const s = d.toString();
 
         if (isCodex) {
-          // Normal Codex stderr contains session metadata and the complete
-          // prompt. Retain only a bounded private diagnostic signal and never
-          // stream it during a successful request.
           codexStderr = (codexStderr + s).slice(-16_000);
           return;
         }
@@ -364,7 +305,6 @@ export async function POST(req: Request) {
               finalText = fs.readFileSync(codexResultFile, "utf8").trim();
             }
           } catch {
-            /* handled below as missing final output */
           }
 
           if (finalText) {
@@ -385,8 +325,6 @@ export async function POST(req: Request) {
                 "unsupported",
               ].filter((marker) => lowerDiagnostics.includes(marker));
 
-              // Codex stderr may contain the complete user prompt. Log only
-              // bounded metadata and marker categories, never its contents.
               console.error("[Codex AI search exited without a final response]", {
                 exitCode: code ?? "unknown",
                 stderrBytes: Buffer.byteLength(diagnosticText, "utf8"),

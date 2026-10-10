@@ -1,40 +1,4 @@
 #!/usr/bin/env node
-/**
- * funnel-velocity.mjs — Funnel calibration vs market benchmarks + stage velocity
- *
- * Three payloads, decreasing availability:
- *   1. calibration — own funnel rates (canonical ever* definition imported from
- *      stats.mjs) vs candidate-side market benchmark ranges. Works day one;
- *      folds status-log history when the ledger is present so a row rejected
- *      after an interview still counts as having reached Interview (#3493).
- *   2. waiting — in-flight Applied rows and elapsed days vs the typical
- *      first-response window. Per-row factual reporting, not an aggregate claim.
- *   3. velocity — median/p75 days per stage hop, folded from the append-only
- *      transition ledger data/status-log.tsv. Accrues value as the log grows.
- *
- * Transition ledger (written by set-status.mjs, never edited in place):
- *   {tracker#}\t{YYYY-MM-DD}\t{from}\t{to}\t{source}\t{note}
- *   - from may be "-" (unknown prior state)
- *   - to "-" retracts the row's latest observation
- *   - source "correction" replaces an earlier same-(num,to) observation
- *   - log path = sibling of the active tracker file (sandbox-safe for tests)
- *
- * Statistical honesty rules (council-reviewed, non-negotiable):
- *   - medians report right-censoring ("n still waiting, excluded") — with 61%
- *     ghosting, completed-only medians are survivorship-biased otherwise
- *   - 0-day hops (same-day catch-up entries) are excluded from medians, counted
- *   - no comparative multiplier claims below n=20 applied
- *   - above-range calibration always carries the selection-bias note
- *   - every benchmark mention carries its year and "directional"
- *
- * Benchmarks lookup order: --benchmarks <path> > config/benchmarks.yml (user
- * layer, survives updates) > templates/benchmarks.yml (shipped default).
- *
- * Run: node funnel-velocity.mjs             (JSON)
- *      node funnel-velocity.mjs --summary   (human-readable)
- *      node funnel-velocity.mjs --self-test
- *      node funnel-velocity.mjs --benchmarks path/to/benchmarks.yml
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -49,16 +13,6 @@ import { flagValue, validateFlags } from './lib/cli-flags.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
-// Two roots, because this file reads both layers and they are not the same
-// directory. CODE_ROOT is where the shipped templates live; DATA_ROOT is where
-// the USER's tracker and overrides live, and getCareerOpsRoot() is what honours
-// CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR / the .career-ops-data marker.
-//
-// One name for both is how this went wrong: the constant was called CAREER_OPS
-// and held __dirname, so it read correctly for templates and silently pointed
-// the tracker lookup at the checkout. A user with a data root configured got
-// "No tracker found ... nothing to calibrate yet" — indistinguishable from
-// having no data.
 const CODE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
 const STATES_FILE = join(CODE_ROOT, 'templates/states.yml');
@@ -74,19 +28,9 @@ const USAGE = `Usage:
   node funnel-velocity.mjs --help|-h              # show this message`;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-// `web` sits alongside `set-status` because it is the same class of event: a
-// status change made in the web app is recorded as the user makes it, not
-// reconstructed afterwards. Only the door differs.
-// `reply-watch` is the same class: the user confirms the update interactively;
-// the transition is observed at that moment, not reconstructed later.
 const VALID_SOURCES = new Set(['set-status', 'web', 'correction', 'backfill', 'manual', 'reply-watch']);
-// Sources whose dates are trusted for day-math. backfill/manual are parsed and
-// counted but excluded: they are reconstructed after the fact, not observed.
 const DAY_MATH_SOURCES = new Set(['set-status', 'web', 'correction', 'reply-watch']);
 
-// The hops a candidate can measure from their own tracker. Applied→Rejected is
-// tracked separately from the forward hops — a "days to terminal" number that
-// mixes offers and rejections reads grim and means nothing.
 const HOPS = [
   { key: 'appliedToResponded', from: 'Applied', to: 'Responded' },
   { key: 'respondedToInterview', from: 'Responded', to: 'Interview' },
@@ -94,13 +38,11 @@ const HOPS = [
   { key: 'appliedToRejected', from: 'Applied', to: 'Rejected' },
 ];
 
-// Verbatim strings the tone contract pins (also asserted by mode-doc checks).
 const SELECTION_BIAS_NOTE = 'targeted applications are expected to beat mass-platform averages — this confirms your filtering works';
 const BELOW_RANGE_ACTION = '→ check follow-up compliance (followup mode) or review your score threshold (patterns mode)';
 const CLAIM_MIN_N = 20;
 const HOP_MIN_N = 3;
 
-// --- Date helpers ---
 export function parseISODate(s) {
   if (!DATE_RE.test(String(s ?? '').trim())) return null;
   const d = new Date(`${String(s).trim()}T00:00:00Z`);
@@ -113,8 +55,6 @@ export function daysBetween(fromStr, toStr) {
   return Math.round((b - a) / 86400000);
 }
 
-// --- Ledger parsing ---
-// line: {tracker#}\t{YYYY-MM-DD}\t{from}\t{to}\t{source}\t{note}
 export function parseStatusLog(content, states) {
   const observations = [];
   const unparseable = [];
@@ -135,7 +75,6 @@ export function parseStatusLog(content, states) {
     if (toRaw !== '-' && !to) { unparseable.push({ line: i + 1, raw: t, reason: `unknown to-state "${toRaw}"` }); continue; }
     if (!VALID_SOURCES.has(source)) {
       unknownSources.push({ line: i + 1, num, source });
-      // Parsed but never fed to day-math; still visible in dataQuality.
       observations.push({ num, date, from, to, source, note, dayMath: false });
       continue;
     }
@@ -144,19 +83,6 @@ export function parseStatusLog(content, states) {
   return { observations, unparseable, unknownSources };
 }
 
-/**
- * Fold observations into one ordered timeline per tracker#.
- *
- * Rules (append-only log semantics):
- *   - later `correction` with same (num, to) replaces the earlier observation's
- *     date (the fix for "agent logged the wrong day")
- *   - `to: "-"` retracts the row's latest surviving observation (the fix for
- *     "that transition never happened")
- *   - otherwise observations accumulate in file order (the log IS the order;
- *     dates may legitimately be non-monotonic via --on backdating)
- *
- * @returns Map num -> [{to, date, source, dayMath}]
- */
 export function foldObservations(observations) {
   const byNum = new Map();
   for (const obs of observations) {
@@ -169,16 +95,12 @@ export function foldObservations(observations) {
     }
     timeline.push({ to: obs.to, date: obs.date, source: obs.source, dayMath: obs.dayMath });
   }
-  // Sort each timeline by date so hop math sees event order, not entry order
-  // (--on backdating makes file order unreliable). Stable sort keeps same-day
-  // catch-up entries in entry order.
   for (const timeline of byNum.values()) {
     timeline.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }
   return byNum;
 }
 
-// --- Percentiles ---
 export function median(nums) {
   if (!nums.length) return null;
   const s = [...nums].sort((a, b) => a - b);
@@ -186,8 +108,6 @@ export function median(nums) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-// p75 by linear interpolation between closest ranks (R-7, the numpy default).
-// Pinned by self-test fixture: [3,6,20] -> 13.
 export function p75(nums) {
   if (!nums.length) return null;
   const s = [...nums].sort((a, b) => a - b);
@@ -197,18 +117,6 @@ export function p75(nums) {
   return s[lo] + (s[hi] - s[lo]) * (rank - lo);
 }
 
-// --- Velocity ---
-/**
- * Per-hop day stats from folded timelines.
- *
- * A hop measurement = days between a row's dated `from` observation and its
- * next dated `to` observation (both day-math-trusted). Honesty rules:
- *   - 0-day hops excluded from the math, counted (same-day catch-up entries)
- *   - right-censoring: a row sitting in `from` with no later observation
- *     counts as censored for that hop (still waiting — median excludes it and
- *     must say so)
- *   - < HOP_MIN_N completed measurements -> insufficientData, no median
- */
 export function computeVelocity(timelines, todayStr) {
   const result = {};
   for (const hop of HOPS) {
@@ -225,9 +133,6 @@ export function computeVelocity(timelines, todayStr) {
         if (d === 0) { sameDayExcluded++; continue; }
         days.push(d);
       } else if (fromIdx === timeline.length - 1) {
-        // Row's latest state is the hop's from-state: still waiting = censored.
-        // Only forward hops censor; Applied→Rejected shares Applied rows with
-        // Applied→Responded, so count censoring once (on the forward hop).
         if (hop.to !== 'Rejected') censored++;
       }
     }
@@ -245,7 +150,6 @@ export function computeVelocity(timelines, todayStr) {
   return result;
 }
 
-// --- Benchmarks ---
 export function loadBenchmarks(explicitPath) {
   const path = explicitPath
     || (existsSync(join(DATA_ROOT, 'config/benchmarks.yml')) ? join(DATA_ROOT, 'config/benchmarks.yml') : join(CODE_ROOT, 'templates/benchmarks.yml'));
@@ -261,7 +165,6 @@ export function loadBenchmarks(explicitPath) {
   return { benchmarks: doc.benchmarks, path };
 }
 
-/** Classify an own-rate percentage against a benchmark's range (inclusive). */
 export function classify(ownPct, metric) {
   if (ownPct === null || ownPct === undefined || !metric || !Array.isArray(metric.range_pct)) return null;
   const [lo, hi] = metric.range_pct;
@@ -279,39 +182,23 @@ export function classify(ownPct, metric) {
   };
 }
 
-// --- Calibration (flagship: works day one, no ledger needed) ---
 export function computeCalibration(funnel, benchmarks) {
   const smallSample = funnel.everApplied < CLAIM_MIN_N;
   return {
     everApplied: funnel.everApplied,
     smallSample,
     claimMinN: CLAIM_MIN_N,
-    // 'ledger' when the ever* counts fold status-log history (rejected-after-
-    // interview rows counted at the stage they reached), 'snapshot' otherwise.
     basis: funnel.basis === 'ledger' ? 'ledger' : 'snapshot',
     responseRate: classify(funnel.everApplied > 0 ? funnel.responseRate : null, benchmarks.response_rate),
     interviewRate: classify(funnel.everApplied > 0 ? funnel.interviewRate : null, benchmarks.application_to_interview),
   };
 }
 
-// --- Waiting (flagship #2: in-flight Applied rows vs first-response window) ---
-/**
- * Applied-date priority per row:
- *   1. ledger Applied observation (event-dated via --on, or logged same day)
- *   2. "Applied YYYY-MM-DD" in the tracker notes (followup-cadence convention;
- *      followup-seed/apply modes write it — same helper, same regex)
- *   3. unknown (listed, never guessed — the tracker date column is the
- *      EVALUATION date and must not stand in for the submission date)
- */
 export function computeWaiting(rows, timelines, benchmarks, todayStr) {
   const windowDays = benchmarks.days_first_response?.range_days ?? [5, 14];
   const items = [];
   let unknownDates = 0;
   for (const row of rows) {
-    // Canonicalize before comparing — the funnel counts everApplied through
-    // normalizeStatus, so non-canonical Applied rows (lowercase "applied", a
-    // status carrying a date, localized "Aplicado", markdown-bold "**Applied**")
-    // must surface here too, or the follow-up backlog is under-reported.
     if (normalizeStatus(row.status) !== 'applied') continue;
     const timeline = timelines.get(row.num) || [];
     const ledgerApplied = timeline.filter(o => o.to === 'Applied' && o.dayMath).pop();
@@ -336,7 +223,6 @@ export function computeWaiting(rows, timelines, benchmarks, todayStr) {
   };
 }
 
-// --- Tracker rows ---
 export function parseTrackerRows(content) {
   const lines = String(content ?? '').replace(/\r/g, '').split('\n');
   const colmap = resolveColumns(lines);
@@ -348,18 +234,9 @@ export function parseTrackerRows(content) {
   return rows;
 }
 
-// --- Assembly ---
 export function analyze({ trackerContent, logContent, benchmarks, states, todayStr }) {
   const rows = parseTrackerRows(trackerContent);
   const stats = computeTrackerStats(trackerContent);
-  // Ledger-aware funnel when the transition log carries usable history: a row now
-  // sitting in a terminal snapshot (Rejected/Discarded) still counts for the
-  // middle stages it passed through, so interviewRate/responseRate stop
-  // undercounting rejected-after-interview rows (#3493). Same canonical
-  // definition `node stats.mjs` uses. Branch on the parsed stages, not the raw
-  // file: a header-only, comment-only, or all-malformed log has no history to
-  // fold, and taking the ledger path anyway would stamp basis:'ledger' on a
-  // funnel identical to the snapshot and print the "rates fold history" note.
   const ledgerStages = parseStatusLogStages(logContent);
   const funnel = ledgerStages.length > 0
     ? computeFunnelWithHistory(trackerStatusByNum(trackerContent), ledgerStages)
@@ -373,10 +250,6 @@ export function analyze({ trackerContent, logContent, benchmarks, states, todayS
   const newestObs = observations.reduce((max, o) => (o.date > max ? o.date : max), '');
 
   const velocity = computeVelocity(timelines, todayStr);
-  // The one hop with a candidate-side day benchmark gets it attached, so the
-  // renderer can show market context next to the own-median (same denominator:
-  // per-successful-process). Gated on an existing median: with insufficientData
-  // the JSON output would otherwise leak a benchmark next to a null median.
   const io = benchmarks.days_interview_to_offer;
   if (io && Array.isArray(io.range_days) && velocity.interviewToOffer.median !== null) {
     velocity.interviewToOffer.benchmark = {
@@ -403,7 +276,6 @@ export function analyze({ trackerContent, logContent, benchmarks, states, todayS
   };
 }
 
-// --- Summary rendering (tone contract lives here — see header) ---
 function fmtCalibrationLine(label, c, smallSample, n) {
   if (!c || c.ownPct === null) return `  ${label}: no data yet`;
   const range = `${c.rangePct[0]}–${c.rangePct[1]}% typical band (${c.year ?? 'n/a'}, directional)`;
@@ -487,7 +359,6 @@ export function renderSummary(result, todayStr) {
   return out.join('\n');
 }
 
-// --- Self-test ---
 function selfTest() {
   let failures = 0;
   const check = (cond, msg) => {
@@ -496,7 +367,6 @@ function selfTest() {
   const states = loadCanonicalStates(STATES_FILE);
   const TODAY = '2026-07-08';
 
-  // -- parser --
   const LOG_FIXTURE = [
     '1\t2026-06-01\tEvaluated\tApplied\tset-status\t',
     '1\t2026-06-08\tApplied\tResponded\tset-status\t',
@@ -529,13 +399,6 @@ function selfTest() {
   check(observations.find(o => o.source === 'future-import')?.dayMath === false, 'parser: unknown source excluded from day-math');
   check(observations.find(o => o.num === 2 && o.from === null), 'parser: "-" from-state parses as null');
 
-  // A status change made from the web app is observed live, at the moment the
-  // user makes it — the same event as a set-status transition entering through
-  // a different door. Excluding it does not drop the rows, which is what makes
-  // the failure quiet: they are parsed, counted, flagged under unknownSources,
-  // and contribute nothing to the hop figures, so a web-driven install reads as
-  // an empty funnel rather than a broken one. Its own fixture so the counts
-  // pinned above stay pinned.
   const WEB_FIXTURE = [
     '1\t2026-06-01\tEvaluated\tApplied\tweb\t',
     '1\t2026-06-08\tApplied\tResponded\tweb\t',
@@ -545,19 +408,10 @@ function selfTest() {
   check(web.observations.length === 2 && web.observations.every(o => o.dayMath === true),
     'parser: web observations are trusted for day-math');
 
-  // The rows above are a clean 7-day Applied→Responded hop. Asserting the
-  // parse alone would not have caught this: the defect was never that the rows
-  // failed to parse, it was that a parsed row reached no figure.
   const webVelocity = computeVelocity(foldObservations(web.observations), TODAY);
   check(webVelocity.appliedToResponded.n === 1,
     `velocity: a web transition reaches the hop figures (expected n=1, got ${webVelocity.appliedToResponded.n})`);
 
-  // reply-watch is the same event class as set-status/web: the user confirms the
-  // update interactively and it is recorded at that moment (not reconstructed
-  // after the fact the way backfill/manual are). A reply-watch transition that is
-  // excluded from day-math silently empties the velocity figures for users who
-  // manage their inbox through reply-watch. Its own fixture so the counts above
-  // stay pinned and this source is covered independently.
   const REPLY_WATCH_FIXTURE = [
     '1\t2026-06-01\tEvaluated\tApplied\treply-watch\t',
     '1\t2026-06-09\tApplied\tResponded\treply-watch\t',
@@ -570,7 +424,6 @@ function selfTest() {
   check(rwVelocity.appliedToResponded.n === 1,
     `velocity: a reply-watch transition reaches the hop figures (expected n=1, got ${rwVelocity.appliedToResponded.n})`);
 
-  // -- fold --
   const timelines = foldObservations(observations);
   const t2 = timelines.get(2);
   check(t2.length === 2, `fold: row 2 expected 2 observations, got ${t2.length}`);
@@ -578,30 +431,25 @@ function selfTest() {
   const t5 = timelines.get(5);
   check(t5.length === 1 && t5[0].to === 'Applied', `fold: retraction removes latest observation (got ${t5.map(o => o.to).join(',')})`);
 
-  // -- percentiles --
   check(median([3, 6, 20]) === 6, 'median odd');
   check(median([3, 6]) === 4.5, 'median even');
   check(p75([3, 6, 20]) === 13, `p75 interpolation: expected 13, got ${p75([3, 6, 20])}`);
   check(p75([5]) === 5, 'p75 single value');
 
-  // -- velocity --
   const velocity = computeVelocity(timelines, TODAY);
   check(velocity.appliedToResponded.n === 2, `velocity: A→R expected n=2 (rows 1,2), got ${velocity.appliedToResponded.n}`);
   check(velocity.appliedToResponded.insufficientData === true, 'velocity: n=2 < 3 → insufficient');
   check(velocity.appliedToResponded.median === null, 'velocity: insufficient → no median');
   check(velocity.appliedToResponded.sameDayExcluded === 1, `velocity: row 3 same-day hop excluded+counted, got ${velocity.appliedToResponded.sameDayExcluded}`);
-  // rows 4, 5, 99 sit in Applied with no later observation → censored (still waiting)
   check(velocity.appliedToResponded.censored === 3, `velocity: expected 3 censored, got ${velocity.appliedToResponded.censored}`);
   check(velocity.appliedToRejected.censored === 0, 'velocity: rejection hop does not double-count censoring');
   check(velocity.interviewToOffer.n === 1 && velocity.interviewToOffer.insufficientData, 'velocity: I→O n=1 insufficient');
 
-  // three completed A→R measurements → median renders
   const logWithThird = LOG_FIXTURE + '\n4\t2026-06-27\tApplied\tResponded\tset-status\t';
   const v3 = computeVelocity(foldObservations(parseStatusLog(logWithThird, states).observations), TODAY);
   check(v3.appliedToResponded.n === 3 && v3.appliedToResponded.median === 7, `velocity: [7,8,7] → median 7, got n=${v3.appliedToResponded.n} median=${v3.appliedToResponded.median}`);
   check(v3.appliedToResponded.censored === 2, 'velocity: censored drops to 2 after row 4 completes');
 
-  // -- benchmarks + classification --
   const bm = loadBenchmarks(join(CODE_ROOT, 'templates/benchmarks.yml')).benchmarks;
   check(bm.response_rate && Array.isArray(bm.response_rate.range_pct), 'benchmarks: shipped file loads');
   check(bm.days_first_response.range_days[1] === 14, 'benchmarks: first-response window upper bound');
@@ -613,7 +461,6 @@ function selfTest() {
   check(classify(13, bm.response_rate).band === 'within-range', 'classify: upper bound inclusive');
   check(classify(6, bm.response_rate).vsTypical === 2, 'classify: vsTypical multiplier');
 
-  // -- calibration gating --
   const mkTracker = (applied, responded) => {
     const header = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|------|-------|--------|-----|--------|-------|';
     const rows = [];
@@ -634,15 +481,12 @@ function selfTest() {
   const bigSummary = renderSummary(big, TODAY);
   check(bigSummary.includes('within the typical band'), 'tone: within-band phrasing');
 
-  // above-range → selection-bias note; below-range → single action pointer
   const above = renderSummary(analyze({ trackerContent: mkTracker(25, 15), logContent: '', benchmarks: bm, states, todayStr: TODAY }), TODAY);
   check(above.includes(SELECTION_BIAS_NOTE), 'tone: above-range carries selection-bias note');
   const below = renderSummary(analyze({ trackerContent: mkTracker(40, 0), logContent: '', benchmarks: bm, states, todayStr: TODAY }), TODAY);
   check(below.includes(BELOW_RANGE_ACTION), 'tone: below-range carries the single action pointer');
   check(below.includes('(2025, directional)'), 'tone: benchmark year + directional attached');
 
-  // -- ledger-aware calibration (#3493): a terminal Rejected snapshot must not
-  // erase the middle stages the row actually reached. Same shape stats.mjs uses. --
   const ledgerHeader = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|------|---------|------|-------|--------|-----|--------|-------|';
   const ledgerRows = [];
   for (let i = 1; i <= 21; i++) ledgerRows.push(`| ${i} | 2026-06-01 | Co${i} | Role | 4.0/5 | Applied | ❌ | - | |`);
@@ -669,9 +513,6 @@ function selfTest() {
   check(renderSummary(led, TODAY).includes('rates fold status-log history'), 'ledger-funnel: summary flags the folded basis');
   check(!renderSummary(snap, TODAY).includes('rates fold status-log history'), 'ledger-funnel: snapshot summary carries no fold note');
 
-  // A log with no *parsed* history — header row, comments, torn rows — must stay
-  // on the snapshot basis: taking the ledger path would stamp basis:'ledger' on
-  // a funnel identical to the snapshot and wrongly print the fold note.
   for (const [label, emptyLog] of [
     ['header only', '#\tdate\tfrom\tto\tsource\tnote'],
     ['comment only', '# migrated 2026-06-01 — no transitions yet'],
@@ -684,16 +525,11 @@ function selfTest() {
     check(!renderSummary(r, TODAY).includes('rates fold status-log history'), `ledger-funnel: ${label} log carries no fold note`);
   }
 
-  // everX counts distinct tracker rows, so a transition the ledger records more
-  // than once (a re-applied set-status, a torn-then-rewritten append) must not
-  // inflate the funnel — the ledger result is identical with each line doubled.
   const dupLog = ledgerLog.split('\n').flatMap(l => [l, l]).join('\n');
   const dup = analyze({ trackerContent: ledgerTracker, logContent: dupLog, benchmarks: bm, states, todayStr: TODAY });
   check(dup.calibration.everApplied === led.calibration.everApplied, `ledger-funnel: duplicated transitions leave everApplied at ${led.calibration.everApplied}, got ${dup.calibration.everApplied}`);
   check(dup.calibration.interviewRate.ownPct === led.calibration.interviewRate.ownPct, `ledger-funnel: duplicated transitions leave interviewRate at ${led.calibration.interviewRate.ownPct}%, got ${dup.calibration.interviewRate.ownPct}%`);
   check(dup.calibration.responseRate.ownPct === led.calibration.responseRate.ownPct, `ledger-funnel: duplicated transitions leave responseRate at ${led.calibration.responseRate.ownPct}%, got ${dup.calibration.responseRate.ownPct}%`);
-  // A row that genuinely bounces back and forth is still one row at its deepest
-  // stage — Responded→Interview→Responded→Interview counts once into everInterview.
   const bounceLog = [
     '2\t2026-06-02\tApplied\tResponded\tset-status\t',
     '2\t2026-06-09\tResponded\tInterview\tset-status\t',
@@ -703,9 +539,6 @@ function selfTest() {
   const bounce = analyze({ trackerContent: ledgerTracker, logContent: bounceLog, benchmarks: bm, states, todayStr: TODAY });
   check(bounce.calibration.interviewRate.ownPct === 4, `ledger-funnel: a bouncing row counts once → 1/25 = 4%, got ${bounce.calibration.interviewRate.ownPct}`);
 
-  // A current Discarded row with no ledger history stays out of everApplied in
-  // both funnels — Discarded (unlike Rejected) does not by itself prove a
-  // submission, and the ledger path must not silently diverge from the snapshot.
   const discardTracker = `${ledgerHeader}\n${[
     ...Array.from({ length: 10 }, (_, i) => `| ${i + 1} | 2026-06-01 | Co${i + 1} | Role | 4.0/5 | Applied | ❌ | - | |`),
     '| 11 | 2026-06-01 | Co11 | Role | 4.0/5 | Discarded | ❌ | - | |',
@@ -715,7 +548,6 @@ function selfTest() {
   check(discardSnap.calibration.everApplied === 10, `ledger-funnel: snapshot leaves a no-history Discarded row out of everApplied, got ${discardSnap.calibration.everApplied}`);
   check(discardLed.calibration.everApplied === discardSnap.calibration.everApplied, `ledger-funnel: ledger path agrees with snapshot on a no-history Discarded row, got ${discardLed.calibration.everApplied} vs ${discardSnap.calibration.everApplied}`);
 
-  // -- waiting --
   const waitTracker = [
     '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |',
     '|---|------|---------|------|-------|--------|-----|--------|-------|',
@@ -736,11 +568,6 @@ function selfTest() {
   check(w3.dateSource === 'unknown' && w3.appliedDate === null, 'waiting: unknown date listed, never guessed');
   check(!wait.items.some(i => i.num === 4), 'waiting: non-Applied rows excluded');
 
-  // Non-canonical Applied rows must still count as in-flight. The funnel counts
-  // everApplied through normalizeStatus, so lowercase "applied", a status
-  // carrying a date, a localized "Aplicado", and markdown-bold "**Applied**"
-  // belong in the waiting backlog too (regression: a raw row.status !== 'Applied'
-  // filter dropped all four and under-reported follow-ups).
   const noncanonTracker = [
     '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |',
     '|---|------|---------|------|-------|--------|-----|--------|-------|',
@@ -752,11 +579,8 @@ function selfTest() {
   ].join('\n');
   const noncanon = analyze({ trackerContent: noncanonTracker, logContent: '', benchmarks: bm, states, todayStr: TODAY });
   check(noncanon.waiting.inFlight === 5, `waiting: non-canonical Applied variants all count in-flight, got ${noncanon.waiting.inFlight}`);
-  // The waiting count must agree with the funnel's everApplied for the same rows —
-  // both canonicalize status the same way, so neither may silently drop a variant.
   check(noncanon.calibration.everApplied === 5, `waiting: in-flight agrees with everApplied on non-canonical rows, got ${noncanon.calibration.everApplied}`);
 
-  // -- data quality --
   const dq = analyze({ trackerContent: waitTracker, logContent: LOG_FIXTURE, benchmarks: bm, states, todayStr: TODAY }).dataQuality;
   check(dq.orphans.length >= 1 && dq.orphans.includes(99), 'dataQuality: orphan #99 surfaced');
   check(dq.unparseable.length === 3, 'dataQuality: unparseable lines surfaced');
@@ -765,7 +589,6 @@ function selfTest() {
   check(dqSummary.includes('velocity data for'), 'summary: coverage line present');
   check(dqSummary.includes('still waiting, excluded'), 'summary: censoring surfaced next to velocity');
 
-  // -- interview→offer day benchmark wiring --
   const ioLog = [
     '1\t2026-05-01\tResponded\tInterview\tset-status\t',
     '1\t2026-05-22\tInterview\tOffer\tset-status\t',
@@ -780,11 +603,9 @@ function selfTest() {
   const ioSummary = renderSummary(ioResult, TODAY);
   check(ioSummary.includes('vs 20–28d typical (2019, directional)'), 'io-benchmark: summary carries the benchmark with year + directional');
   check(!renderSummary(analyze({ trackerContent: waitTracker, logContent: '', benchmarks: bm, states, todayStr: TODAY }), TODAY).includes('20–28d typical'), 'io-benchmark: no benchmark context without a median (claims stay gated)');
-  // n=1 I→O hop → insufficientData, median null → benchmark must not leak into JSON output
   const ioInsufficient = analyze({ trackerContent: waitTracker, logContent: LOG_FIXTURE, benchmarks: bm, states, todayStr: TODAY });
   check(ioInsufficient.velocity.interviewToOffer.insufficientData === true && !('benchmark' in ioInsufficient.velocity.interviewToOffer), 'io-benchmark: not attached when median is null (JSON output stays gated)');
 
-  // -- missing year in a user-override benchmark file must render n/a, not null --
   const bmNoYear = JSON.parse(JSON.stringify(bm));
   delete bmNoYear.response_rate.year;
   delete bmNoYear.application_to_interview.year;
@@ -793,7 +614,6 @@ function selfTest() {
   check(noYearSummary.includes('(n/a, directional)'), 'no-year: renders n/a fallback');
   check(!noYearSummary.includes('null, directional'), 'no-year: never prints (null, directional)');
 
-  // -- empty state --
   const empty = analyze({ trackerContent: '', logContent: '', benchmarks: bm, states, todayStr: TODAY });
   check(empty.calibration.everApplied === 0, 'empty: zero applied');
   const emptySummary = renderSummary(empty, TODAY);
@@ -804,7 +624,6 @@ function selfTest() {
   console.log('funnel-velocity self-test OK (parser + fold + percentiles + velocity/censoring + benchmarks + calibration gating + waiting + tone contract)');
 }
 
-// --- Main ---
 function main() {
   const args = process.argv.slice(2);
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
@@ -825,8 +644,6 @@ function main() {
   const logPath = join(dirname(trackerPath), 'status-log.tsv');
   const trackerContent = existsSync(trackerPath) ? readFileSync(trackerPath, 'utf-8') : '';
   const logContent = existsSync(logPath) ? readFileSync(logPath, 'utf-8') : '';
-  // LOCAL day: the UTC day is tomorrow for a west-of-Greenwich evening run, so
-  // every "waiting" figure read one day high (#3070).
   const todayStr = localToday();
 
   if (!trackerContent) {

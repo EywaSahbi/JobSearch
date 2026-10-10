@@ -1,19 +1,8 @@
-/**
- * report-tables.mjs — GFM table parse + STAR+R / Fit helpers for ReportView.
- * Keep this Node-importable (.mjs) so tests don't need a TS loader.
- */
-
-/**
- * @param {string} line
- * @returns {string[]}
- */
 export function pipeCells(line) {
   const t = String(line ?? "").trim();
   if (!t.startsWith("|")) return [];
   const parts = [];
   let buf = "";
-  // GFM: a pipe is escaped only after an odd run of backslashes (`\|`).
-  // Even runs (`\\|`) are a literal backslash plus a real column delimiter.
   for (let i = 0; i < t.length; i++) {
     if (t[i] === "\\") {
       let n = 0;
@@ -47,10 +36,6 @@ export function pipeCells(line) {
   return parts.map((c) => c.trim());
 }
 
-/**
- * @param {string[]} header
- * @returns {boolean}
- */
 export function isStarTableHeader(header) {
   const n = (header || []).map((h) => String(h).trim().toLowerCase());
   if (n.length < 6) return false;
@@ -62,13 +47,6 @@ export function isStarTableHeader(header) {
   return hasStar && hasS && hasT && hasA && hasR;
 }
 
-/**
- * Fit-column labels from Block B. Short cells only — never color a prose cell
- * that happens to contain the word "strong".
- *
- * @param {unknown} text
- * @returns {"good" | "warn" | "bad" | "muted" | null}
- */
 export function fitTone(text) {
   const raw = String(text ?? "").replace(/\*+/g, "").trim();
   if (!raw || raw.length > 48) return null;
@@ -79,19 +57,10 @@ export function fitTone(text) {
   return null;
 }
 
-/**
- * Split markdown into prose chunks and pipe-table chunks.
- *
- * @param {string} md
- * @returns {{ type: "md" | "table", text: string }[]}
- */
 export function splitPipeTables(md) {
   const lines = String(md ?? "").split("\n");
-  /** @type {{ type: "md" | "table", text: string }[]} */
   const out = [];
-  /** @type {string[]} */
   let buf = [];
-  /** @type {string[]} */
   let table = [];
   const flushMd = () => {
     const text = buf.join("\n");
@@ -117,10 +86,6 @@ export function splitPipeTables(md) {
   return out;
 }
 
-/**
- * @param {string} block
- * @returns {{ header: string[], rows: string[][] } | null}
- */
 export function parsePipeTable(block) {
   const lines = String(block ?? "")
     .split("\n")
@@ -134,27 +99,16 @@ export function parsePipeTable(block) {
   return { header, rows };
 }
 
-/**
- * @param {string[]} header
- * @param {string[]} names
- * @returns {number}
- */
 export function colIndex(header, names) {
   const n = header.map((h) => String(h).trim().toLowerCase());
   for (const name of names) {
     const want = name.toLowerCase();
-    // Single-letter STAR cols must be exact: "s" must not match "STAR+R story".
     const i = n.findIndex((h) => (want.length <= 2 ? h === want : h === want || h.includes(want)));
     if (i >= 0) return i;
   }
   return -1;
 }
 
-/**
- * Exact "Fit" column only — never "outfit" / prose headers.
- * @param {string[]} header
- * @returns {number}
- */
 export function fitColumnIndex(header) {
   return (header || []).findIndex((h) => String(h).trim().toLowerCase() === "fit");
 }

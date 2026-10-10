@@ -1,18 +1,8 @@
-// @ts-check
 import { decodeEntities } from './_html-entities.mjs';
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// NoDesk provider - board-wide RSS feed
-// (https://nodesk.co/remote-jobs/index.xml). The feed is public, no-auth,
-// and XML, so it is parsed in-process with the same tiny tag extractor
-// approach as providers/personio.mjs rather than adding an XML dependency.
-//
-// Wire in via a `job_boards:` entry with `provider: nodesk`.
 
 const FEED_URL = 'https://nodesk.co/remote-jobs/index.xml';
 const TRUSTED_HOST = 'nodesk.co';
 
-/** @param {string} url */
 function assertNodeskUrl(url) {
   let parsed;
   try {
@@ -27,7 +17,6 @@ function assertNodeskUrl(url) {
   return url;
 }
 
-// NaN-safe Date.parse - `|| undefined` would also coerce a valid epoch 0.
 function toEpochMs(value) {
   if (!value) return undefined;
   const parsed = Date.parse(value);
@@ -38,7 +27,6 @@ function fallbackCompany(entry) {
   return typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : 'NoDesk';
 }
 
-/** @type {Provider} */
 export default {
   id: 'nodesk',
 
@@ -48,27 +36,22 @@ export default {
 
   async fetch(entry, ctx) {
     const feedUrl = assertNodeskUrl(FEED_URL);
-    // redirect:'error' prevents SSRF via server-side redirects; combined with
-    // assertNodeskUrl above it keeps the request pinned to nodesk.co.
     const text = await ctx.fetchText(feedUrl, { redirect: 'error' });
     return parseNodeskFeed(text, fallbackCompany(entry));
   },
 };
 
-// Resolve a tag's inner text: unwrap a CDATA section, else decode entities.
 function extractText(inner) {
   const cdata = inner.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
   if (cdata) return cdata[1].trim();
   return decodeEntities(inner).trim();
 }
 
-// Extract the text of the first <tag>...</tag> in a block. Returns '' when absent.
 function tagText(block, tag) {
   const m = block.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i'));
   return m ? extractText(m[1]) : '';
 }
 
-// Keep only absolute HTTPS links hosted on the trusted board domain.
 function cleanUrl(value) {
   if (!value) return '';
   const trimmed = value.trim();
@@ -82,7 +65,6 @@ function cleanUrl(value) {
   }
 }
 
-// NoDesk encodes the company in the RSS title as "Role at Company".
 function splitTitle(rawTitle, defaultCompany) {
   const text = rawTitle.trim();
   const lower = text.toLowerCase();
@@ -95,18 +77,6 @@ function splitTitle(rawTitle, defaultCompany) {
   return { title: text, company: defaultCompany };
 }
 
-/**
- * Parse NoDesk's public RSS jobs feed. Exported for unit tests.
- *
- * Shape: `<rss><channel><item>...</item>...</channel></rss>`. Each item
- * exposes `<title>`, `<link>`, and `<pubDate>`. NoDesk currently encodes the
- * company inside the title as `Role at Company`; there is no dedicated
-  * location tag in the feed, so location stays empty unless the feed evolves.
- *
- * @param {string} xml - raw RSS feed body
- * @param {string} [defaultCompany] - fallback company for unsplittable titles
- * @returns {Array<{title: string, url: string, company: string, location: string, postedAt?: number}>}
- */
 export function parseNodeskFeed(xml, defaultCompany = 'NoDesk') {
   if (typeof xml !== 'string') return [];
   const fallback = typeof defaultCompany === 'string' && defaultCompany.trim() ? defaultCompany.trim() : 'NoDesk';

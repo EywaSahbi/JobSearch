@@ -14,13 +14,7 @@ sections: all
     --font-family: "Liberation Sans", "Helvetica Neue", Arial, "DejaVu Sans", sans-serif;
     --font-size: 11px;
     --page-margin: 0.6in;
-    /* #3242: unchanged default — this template has always kept a role whole. */
     --job-break-inside: avoid;
-    /* Whether a Projects entry may split across a page break. Unchanged
-       default — a project may still split, keeping the CV compact. Override via
-       config/profile.yml `style.project_break_inside: avoid` for "a project is
-       one unit, never split", which removes the one-word widow a description
-       can leave above its tech line, at the cost of a bottom gap. */
     --project-break-inside: auto;
   }
   @page { margin: var(--page-margin); }
@@ -55,7 +49,6 @@ sections: all
     padding: 2px 0;
   }
 
-  /* HEADER */
   .header {
     margin-bottom: 20px;
   }
@@ -97,7 +90,6 @@ sections: all
     text-decoration: none;
   }
 
-  /* SECTIONS */
   .section {
     margin-bottom: 16px;
   }
@@ -115,7 +107,6 @@ sections: all
     line-height: 1.2;
   }
 
-  /* PROFESSIONAL SUMMARY */
   .summary-text {
     font-size: var(--font-size);
     line-height: 1.7;
@@ -131,7 +122,6 @@ sections: all
     white-space: nowrap;
   }
 
-  /* CORE COMPETENCIES */
   .competencies-list {
     line-height: 1.8;
   }
@@ -148,7 +138,6 @@ sections: all
     color: #999;
   }
 
-  /* WORK EXPERIENCE - ATS-friendly sequential layout */
   .job {
     margin-bottom: 14px;
   }
@@ -199,7 +188,6 @@ sections: all
     font-weight: 600;
   }
 
-  /* PROJECTS */
   .project {
     margin-bottom: 10px;
   }
@@ -231,7 +219,6 @@ sections: all
     margin-top: 2px;
   }
 
-  /* EDUCATION */
   .edu-item {
     margin-bottom: 8px;
   }
@@ -265,7 +252,6 @@ sections: all
     line-height: 1.5;
   }
 
-  /* CERTIFICATIONS */
   .cert-item {
     margin-bottom: 4px;
   }
@@ -290,7 +276,6 @@ sections: all
     color: #777;
   }
 
-  /* AWARDS */
   .award-item {
     margin-bottom: 4px;
   }
@@ -315,7 +300,6 @@ sections: all
     color: #777;
   }
 
-  /* SKILLS */
   .skill-item {
     margin-bottom: 3px;
     font-size: 10.5px;
@@ -327,7 +311,6 @@ sections: all
     color: #2c3e50;
   }
 
-  /* PAGE BREAK CONTROL */
   .header,
   .edu-item,
   .cert-item,
@@ -337,13 +320,11 @@ sections: all
     page-break-inside: avoid;
   }
 
-  /* #3242: opt-in — see the --job-break-inside default above. */
   .job {
     page-break-inside: var(--job-break-inside, avoid);
     break-inside: var(--job-break-inside, avoid);
   }
 
-  /* Opt-in — see the --project-break-inside default above. */
   .project {
     page-break-inside: var(--project-break-inside, auto);
     break-inside: var(--project-break-inside, auto);
@@ -364,7 +345,6 @@ sections: all
     page-break-before: avoid;
   }
 
-  /* RTL (Arabic) Support */
   html[lang="ar"] body {
     direction: rtl;
     text-align: right;
@@ -381,7 +361,6 @@ sections: all
     font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
   }
 
-  /* CJK (Japanese) font fallback */
   html[lang="ja"] body {
     font-family: var(--font-family), "Hiragino Sans",
       "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", "Noto Sans CJK JP",
@@ -400,7 +379,6 @@ sections: all
       Meiryo, "MS PGothic", sans-serif;
   }
 
-  /* Simplified Chinese typography */
   html[lang="zh-CN"] body,
   html[lang="zh"] body {
     font-family: var(--font-family), "PingFang SC",
@@ -432,7 +410,6 @@ sections: all
       "Noto Sans SC", "Source Han Sans SC", sans-serif;
   }
 
-  /* Korean typography */
   html[lang="ko"] body {
     font-family: var(--font-family), "Apple SD Gothic Neo",
       "Malgun Gothic", "Noto Sans CJK KR",
@@ -455,7 +432,6 @@ sections: all
       "Noto Sans KR", "Nanum Gothic", sans-serif;
   }
 
-  /* Traditional Chinese typography */
   html[lang="zh-TW"] body {
     font-family: var(--font-family), "PingFang TC",
       "Microsoft JhengHei", "Noto Sans CJK TC",

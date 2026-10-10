@@ -6,10 +6,6 @@ import { FileDown, Loader2, FileText, RotateCcw } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { CostBadge } from "@/components/cost/cost-badge";
 
-// Fires the real career-ops `pdf` mode (worker kind "pdf") to generate an
-// ATS-optimized CV tailored to THIS offer → output/cv-… + marks the tracker.
-// Once a tailored CV exists (tracker PDF ✅, or a pdf worker just finished), it
-// becomes a "View tailored CV" link (served by /api/cv-pdf) + a regenerate icon.
 export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company: string; pdfReady: boolean }) {
   const { jobs, startJob } = useJobs();
   const job = useMemo(
@@ -48,9 +44,6 @@ export function GeneratePdfButton({ n, company, pdfReady }: { n: string; company
       </span>
     );
 
-  // Point-of-action cost affordance: generating a tailored CV runs the user's
-  // AI (spends tokens). Surface it right on the trigger so cost is never a
-  // surprise — the community's #1 pain (mirrors Explore's token-honesty).
   return (
     <span className="inline-flex items-center gap-1.5">
       <button

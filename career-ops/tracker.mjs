@@ -1,40 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * tracker.mjs — SQLite derived index for the applications tracker (RFC #918, phase 1).
- *
- * data/applications.md stays the source of truth. The SQLite DB is a derived
- * index, built and rebuilt from the markdown — safe to delete at any time, it
- * regenerates on the next sync. Tools and agents READ through the index for
- * schema-validated, model-independent results; all writes keep going to the
- * markdown exactly as today (merge-tracker.mjs, hand edits).
- *
- * Why: at hundreds of rows, a markdown table degrades structurally — encoding
- * corruption propagates, columns drift, a `|` inside a cell shifts every
- * column after it, and agents grepping the table get model-dependent results.
- * The index normalizes on sync (canonical statuses, repaired columns) so every
- * query returns the same rows for every model on every CLI, and corruption is
- * DETECTED at sync time instead of propagating silently.
- *
- * Phase 2 of #918 (DB becomes source of truth, markdown becomes a rendered
- * view) is a separate, explicit per-user opt-in — not implemented here.
- *
- * Zero new dependencies — uses node:sqlite (built into Node; unflagged from 22.13).
- *
- * Usage:
- *   node tracker.mjs sync [--check]             # (re)build applications.db from applications.md
- *                                               # --check: diagnose only, no write; exit 1 if issues found
- *   node tracker.mjs query [--status Applied] [--company acme] [--role designer]
- *                          [--since 2026-01-01] [--id N] [--limit 20] [--json]
- *   node tracker.mjs history --id N             # status transition log observed across syncs
- *   node tracker.mjs export [--out FILE] [--force]  # inverse: applications.db → markdown (stdout by default)
- *                                               # --force: write even when columns would be dropped
- *   node tracker.mjs delete --num N [--dry-run] # remove one application row from applications.md + reindex
- *
- * query/history auto-resync when applications.md changed since the last sync,
- * so the index can never serve stale reads.
- */
-
 import { readFileSync, copyFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { dirname, resolve, join, basename } from 'path';
@@ -51,40 +16,14 @@ import {
 } from './tracker-utils.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
-/**
- * Where the derived SQLite index lives for a given tracker.
- *
- * Resolved per call, never at module scope. A module-scope path is the right
- * shape for a CLI — one process, one invocation, env fixed before node starts —
- * and the wrong one the moment the module is IMPORTED: the first importer in a
- * process froze the path for every later one, so a subsequent
- * `process.env.CAREER_OPS_TRACKER_DB = ...` was silently ignored (#3506). The
- * tracker path went the same way for the same reason (#4758): runTracker() now
- * takes both from its caller, and only the CLI branch reads the environment.
- *
- * @param {string} mdPath - The markdown tracker (the source of truth).
- * @param {string} [override] - Explicit index path (CAREER_OPS_TRACKER_DB on the CLI).
- * @returns {string} Absolute or relative path to the derived index.
- */
 function resolveDbPath(mdPath, override) {
   return override || (mdPath.endsWith('.md') ? mdPath.slice(0, -3) + '.db' : mdPath + '.db');
 }
 
-/**
- * The index path an importer gets from openDb() with no explicit path: the
- * documented env override, else the db beside the resolved tracker. Read at
- * call time, so an override set after import still holds (#3506).
- */
 function defaultDbPath() {
   return resolveDbPath(resolveTrackerPath(getCareerOpsRoot()), process.env.CAREER_OPS_TRACKER_DB);
 }
 
-/**
- * How a command stops with a non-zero status. Commands used to call
- * process.exit(), which an importer cannot survive and which skips every
- * `finally` (a held tracker lock included); runTracker() turns this into its
- * return value instead.
- */
 class TrackerExit extends Error {
   constructor(code) {
     super(`tracker.mjs exited with ${code}`);
@@ -92,39 +31,19 @@ class TrackerExit extends Error {
   }
 }
 
-// templates/states.yml ships with the code, so it is resolved from this module's
-// own directory. It used to be a bare relative path, i.e. resolved against
-// process.cwd(), which made every tracker.mjs command fail from anywhere but the
-// repo root — including the shape the data-root mechanism invites, where you cd
-// to your data directory and run the tool out of the checkout (#3508). Third
-// variant of #3500: that one looked for this file under the data root, this one
-// looked for it under whatever directory the shell happened to be in.
 const CODEBASE_ROOT = dirname(fileURLToPath(import.meta.url));
 const STATES_PATH = join(CODEBASE_ROOT, 'templates/states.yml');
 const HEADER = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |';
 const SEPARATOR = '|---|------|---------|------|-------|--------|-----|--------|-------|';
 
-// The nine fields the index stores as real columns, keyed by the field name
-// tracker-parse.mjs's column map uses. Everything else a header declares
-// (Location, Via, URL, a user's own column) is carried through the round-trip
-// by POSITION in `applications.extras` instead of being widened into the
-// schema — see the export section (#3703).
 const SCHEMA_FIELDS = {
   num: 'id', date: 'date', company: 'company', role: 'role', score: 'score',
   status: 'status', pdf: 'pdf', report: 'report', notes: 'notes',
 };
 
-// Bumped whenever the derived index gains data an older sync did not record.
-// ensureFresh() rebuilds on a mismatch, so a db written before `extras` and
-// the stored header existed cannot serve an export that would silently drop
-// the columns it never captured.
 const SCHEMA_VERSION = '2';
 
-// ── node:sqlite loading ─────────────────────────────────────────────
-
 async function loadSqlite(ctx) {
-  // node:sqlite is stable in behavior but still flagged experimental in some
-  // Node lines — silence only that one warning, leave everything else alone.
   const origEmit = process.emitWarning;
   process.emitWarning = (warning, ...args) => {
     const text = typeof warning === 'string' ? warning : warning?.message || '';
@@ -139,25 +58,16 @@ async function loadSqlite(ctx) {
     ctx.error('The markdown tracker keeps working without it — the index is optional.');
     throw new TrackerExit(1);
   } finally {
-    process.emitWarning = origEmit; // the warning fires at import time — safe to restore here
+    process.emitWarning = origEmit;
   }
 }
 
 export function openDb(DatabaseSync, path = defaultDbPath()) {
   mkdirSync(dirname(path) || '.', { recursive: true });
   const db = new DatabaseSync(path);
-  // A schema step can throw against a db some other version or tool left
-  // behind (an `applications` table without `status` fails the index below).
-  // The caller never receives the handle then, so close it here: in-process,
-  // an open handle outlives the failure, and on Windows it also keeps the
-  // file from being deleted.
   try {
-    // Wait up to 5s for a lock instead of throwing SQLITE_BUSY on the first
-    // contention. The index is read by concurrent callers — a CLI query, a
-    // `set-status` write and the Go TUI dashboard can all hit the same db at
-    // once — and the default busy_timeout of 0 makes any overlap fail instantly.
     db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('PRAGMA foreign_keys = ON'); // SQLite ignores REFERENCES without this
+    db.exec('PRAGMA foreign_keys = ON');
     db.exec(`
       CREATE TABLE IF NOT EXISTS applications (
         id      INTEGER PRIMARY KEY,
@@ -189,9 +99,6 @@ export function openDb(DatabaseSync, path = defaultDbPath()) {
       CREATE INDEX IF NOT EXISTS idx_apps_company ON applications(company);
       CREATE INDEX IF NOT EXISTS idx_events_app ON status_events(app_id);
     `);
-    // CREATE TABLE IF NOT EXISTS leaves a db built by an older version alone, so
-    // a column added after the fact has to be migrated in explicitly. Cheap and
-    // idempotent; the rows are refilled by the next sync either way.
     const columns = db.prepare('PRAGMA table_info(applications)').all().map(c => c.name);
     if (!columns.includes('extras')) {
       db.exec("ALTER TABLE applications ADD COLUMN extras TEXT NOT NULL DEFAULT '{}'");
@@ -203,17 +110,13 @@ export function openDb(DatabaseSync, path = defaultDbPath()) {
   return db;
 }
 
-// ── Canonical states (templates/states.yml is the source of truth) ──
-
 function loadStates(ctx) {
   if (!existsSync(STATES_PATH)) {
-    // No longer "run from the career-ops root" advice: the path is anchored to
-    // the module, so a miss here is a broken install, not a wrong cwd.
     ctx.error(`Error: ${STATES_PATH} not found — cannot validate statuses (broken install: templates/states.yml ships with career-ops).`);
     throw new TrackerExit(1);
   }
   const doc = yaml.load(readFileSync(STATES_PATH, 'utf-8'));
-  const byKey = new Map(); // lowercased label/alias → canonical label
+  const byKey = new Map();
   const labels = [];
   for (const s of doc?.states || []) {
     if (!s?.label) continue;
@@ -225,8 +128,6 @@ function loadStates(ctx) {
   return { byKey, labels };
 }
 
-// Strip markdown bold, trailing dates, and surrounding noise, then resolve
-// against canonical labels/aliases. Returns the canonical label or null.
 function normalizeStatus(raw, states) {
   if (!raw) return null;
   const cleaned = String(raw)
@@ -247,40 +148,11 @@ function parseApplicationId(raw) {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-// Mojibake left by a UTF-8 → GBK → UTF-8 round trip: an em-dash cell becomes
-// "鈥?" / "鈥�" variants. Only short placeholder cells are repaired — free-text
-// notes are preserved as-is rather than risk corrupting real content.
 function repairPlaceholder(cell) {
   if (/^鈥.{0,2}$/.test(cell) || cell === '�') return '—';
   return cell;
 }
 
-// ── Markdown parsing ────────────────────────────────────────────────
-
-/**
- * Locate the tracker's header and separator lines, and the labels they declare.
- *
- * Recorded so `export` can rebuild the table it READ rather than the table it
- * assumes. Before #3703 the read side mapped columns by name and the write side
- * emitted nine fixed ones, so a Location/Via/URL column survived every query and
- * vanished on export — silently, over the user's own tracker with `--out`.
- *
- * TWO detection passes, and the second one matters. `isHeaderRow` only fires
- * when the alias table resolves the FULL schema, so a header career-ops cannot
- * name — a Spanish `| # | Fecha | Empresa | Puesto | Puntuación | Estado | … |`,
- * where `puntuación` and `estado` are absent from tracker-aliases.json — records
- * no layout at all and exports as the English default (PR #3794 review). Falling
- * back to the markdown SHAPE (the line above the first separator row) records
- * the header verbatim whether or not its labels can be resolved; field placement
- * still comes from `detectColumns`/LEGACY_COLMAP, exactly as the read side does,
- * so an unresolvable header round-trips as text without ever being trusted as a
- * column map.
- *
- * @param {string[]} lines - All lines of the tracker markdown, pre-trimmed.
- * @returns {{header: string, separator: string|null, labels: string[],
- *   headerIndex: number, separatorIndex: number|null}|null}
- *   null when the file holds no table at all.
- */
 function detectLayout(lines) {
   const at = (i) => {
     const separatorIndex = isSeparatorRow(lines[i + 1] ?? '') ? i + 1 : null;
@@ -299,13 +171,6 @@ function detectLayout(lines) {
   return null;
 }
 
-/**
- * Column labels of a table row, in `split('|')` order minus the padding cells.
- * Index 0 of the returned array is column index 1, matching the column maps.
- *
- * @param {string} row - A trimmed markdown table row.
- * @returns {string[]}
- */
 function headerLabels(row) {
   const parts = row.split('|').map(c => c.trim());
   const cells = parts.slice(1);
@@ -314,80 +179,42 @@ function headerLabels(row) {
 }
 
 function parseMarkdownRows(text, diag) {
-  // Line endings are part of the file, not of the table: splitting on '\n' and
-  // joining the export back with '\n' silently rewrote a CRLF tracker to LF
-  // (PR #3794 review). Remember the dominant ending and restore it on export.
   const eol = /\r\n/.test(text) ? '\r\n' : '\n';
-  // TWO views of the same file, and the split is deliberate.
-  //
-  // `lines` is trimmed and drives DETECTION and parsing: resolveColumns needs a
-  // line that starts with '|' and detectLayout used to trim on its own, so an
-  // indented table gave the legacy map on READ and the real map on WRITE —
-  // cells landed a column off (Berlin in Role, Applied in PDF) on a layout the
-  // reader had never accepted in the first place.
-  //
-  // `raw` keeps the file's own whitespace and drives what is REPLAYED. The
-  // prologue and epilogue are prose the export copies rather than renders, so
-  // trimming them dropped a user's indentation and trailing spaces — a quiet
-  // edit, since nothing in the loss list could see it (PR #3794 review).
   const raw = text.split('\n').map(l => l.replace(/\r$/, ''));
   const lines = raw.map(l => l.trim());
-  // Map columns by header name (tracker-parse.mjs, #954) so a customized layout
-  // (e.g. an inserted Location column) can't shift Score into Status. Falls back
-  // to the legacy fixed 9-column layout when no header row is found.
   const colmap = resolveColumns(lines);
   const layout = detectLayout(lines);
-  // Expected `split('|')` width: leading empty cell + one per column + the
-  // trailing empty cell. Taken from the HEADER when there is one, not from the
-  // highest mapped index: a header whose last column is one no field claims
-  // (a user's own `| … | Notes | Priority |`) makes every row look one cell too
-  // wide, and the stray-pipe fold below then swallows that column into notes.
   const width = layout ? layout.labels.length + 2 : Math.max(...Object.values(colmap)) + 2;
-  // Column indices the nine schema fields occupy; everything else in a row is
-  // carried through the round-trip positionally (see SCHEMA_FIELDS).
   const schemaIndices = new Set(Object.keys(SCHEMA_FIELDS).map(k => colmap[k]).filter(i => i != null));
   const rows = [];
-  // Every line index the rebuilt table accounts for: the header, the separator,
-  // and each row that became an indexed application. What is left INSIDE the
-  // table's span is content export cannot place (see collectStructure).
   const consumed = new Set();
   if (layout) {
     consumed.add(layout.headerIndex);
     if (layout.separatorIndex !== null) consumed.add(layout.separatorIndex);
   }
-  // Where a SECOND table begins. Markdown cannot start one without a fresh
-  // separator row, so that (or a second header row) is the precise signal —
-  // blank lines and prose between rows do not change the columns and must not
-  // trip it. Rows below that point were indexed against the FIRST table's
-  // header, so a forced export re-emitted an archived row under the active
-  // table's columns, inventing an empty URL cell for it (PR #3794 review).
-  // They stay in the index; they are reported rather than rebuilt.
   let secondaryFrom = null;
   for (let index = 0; index < lines.length; index++) {
     const t = lines[index];
     if (!t.startsWith('|')) continue;
     let parts = t.split('|').map(c => c.trim());
-    if (parts.length < 3) continue; // needs at least one real cell
+    if (parts.length < 3) continue;
     const isStructure = index === layout?.headerIndex || isHeaderRow(t) || isSeparatorRow(t);
     if (isStructure && layout && index > (layout.separatorIndex ?? layout.headerIndex)
         && secondaryFrom === null) {
       secondaryFrom = rows.length;
     }
     if (index === layout?.headerIndex) continue;
-    if ((parts[colmap.num] ?? '') === '#' || isHeaderRow(t) || /^[-: ]*$/.test(parts.join(''))) continue; // header / separator
+    if ((parts[colmap.num] ?? '') === '#' || isHeaderRow(t) || /^[-: ]*$/.test(parts.join(''))) continue;
     if (parts.length > width && colmap.notes === width - 2) {
-      // Stray pipes inside the trailing free-text column → fold back into notes.
       parts = [...parts.slice(0, colmap.notes), parts.slice(colmap.notes, parts.length - 1).join(' | '), ''];
       if (diag) diag.strayPipes++;
     }
     const at = (k) => (colmap[k] != null ? (parts[colmap[k]] ?? '') : '');
-    // Last index holding a real cell: the trailing empty part only exists when
-    // the row ends with a pipe — a hand-edited row without one ends in data.
     const lastCell = t.endsWith('|') ? parts.length - 2 : parts.length - 1;
     const extras = {};
     for (let i = 1; i <= lastCell; i++) {
       if (schemaIndices.has(i)) continue;
-      if (parts[i]) extras[i] = parts[i]; // empty cells re-materialize as '' on export
+      if (parts[i]) extras[i] = parts[i];
     }
     consumed.add(index);
     rows.push({
@@ -401,66 +228,28 @@ function parseMarkdownRows(text, diag) {
   };
 }
 
-/**
- * Split the file around the table export rebuilds.
- *
- * `export` used to emit a fixed skeleton — the literal title `# Applications
- * Tracker`, the header, the separator, the rows — so `--out data/applications.md`
- * deleted a localized title, any legend or preamble, an `## Archive` section and
- * any trailing note, and the drop gate never saw it because it only counted
- * cells past the header width (PR #3794 review).
- *
- * Everything BEFORE the table and everything AFTER it is recorded verbatim and
- * replayed on export. Everything left INSIDE the table's span — a heading
- * between two tables, a second table's header and separator — is content the
- * rebuilt single table genuinely cannot hold: it is reported as a drop and
- * gated behind `--force`, rather than being replayed into a layout it does not
- * belong to (the second table's rows are indexed against the FIRST table's
- * columns, so re-emitting its structure would frame a shifted row as intact).
- *
- * @param {string[]} lines - RAW lines of the tracker (whitespace intact): these
- *   are replayed verbatim, not re-rendered.
- * @param {Set<number>} consumed - Line indices the rebuilt table reproduces.
- * @returns {{prologue: string[], epilogue: string[], interior: string[]}}
- */
 function collectStructure(lines, consumed) {
   const indices = [...consumed].sort((a, b) => a - b);
   if (indices.length === 0) return { prologue: [], epilogue: [], interior: [] };
   const first = indices[0];
   const last = indices[indices.length - 1];
-  // Blank lines count too. Excluding them would put a "silently dropped" line
-  // back into a function written to end silent drops — the blank line that
-  // separates a tracker from a section below it is exactly the kind of
-  // structure a user notices missing.
   const interior = [];
   for (let i = first + 1; i < last; i++) if (!consumed.has(i)) interior.push(lines[i]);
   return { prologue: lines.slice(0, first), epilogue: lines.slice(last + 1), interior };
 }
 
-// Remove every table row whose first cell (the application number) equals `num`,
-// preserving the rest of the file (header, separators, spacing, other rows)
-// byte-for-byte. Pure: returns { removed, removedCount, report, newContent }.
-// `report` is the report-column value of the first removed row, so callers can
-// surface the now-orphaned report file. Numbers are unique in practice, but any
-// duplicates are all removed.
 export function removeRowByNum(content, num) {
   const target = String(num).trim();
   const lines = content.split('\n');
-  // Header-aware report-column lookup (#954) — fixed index 7 read the wrong
-  // cell on customized layouts (e.g. with a Location column).
-  // Trimmed for detection, raw for output: resolveColumns needs a line that
-  // starts with '|', so an indented table resolved to the legacy map here while
-  // the filter below matched on the trimmed line — the read/write split fixed in
-  // parseMarkdownRows (PR #3794 review). Lines are still emitted byte-for-byte.
   const colmap = resolveColumns(lines.map(l => l.trim()));
   let removedCount = 0;
   let report = null;
   const kept = lines.filter((line) => {
     const t = line.trim();
-    if (!t.startsWith('|')) return true; // non-table line — keep verbatim
+    if (!t.startsWith('|')) return true;
     const parts = t.split('|').map((c) => c.trim());
     const numCell = parts[colmap.num] ?? '';
-    if (numCell === '#' || /^[-: ]*$/.test(parts.join(''))) return true; // header / separator
+    if (numCell === '#' || /^[-: ]*$/.test(parts.join(''))) return true;
     if (numCell === target) {
       removedCount++;
       if (report === null) report = (colmap.report != null ? parts[colmap.report] : '') || null;
@@ -471,10 +260,6 @@ export function removeRowByNum(content, num) {
   return { removed: removedCount > 0, removedCount, report, newContent: kept.join('\n') };
 }
 
-// Parse + normalize the markdown into index-ready rows. The markdown itself is
-// never modified — normalization lives only in the derived index, and the
-// diagnostics tell the user what to fix at the source (normalize-statuses.mjs,
-// dedup-tracker.mjs).
 function parseTracker(states, ctx) {
   const diag = { mojibake: 0, scoreInStatus: 0, unknownStatus: 0, badId: 0, badDate: 0, strayPipes: 0 };
   const { rows, layout } = parseMarkdownRows(readFileSync(ctx.mdPath, 'utf-8'), diag);
@@ -492,7 +277,6 @@ function parseTracker(states, ctx) {
     report = repairPlaceholder(report);
     if ([score, pdf, report].join('|') !== before) diag.mojibake++;
 
-    // Score sitting in the status column (column drift)
     const scoreInStatus = status.match(SCORE_RE);
     if (scoreInStatus) {
       if (!SCORE_RE.test(score)) score = scoreInStatus[1];
@@ -511,14 +295,14 @@ function parseTracker(states, ctx) {
 
     let id = parseApplicationId(idRaw);
     if (id === null || usedIds.has(id)) {
-      id = 0; // assign after the pass, once maxId is known
+      id = 0;
       diag.badId++;
     } else {
       usedIds.add(id);
       if (id > maxId) maxId = id;
     }
 
-    if (!DATE_RE.test(date)) diag.badDate++; // kept as-is — flagged, not destroyed
+    if (!DATE_RE.test(date)) diag.badDate++;
 
     apps.push({
       id, pos: apps.length, date, company, role, score: score || '—', status,
@@ -533,8 +317,6 @@ function parseTracker(states, ctx) {
 function mdHash(ctx) {
   return createHash('sha256').update(readFileSync(ctx.mdPath)).digest('hex');
 }
-
-// ── Sync (markdown → derived index) ─────────────────────────────────
 
 function reportDiagnostics(diag, ctx) {
   const total = Object.values(diag).reduce((a, b) => a + b, 0);
@@ -555,22 +337,15 @@ function reportDiagnostics(diag, ctx) {
 
 function syncIndex(db, states, ctx) {
   const { apps, diag, layout } = parseTracker(states, ctx);
-  // LOCAL calendar day (#3070). This dates a row in the status_events table,
-  // and that table is the one part of the index a resync does NOT rebuild
-  // identically — the comment below says events "persist across rebuilds, keyed
-  // by id", so a wrong day is written once and then sticks.
   const today = localToday();
 
   db.exec('BEGIN');
-  db.exec('PRAGMA defer_foreign_keys = ON'); // full rebuild — FKs settle at commit
+  db.exec('PRAGMA defer_foreign_keys = ON');
   try {
     db.exec('DELETE FROM applications');
     const insertApp = db.prepare('INSERT INTO applications (id, pos, date, company, role, score, status, pdf, report, notes, extras) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const a of apps) insertApp.run(a.id, a.pos, a.date, a.company, a.role, a.score, a.status, a.pdf, a.report, a.notes, a.extras);
 
-    // Status history: events persist across rebuilds, keyed by id. An app whose
-    // status changed since the last sync gets a new event; rows that left the
-    // markdown lose their events (the index never outlives its source).
     db.exec('DELETE FROM status_events WHERE app_id NOT IN (SELECT id FROM applications)');
     const latestEvent = db.prepare('SELECT status FROM status_events WHERE app_id = ? ORDER BY id DESC LIMIT 1');
     const insertEvent = db.prepare('INSERT INTO status_events (app_id, status, date) VALUES (?, ?, ?)');
@@ -583,19 +358,12 @@ function syncIndex(db, states, ctx) {
     const setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
     setMeta.run('md_sha256', mdHash(ctx));
     setMeta.run('schema_version', SCHEMA_VERSION);
-    // The source layout, so export rebuilds this FILE rather than the default
-    // skeleton: the header and separator it read, the lines around the table,
-    // the lines inside it that no rebuilt table can hold, and the line ending.
-    // Empty strings mean "no table in the source", which exports as the
-    // canonical nine columns under the default title.
     setMeta.run('md_header', layout?.header ?? '');
     setMeta.run('md_separator', layout?.separator ?? '');
     setMeta.run('md_prologue', JSON.stringify(layout?.prologue ?? []));
     setMeta.run('md_epilogue', JSON.stringify(layout?.epilogue ?? []));
     setMeta.run('md_interior', JSON.stringify(layout?.interior ?? []));
     setMeta.run('md_eol', layout?.eol ?? '\n');
-    // pos of the first indexed row that belongs to a LATER table, or '' when
-    // every row belongs to the one export rebuilds.
     setMeta.run('md_secondary_from', layout?.secondaryFrom == null ? '' : String(layout.secondaryFrom));
     db.exec('COMMIT');
   } catch (err) {
@@ -627,25 +395,17 @@ async function sync(args, ctx) {
   reportDiagnostics(diag, ctx);
 }
 
-// query/history must never serve stale reads: if the markdown changed since
-// the last sync (or was never synced), rebuild the index first.
 function ensureFresh(db, states, ctx) {
   if (!existsSync(ctx.mdPath)) {
     ctx.error(`Error: ${ctx.mdPath} not found — the index has no source of truth to read from.`);
     throw new TrackerExit(1);
   }
   const synced = db.prepare('SELECT value FROM meta WHERE key = ?').get('md_sha256');
-  // The schema version is part of freshness, not just the content hash: a db
-  // written before `extras`/`md_header` existed matches the hash while missing
-  // the columns an export needs, which is exactly the silent drop #3703 is
-  // about. A version mismatch forces the rebuild that fills them in.
   const version = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version');
   if (synced && synced.value === mdHash(ctx) && version?.value === SCHEMA_VERSION) return;
   ctx.error(`(index stale — resyncing from ${ctx.mdPath})`);
   syncIndex(db, states, ctx);
 }
-
-// ── Query helpers ───────────────────────────────────────────────────
 
 function flagValue(args, flag) {
   const idx = args.indexOf(flag);
@@ -654,7 +414,6 @@ function flagValue(args, flag) {
   return kv ? kv.split('=').slice(1).join('=') : null;
 }
 
-// A pipe inside a cell would split the row; a newline would end it.
 const cleanCell = (v) => String(v ?? '').replace(/\|/g, '│').replace(/\r?\n/g, ' ');
 
 function rowToMarkdown(r) {
@@ -703,7 +462,7 @@ async function query(args, ctx) {
     ctx.log(HEADER);
     ctx.log(SEPARATOR);
     for (const r of rows) ctx.log(rowToMarkdown(r));
-    ctx.error(`\n${rows.length} row(s)`); // stderr so stdout stays pipeable
+    ctx.error(`\n${rows.length} row(s)`);
   }
 }
 
@@ -721,52 +480,15 @@ async function history(args, ctx) {
   }
 }
 
-// ── Export (index → canonical markdown) ─────────────────────────────
-// The inverse of sync: regenerates the table from the index. Used by the
-// round-trip tests (md → db → md must be lossless), and as a repaired copy the
-// user can review and adopt by hand. It never touches applications.md unless
-// explicitly asked to via --out.
-//
-// "Lossless" means the LAYOUT too, not only the values (#3703). The read side
-// maps columns by header name, so a tracker with Location/Via/URL — or a user's
-// own column — indexes perfectly; the write side used to emit nine fixed
-// columns in a fixed order, so adopting the export cost the user those columns
-// with no warning, and `sync` had just said the index matched cleanly. Export
-// now rebuilds the header it read and re-materializes unmapped cells from
-// `applications.extras` by position, and refuses to write over an existing
-// tracker at all when something genuinely cannot be placed.
-
-/** @param {string} raw - the `extras` JSON column. @returns {Object<number,string>} */
 function parseExtras(raw) {
   try {
     const parsed = JSON.parse(raw || '{}');
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
-    return {}; // a hand-corrupted index cell must not abort the export
+    return {};
   }
 }
 
-/**
- * Rebuild the markdown table from indexed rows and the recorded source layout.
- *
- * @param {object[]} rows - `applications` rows, ordered by pos.
- * @param {{header: string, separator: string}} layout - Recorded source layout;
- *   empty header means the source had no header row (legacy positional table).
- * @returns {{header: string, separator: string, body: string[], dropped: string[]}}
- *   `dropped` names every column carrying content this export cannot place —
- *   empty for every layout career-ops can reproduce.
- */
-/**
- * The recorded source layout, decoded from `meta` with safe defaults.
- *
- * An index written before these keys existed (or one whose meta was edited by
- * hand) yields the canonical skeleton, which is what the export emitted for
- * every tracker before #3703.
- *
- * @param {Object<string,string>} meta - The `meta` table as a plain object.
- * @returns {{header: string, separator: string, prologue: string[],
- *   epilogue: string[], interior: string[], eol: string}}
- */
 function readLayout(meta) {
   const list = (raw, fallback) => {
     try {
@@ -792,9 +514,6 @@ function renderTable(rows, layout) {
   const labels = layout.header ? headerLabels(layout.header) : headerLabels(HEADER);
   const colmap = (layout.header ? detectColumns([layout.header]) : null) || LEGACY_COLMAP;
 
-  // Column index → the indexed field that owns it. Everything else is filled
-  // from the row's extras, so a Location/Via/URL/custom column comes back in
-  // its own place with its own value.
   const fieldAt = new Map();
   for (const [field, dbField] of Object.entries(SCHEMA_FIELDS)) {
     if (colmap[field] != null) fieldAt.set(colmap[field], dbField);
@@ -813,10 +532,6 @@ function renderTable(rows, layout) {
       const field = fieldAt.get(i);
       const value = field ? r[field] : extras[i] ?? '';
       const rendered = cleanCell(value);
-      // A cell that had to be rewritten to survive as a table cell — a stray
-      // pipe folded into notes comes back as '│'. The VALUE changed, so a
-      // silent `--out` would edit the tracker; it belongs in the loss list
-      // like any other thing export cannot reproduce (PR #3794 review).
       if (rendered !== String(value ?? '')) {
         sanitized.push(`row #${r.id}, column ${i}${labels[i - 1] ? ` (${labels[i - 1]})` : ''}: "${value}" → "${rendered}"`);
       }
@@ -862,14 +577,9 @@ async function exportMd(args, ctx) {
     const meta = db.prepare('SELECT key, value FROM meta').all()
       .reduce((acc, m) => Object.assign(acc, { [m.key]: m.value }), {});
     const layout = readLayout(meta);
-    // Rows below a second table's header were indexed against the FIRST
-    // table's columns, so rebuilding them here would move archived data into
-    // the active table under a header it never had. They are named instead.
     const primary = layout.secondaryFrom == null ? rows : rows.slice(0, layout.secondaryFrom);
     const secondary = layout.secondaryFrom == null ? [] : rows.slice(layout.secondaryFrom);
     const { header, separator, body, dropped } = renderTable(primary, layout);
-    // The lines around the table are replayed verbatim; the ones inside it that
-    // no single rebuilt table can hold are reported instead, never invented.
     const out = [...layout.prologue, header, separator, ...body, ...layout.epilogue]
       .join(layout.eol);
 
@@ -878,9 +588,6 @@ async function exportMd(args, ctx) {
       ...layout.interior.map(line => `line between table rows: ${line === '' ? '(blank)' : `"${line}"`}`),
       ...secondary.map(r => `row #${r.id} (${r.company} — ${r.role}) belongs to a later table; the rebuilt one has no place for it`),
     ];
-    // Never lose anything quietly. Worth reporting even though the rebuild above
-    // leaves `losses` empty for every file career-ops itself produces: it is
-    // what turns data loss into a decision the user makes.
     if (losses.length) {
       ctx.error(`Warning: ${losses.length} item(s) in ${ctx.mdPath} cannot be reproduced by export and will be dropped:`);
       for (const d of losses) ctx.error(`  ${d}`);
@@ -893,17 +600,11 @@ async function exportMd(args, ctx) {
     }
     mkdirSync(dirname(outPath) || '.', { recursive: true });
     const writeTarget = writesTracker ? trackerPath : outPath;
-    // Overwriting an existing file with a table known to be missing columns is
-    // the failure mode of #3703 — the .bak below makes it recoverable, but only
-    // for a user who was told there was something to recover.
     if (losses.length && existsSync(writeTarget) && !force) {
       ctx.error(`Refusing to overwrite ${outPath} — that would drop the item(s) listed above.`);
       ctx.error('Re-run with --force if you have read the list and want the export anyway.');
-      // A return, never an exit: exiting here would skip the finally below and
-      // leave the tracker lock dir held until it goes stale.
       return 1;
     }
-    // Never silently clobber — whatever was there is backed up first.
     if (existsSync(writeTarget)) {
       copyFileSync(writeTarget, writeTarget + '.bak');
       ctx.error(`Existing ${outPath} backed up to ${outPath}.bak`);
@@ -916,12 +617,6 @@ async function exportMd(args, ctx) {
   }
 }
 
-// ── Main ────────────────────────────────────────────────────────────
-
-// `delete --num N` removes one application row from applications.md and rebuilds
-// the derived index. The markdown stays the source of truth: callers (incl. the
-// web) orchestrate this script rather than editing applications.md directly.
-// The read and atomic replacement share merge-tracker's cross-process lock.
 async function deleteApp(args, ctx) {
   const num = flagValue(args, '--num');
   if (!num) {
@@ -958,16 +653,12 @@ async function deleteApp(args, ctx) {
   }
 
   const { removedCount, report } = removal;
-  // Rebuild the derived SQLite index from the now-updated markdown.
   try {
     const states = loadStates(ctx);
     const DatabaseSync = await loadSqlite(ctx);
     const db = ctx.openDb(DatabaseSync);
     syncIndex(db, states, ctx);
   } catch (e) {
-    // A command that has already said why it stops (no node:sqlite, no
-    // states.yml, a db path equal to the tracker) still stops with status 1,
-    // as it did when it called process.exit() from in here.
     if (e instanceof TrackerExit) throw e;
     ctx.error(`(row removed; index resync skipped: ${e.message})`);
   }
@@ -977,23 +668,6 @@ async function deleteApp(args, ctx) {
 
 const COMMANDS = { sync, query, history, export: exportMd, delete: deleteApp };
 
-/**
- * Run one tracker.mjs command against the paths given, in-process.
- *
- * The CLI branch below is the only caller that reads the environment; it
- * resolves the tracker and index paths and calls this. Anything else — a test,
- * another script — passes its own, so two calls in one process can target two
- * trackers (#4758; see resolveDbPath for why that was not possible before).
- *
- * @param {string} command - sync | query | history | export | delete.
- * @param {string[]} [args] - The command's flags, as on the command line.
- * @param {object} options
- * @param {string} options.mdPath - The markdown tracker (source of truth).
- * @param {string} [options.dbPath] - Derived index; defaults to the .db beside mdPath.
- * @param {{write: Function}} [options.stdout=process.stdout] - Command output.
- * @param {{write: Function}} [options.stderr=process.stderr] - Diagnostics.
- * @returns {Promise<number>} The exit status the CLI exits with.
- */
 export async function runTracker(command, args = [], options = {}) {
   const { mdPath, stdout = process.stdout, stderr = process.stderr } = options;
   if (!mdPath) throw new TypeError('runTracker: options.mdPath is required');
@@ -1004,9 +678,6 @@ export async function runTracker(command, args = [], options = {}) {
     stdout,
     log: line(stdout),
     error: line(stderr),
-    // Every index a command opens is closed when runTracker returns. A CLI
-    // could leave that to process exit; an in-process caller cannot, and on
-    // Windows an open handle also keeps the file from being deleted.
     openDb(DatabaseSync) {
       const db = openDb(DatabaseSync, ctx.dbPath());
       opened.push(db);
@@ -1014,10 +685,6 @@ export async function runTracker(command, args = [], options = {}) {
     },
     dbPath() {
       const path = resolveDbPath(mdPath, options.dbPath);
-      // SQLite must never open the source of truth itself (an explicit
-      // CAREER_OPS_TRACKER_DB could point both names at the same file). Checked
-      // where the path is used rather than up front, so a command that never
-      // opens the index is not refused over it.
       if (resolve(mdPath) === resolve(path)) {
         ctx.error(`Error: DB path must differ from the markdown path (${mdPath}).`);
         throw new TrackerExit(1);

@@ -1,7 +1,3 @@
-/**
- * batch/aggregate-tokens.mjs — Aggregate and display token usage for batch runs
- */
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,7 +41,6 @@ function main() {
     
     if (!id || !report_num || report_num === '-' || report_num === 'report_num') continue;
 
-    // Sanitize to prevent path traversal
     const safeId = /^[\w-]+$/.test(id) ? id : null;
     const safeReportNum = /^[\w-]+$/.test(report_num) ? report_num : null;
     if (!safeId || !safeReportNum) continue;
@@ -83,7 +78,6 @@ function main() {
       'pdf payload': { prompt: 0, completion: 0, cached: 0, isZero: true },
     };
 
-    // Try parsing printed Token breakdown block first
     const breakdownMatch = logContent.match(/Token breakdown:([\s\S]*?)(?:\n\n|\n[^\s]|$)/);
     let parsedFromBlock = false;
 
@@ -118,7 +112,6 @@ function main() {
       parsedFromBlock = true;
     }
 
-    // Fallback: parse raw Claude CLI token output from log
     if (!parsedFromBlock) {
       const inputRegex = /(\d[\d,.]*k?)\s*(?:input|prompt)/i;
       const outputRegex = /(\d[\d,.]*k?)\s*(?:output|completion|candidate)/i;
@@ -146,7 +139,6 @@ function main() {
       }
     }
 
-    // Extract model and provider from metadata line if present
     const metaMatch = logContent.match(/\(metadata:\s*model=([^,\s)]+),\s*provider=([^)\s]+)\)/);
     let model = null;
     let provider = 'unknown';
@@ -155,7 +147,6 @@ function main() {
       provider = metaMatch[2];
     }
 
-    // Print per-worker breakdown
     const reportFile = reportFiles.find(f => f.startsWith(`${w.report_num}-`));
     let label = `Worker #${w.id} (report ${w.report_num})`;
     if (reportFile) {
@@ -216,7 +207,6 @@ function main() {
     }
   }
 
-  // Print Aggregated Summary
   console.log('\n=== Aggregated Token Breakdown ===');
   let grandTotalTokens = 0;
 

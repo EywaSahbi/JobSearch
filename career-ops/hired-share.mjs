@@ -1,30 +1,4 @@
 #!/usr/bin/env node
-/**
- * hired-share.mjs — draft a Hired Wall story from data the tracker already
- * holds, show the EXACT payload, and open a prefilled GitHub issue for the
- * user to review and submit themselves.
- *
- * Human-in-the-loop is the contract: this script never posts anything. The
- * only thing that leaves the machine is what the user submits from their own
- * GitHub account, after seeing every field. career-ops has no backend and no
- * telemetry; the public ledger is the repo itself (HIRED.md + the issues).
- *
- *   node hired-share.mjs --report 12                      # draft from tracker row 12
- *   node hired-share.mjs --report 12 --anonymity role     # role-and-location card, no handle
- *   node hired-share.mjs --report 12 --story "..." --open # custom quote + open the browser
- *   node hired-share.mjs --status                         # hires recorded but never asked
- *   node hired-share.mjs --report 12 --mark never         # user said no: never ask again
- *
- * Anonymity levels (asked, never defaulted to the most exposed):
- *   handle → card shows @login and avatar (full credit)
- *   role   → card shows role + location only (default)
- *   count  → counts on the badge, no card
- *
- * The ask cadence lives in data/.hired-share-state.json (user layer, never
- * committed): one ask per hire at outcome time, at most one gentle re-mention
- * after an update if the answer was "later" (>30 days), and "never" is
- * permanent. A flywheel that nags stops being a celebration.
- */
 
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
@@ -54,23 +28,13 @@ user reviews on GitHub and submits from their own account. --status lists
 hires recorded in the tracker that were never offered a share. --mark records
 the user's answer so the question is never repeated against their wishes.`;
 
-/**
- * Raised when the anti-nag memory exists and cannot be trusted.
- *
- * Deliberately not a silent fallback: the file records which hires the user
- * declined to share, and an empty memory is indistinguishable from "nobody has
- * ever been asked". Failing loudly asks the user to fix one file; failing
- * quietly asks them about a hire they already said no to.
- */
 class StateError extends Error {
   constructor(message) { super(message); this.name = 'StateError'; }
 }
 
-/** State file: the entire anti-nag memory. User layer, gitignored with data/. */
 function statePath(root) { return join(root, 'data', '.hired-share-state.json'); }
 function loadState(root) {
   const p = statePath(root);
-  // Absent is a first run — an empty memory is the correct answer.
   if (!existsSync(p)) return { byReport: {} };
   let raw;
   try {
@@ -78,23 +42,11 @@ function loadState(root) {
   } catch (err) {
     throw new StateError(`cannot read ${p} (${err.message})`);
   }
-  // Unreadable is NOT a first run, and returning an empty memory for it is how
-  // a "never" answer disappears. AGENTS.md's cadence rule is absolute — "If
-  // they say no: --mark never, and honor it — that hire is never brought up
-  // again" — and this file is the only thing that remembers. An empty object
-  // here means every declined hire becomes askable, and the next saveState
-  // persists that, so one unreadable byte erases the record permanently.
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new StateError(`${p} does not contain a JSON object`);
     }
-    // ABSENT is fine — a file written before this key existed, or one that has
-    // only ever recorded nothing, is an empty memory and `{}` is the right
-    // answer. PRESENT BUT NOT AN OBJECT is the same reset one level down: a
-    // string or an array here was silently replaced with `{}` and then written
-    // back by saveState, dropping every declined hire exactly as a corrupt file
-    // used to. Refuse it for the same reason the top level is refused.
     if (parsed.byReport === undefined || parsed.byReport === null) parsed.byReport = {};
     else if (typeof parsed.byReport !== 'object' || Array.isArray(parsed.byReport)) {
       throw new StateError(`${p} has a "byReport" that is not an object — fix or delete it.`);
@@ -105,20 +57,12 @@ function loadState(root) {
     throw new StateError(`${p} is not valid JSON (${String(err.message).split('\n')[0]})`);
   }
 }
-// Atomic, via the same helper every tracker writer uses. A plain writeFileSync
-// truncates before it writes, so an interrupt — Ctrl-C, a full disk, a crash —
-// leaves a half-written file. That file then fails to parse, which is exactly
-// the condition the guard above now refuses to paper over: the non-atomic write
-// is what MANUFACTURES the corruption the silent reset used to hide.
 function saveState(root, s) {
-  // A root on the legacy layout (applications.md at the top, no data/) still
-  // resolves its hires, so data/ may not exist yet when the answer is recorded.
   const p = statePath(root);
   mkdirSync(dirname(p), { recursive: true });
   writeFileAtomic(p, JSON.stringify(s, null, 2) + '\n');
 }
 
-/** All tracker rows whose canonical state is Hired, as {report, role, company, location, date}. */
 export function hiredRows(trackerText) {
   const lines = trackerText.split('\n');
   const colmap = resolveColumns(lines);
@@ -127,8 +71,6 @@ export function hiredRows(trackerText) {
     if (!line.startsWith('|') || isSeparatorRow(line) || isHeaderRow(line)) continue;
     const row = parseTrackerRow(line, colmap);
     if (!row || !/hired/i.test(row.status ?? '')) continue;
-    // The Report cell is a markdown link ("[12](reports/12.md)"): the report
-    // number is its FIRST run of digits, never a digit-strip of the whole cell.
     out.push({
       report: (String(row.report ?? '').match(/\d+/) || [''])[0],
       role: row.role ?? '',
@@ -140,13 +82,6 @@ export function hiredRows(trackerText) {
   return out;
 }
 
-/**
- * Weeks from the earliest scan-history date to `endIso`. The search started
- * when the first posting was seen, not when this row appeared; that is the
- * number a reader deciding whether to try the tool actually wants. Returns
- * null when it cannot be derived — the field is optional and the user can
- * always pass --weeks.
- */
 export function weeksFromScanHistory(scanHistoryText, endIso) {
   if (!scanHistoryText || !endIso) return null;
   let earliest = null;
@@ -160,11 +95,6 @@ export function weeksFromScanHistory(scanHistoryText, endIso) {
   return Math.max(1, Math.round(ms / (7 * 86400e3)));
 }
 
-/**
- * The prefilled issue URL. GitHub issue forms accept query params keyed by
- * field id; dropdowns need the exact option text. Everything the user will
- * see on GitHub is exactly what this URL carries — printed in full first.
- */
 export function buildIssueUrl({ role, companyType, story, feature, timeToHire, anonymity }) {
   const q = new URLSearchParams();
   q.set('template', TEMPLATE);
@@ -194,9 +124,6 @@ async function main() {
   const bad = validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
   if (bad) { process.exitCode = 1; return; }
 
-  // Default to the configured data root (CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR /
-  // .career-ops-data marker), not process.cwd(): with the user layer outside the
-  // checkout, the cwd-derived root found no tracker and reported no hires.
   const root = flagValue(args, '--root') || resolveWorkspaceRoot(resolveTrackerPath(getCareerOpsRoot()));
   const trackerPath = resolveTrackerPath(root);
   const tracker = existsSync(trackerPath) ? readFileSync(trackerPath, 'utf8') : '';
@@ -204,8 +131,6 @@ async function main() {
   const state = loadState(root);
 
   if (hasFlag(args, '--status')) {
-    // For the agent's post-update moment: which hires were never asked, and
-    // which said "later" long enough ago that ONE gentle re-mention is fair.
     const now = Date.now();
     const rows = hires.map((h) => {
       const s = state.byReport[h.report];

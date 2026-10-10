@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * ATS Form Plain-Text Exporter (#2887)
- * Formats profile and experience data for seamless copy-pasting into ATS forms.
- */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -11,9 +7,6 @@ import { parseArgs } from 'node:util';
 import * as yaml from 'js-yaml';
 import { isMainModule } from '../lib/is-main-module.mjs';
 
-/**
- * Sanitizes plain text for ATS forms (converting bullets, dashes, quotes, and stripping emojis/non-breaking spaces).
- */
 export function sanitizeAtsText(text) {
   if (typeof text !== 'string') return '';
   return text
@@ -26,9 +19,6 @@ export function sanitizeAtsText(text) {
     .trim();
 }
 
-/**
- * Parses markdown CV (e.g. cv.md) into structured sections (experience, education, skills, contact).
- */
 export function parseCvMarkdown(markdown) {
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return {};
@@ -46,13 +36,11 @@ export function parseCvMarkdown(markdown) {
     skills: [],
   };
 
-  // 1. Parse top-level Header for Name
   const h1Match = markdown.match(/^#\s+(?:(?:CV|Resume)\s*(?:--|—|–|-|:)\s*)?(.+)$/im);
   if (h1Match) {
     result.name = h1Match[1].trim();
   }
 
-  // 2. Parse contact info lines
   const contactLines = markdown.match(/^\*\*([A-Za-z]+):\*\*\s*(.+)$/gm) || [];
   for (const line of contactLines) {
     const m = line.match(/^\*\*([A-Za-z]+):\*\*\s*(.+)$/);
@@ -65,7 +53,6 @@ export function parseCvMarkdown(markdown) {
     else if (key === 'phone') result.phone = val;
   }
 
-  // 3. Split by H2 sections
   const sectionRegex = /^##\s+(.+)$/gm;
   let match;
   const sections = [];
@@ -158,9 +145,6 @@ export function parseCvMarkdown(markdown) {
   return result;
 }
 
-/**
- * Normalizes raw profile YAML and optional CV markdown data into standard section fields.
- */
 export function normalizeProfile(raw = {}, cvData = {}) {
   if (!raw || typeof raw !== 'object') raw = {};
   if (!cvData || typeof cvData !== 'object') cvData = {};
@@ -208,10 +192,6 @@ export function normalizeProfile(raw = {}, cvData = {}) {
   return { name, email, phone, location, linkedin, summary, experience, education, skills };
 }
 
-/**
- * Loads profile and CV data from file paths or default paths.
- * Fails closed if real profile configuration is missing.
- */
 export function loadProfile(customProfilePath = null, customCvPath = null) {
   let profileRaw = null;
   const profileSource = customProfilePath || process.env.CAREER_OPS_PROFILE || 'config/profile.yml';
@@ -261,16 +241,12 @@ export function loadProfile(customProfilePath = null, customCvPath = null) {
       const cvText = readFileSync(cvSource, 'utf8');
       cvData = parseCvMarkdown(cvText);
     } catch {
-      // cv.md is optional if profile supplies necessary fields
     }
   }
 
   return normalizeProfile(profileRaw, cvData);
 }
 
-/**
- * Formats profile object into structured plain-text section blocks.
- */
 export function formatAtsText(profile = {}, options = {}) {
   const normalized = normalizeProfile(profile);
   const sectionFilter = options.section ? options.section.toLowerCase() : null;
@@ -367,7 +343,6 @@ export function formatAtsText(profile = {}, options = {}) {
   return Object.values(sections).join('\n\n');
 }
 
-// Main CLI execution guard (repo convention: lib/is-main-module.mjs, #3170)
 if (isMainModule(import.meta.url)) {
   const { values } = parseArgs({
     options: {

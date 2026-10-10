@@ -6,9 +6,6 @@ import { cn } from "@/lib/cn";
 
 type Usage = { window5h: { tokens: number }; window7d: { tokens: number } };
 
-// Soft total-activity budgets, including Claude cache reads. Persisted
-// `career-ops:usage-budget` values remain authoritative, so users who calibrated
-// this brake signal to their plan keep their own ceilings.
 const DEFAULT_BUDGET = { w5: 140_000_000, w7: 1_000_000_000 };
 
 function fmt(n: number): string {
@@ -34,7 +31,6 @@ export function UsageMeter() {
       const b = localStorage.getItem("career-ops:usage-budget");
       if (b) setBudget({ ...DEFAULT_BUDGET, ...JSON.parse(b) });
     } catch {
-      /* ignore */
     }
   }, []);
 
@@ -55,7 +51,6 @@ export function UsageMeter() {
     };
   }, []);
 
-  // The usage source is Claude's local logs; only meaningful when Claude is the CLI.
   if (cli && cli !== "claude") return null;
   if (!data) return null;
 

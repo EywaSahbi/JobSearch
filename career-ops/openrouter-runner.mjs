@@ -1,22 +1,4 @@
 #!/usr/bin/env node
-/**
- * career-ops OpenRouter Runner
- * No Claude Code CLI required — uses OpenRouter free models with automatic fallback.
- *
- * Usage:
- *   node openrouter-runner.mjs scan              → Scan Greenhouse API companies for new listings
- *   node openrouter-runner.mjs evaluate <url>    → Evaluate a job by URL
- *   node openrouter-runner.mjs evaluate          → Paste job text interactively
- *   node openrouter-runner.mjs pipeline          → Process all pending URLs from pipeline.md
- *   node openrouter-runner.mjs apply <report_no> → Generate draft application form answers
- *   node openrouter-runner.mjs models            → List available free models
- *   node openrouter-runner.mjs help              → Show this help
- *
- * Setup:
- *   1. copy .env.example .env
- *   2. Add OPENROUTER_API_KEY=sk-or-v1-... to .env
- *   3. Free API key: https://openrouter.ai
- */
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,14 +23,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tracker = new TokenAccumulator();
 let activeModel = null;
 
-// ---------------------------------------------------------------------------
-// .env loader
-// ---------------------------------------------------------------------------
-// Lazy: only runs when this file is the CLI entry point (`node
-// openrouter-runner.mjs ...`). Importing the module (e.g. for buildSystemPrompt
-// in test-all.mjs) must NOT mutate process.env — a module-level loader here
-// leaked every .env key (including CAREER_OPS_CLI) into the importing process
-// and broke later CLI-resolution tests.
 function loadEnvFile() {
   const envPath = path.join(__dirname, '.env');
   if (!fs.existsSync(envPath)) return;
@@ -60,17 +34,12 @@ function loadEnvFile() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 const OPENROUTER_API_URL    = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const MAX_TOKENS            = 8192;
-const RATE_LIMIT_DELAY_MS   = 2500;  // pause between requests on free tier
-const MODEL_TIMEOUT_MS      = 15_000; // abort a single model call after 15 s
+const RATE_LIMIT_DELAY_MS   = 2500;
+const MODEL_TIMEOUT_MS      = 15_000;
 
-// Provider priority order — models are sorted by provider prefix, not hardcoded names.
-// Add, remove, or reorder providers here; model names are resolved at runtime from the API.
 const PROVIDER_PRIORITY = [
   'google',
   'qwen',
@@ -81,16 +50,11 @@ const PROVIDER_PRIORITY = [
   'nousresearch',
   'minimax',
   'arcee-ai',
-  // any unlisted provider goes last (alphabetical)
 ];
 
-// In-memory model list — populated on first callOpenRouter()
-let freeModels = null;   // string[]
-let modelIndex = 0;      // current position in rotation
+let freeModels = null;
+let modelIndex = 0;
 
-// Persistent blacklist file — survives process restarts. data/ is User Layer
-// (gitignored runtime state), so it follows the data root like every other
-// data/ path this runner touches.
 const BLACKLIST_DIR  = path.join(getCareerOpsRoot(), 'data');
 const BLACKLIST_FILE = path.join(BLACKLIST_DIR, 'model-blacklist.json');
 function loadPersistedBlacklist() {
@@ -106,17 +70,12 @@ function saveBlacklist(set) {
   } catch {}
 }
 
-// Models that failed permanently (403, timeout, persistent 429) — never retry
 const blacklistedModels = new Set(loadPersistedBlacklist());
 if (blacklistedModels.size > 0) {
   console.log(`[blacklist] Loaded ${blacklistedModels.size} pre-blacklisted model(s) from disk.`);
 }
-// 429 failure count per model — auto-blacklist after 3 consecutive 429s
 const rateLimitCounts = {};
 
-// ---------------------------------------------------------------------------
-// Fetch free models from OpenRouter API
-// ---------------------------------------------------------------------------
 async function loadFreeModels() {
   if (freeModels !== null) return freeModels;
 
@@ -127,7 +86,6 @@ async function loadFreeModels() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
-    // A model is free when its prompt and completion pricing are both "0"
     const list = (data.data ?? [])
       .filter(m => {
         const p = m.pricing ?? {};
@@ -137,7 +95,6 @@ async function loadFreeModels() {
 
     if (list.length === 0) throw new Error('No free models found in API response');
 
-    // Sort by provider priority; within the same provider sort alphabetically
     function providerOf(id) { return id.split('/')[0]; }
     function priorityOf(id) {
       const idx = PROVIDER_PRIORITY.indexOf(providerOf(id));
@@ -163,7 +120,6 @@ async function loadFreeModels() {
   return freeModels;
 }
 
-// List and exit (helper command)
 async function cmdModels() {
   const models = await loadFreeModels();
   console.log(`\nFree models available on OpenRouter (${models.length} total):\n`);
@@ -171,16 +127,6 @@ async function cmdModels() {
   console.log('');
 }
 
-// ---------------------------------------------------------------------------
-// File helpers
-// ---------------------------------------------------------------------------
-// Anchored to the career-ops data root, not to __dirname. scan.mjs resolves
-// every path it touches through getCareerOpsRoot(), so with CAREER_OPS_DATA_DIR
-// set this module was reading a DIFFERENT data/scan-history.tsv than the shared
-// writers it now delegates to — dedup would clear a URL the writer then found
-// present, or skip one it had never seen. The default is unchanged: with no
-// env and no .career-ops-data marker, getCareerOpsRoot() returns the same
-// directory __dirname did.
 const DATA_ROOT = getCareerOpsRoot();
 
 function readFile(relPath) {
@@ -195,21 +141,9 @@ function writeFile(relPath, content) {
 }
 
 function fileExists(relPath) {
-  // Same root as readFile() above: a fileExists that disagrees with the reader
-  // is a split-brain waiting to happen under CAREER_OPS_DATA_DIR.
   return fs.existsSync(path.join(DATA_ROOT, relPath));
 }
 
-// ---------------------------------------------------------------------------
-// Prompt caching (#1709)
-// ---------------------------------------------------------------------------
-// The static system prefix (shared + profile + mode + cv, ~12K tokens) is
-// byte-identical across every offer in a run, yet it was re-sent and re-billed
-// on each call. Send it as a structured content block with an ephemeral
-// `cache_control` breakpoint — OpenRouter's documented prompt-caching mechanism.
-// Providers that support caching (Anthropic, Gemini, …) reuse the prefix across
-// back-to-back calls within the cache TTL; providers that don't simply ignore
-// the field, so this is a safe passthrough that never changes the prompt text.
 export function buildCachedSystemMessage(systemPrompt) {
   return {
     role: 'system',
@@ -219,9 +153,6 @@ export function buildCachedSystemMessage(systemPrompt) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// OpenRouter API call — automatic model rotation with fallback
-// ---------------------------------------------------------------------------
 async function callOpenRouter(systemPrompt, userMessage) {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
@@ -285,7 +216,6 @@ async function callOpenRouter(systemPrompt, userMessage) {
       'No free OpenRouter models are available. Model loading may have failed, or your account currently has no free models.'
     );
   }
-  // Build the active (non-blacklisted) model list in rotation order
   const active = models.filter(m => !blacklistedModels.has(m));
   if (active.length === 0) throw new Error('All loaded models have been blacklisted this session.');
 
@@ -372,9 +302,6 @@ async function callOpenRouter(systemPrompt, userMessage) {
   throw new Error(`All ${active.length} active models failed. Last error: ${lastError?.message}`);
 }
 
-// ---------------------------------------------------------------------------
-// Context loading
-// ---------------------------------------------------------------------------
 function loadContext() {
   return {
     cv:          readFile('cv.md')               ?? 'CV not found.',
@@ -402,12 +329,6 @@ export function buildSystemPrompt(modeContent, ctx) {
   ].filter(Boolean).join('\n\n');
 }
 
-// ---------------------------------------------------------------------------
-// Job page content fetcher (Playwright-first, plain fetch fallback)
-// ---------------------------------------------------------------------------
-// Reject unsafe fetch targets (SSRF defense-in-depth): http(s) only, never
-// loopback / link-local / private / cloud-metadata hosts. URLs come from the
-// user's own portals.yml / pipeline.md, but we still fail closed.
 function assertSafeRemoteUrl(url) {
   let u;
   try { u = new URL(url); } catch { throw new Error(`Invalid URL: ${url}`); }
@@ -437,7 +358,7 @@ async function fetchJobPage(url) {
       browser = await chromium.launch({ headless: true });
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-      await page.waitForTimeout(2000); // wait for SPA render
+      await page.waitForTimeout(2000);
       const text = await page.evaluate(() => {
         document.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
         return (document.body?.innerText || document.body?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -450,7 +371,6 @@ async function fetchJobPage(url) {
     }
   }
 
-  // Plain HTTP fallback
   try {
     const r = await fetch(url, {
       headers: { 'User-Agent': DEFAULT_USER_AGENT }
@@ -463,36 +383,13 @@ async function fetchJobPage(url) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// portals.yml parser — reads the canonical schema with js-yaml (same library and
-// field names as scan.mjs: `title_filter.positive/negative` + `tracked_companies`),
-// so it never drifts from the main scanner. The runner's no-CLI scan path covers
-// companies that expose a direct JSON `api:`; careers_url-only / Playwright /
-// search-query companies are handled by the full /career-ops scan pipeline.
-// `rawOverride` lets tests feed YAML text directly (see test-all.mjs drift guard).
-// ---------------------------------------------------------------------------
 export function parsePortals(rawOverride) {
   const raw = rawOverride ?? readFile('portals.yml');
   if (!raw) throw new Error('portals.yml not found');
   const config = yaml.load(raw) || {};
 
-  // The shared predicate rather than a second copy of the matching rules. This
-  // path kept its own `includes` loop, and the two had drifted three ways: an
-  // empty positive list accepted every title in scan.mjs and rejected every
-  // title here, AND-groups worked only in scan.mjs, and a non-string YAML entry
-  // was dropped there but coerced into a live keyword here. A `word:` prefix
-  // would have become the fourth — read as literal text, it would have matched
-  // nothing, so the shipped `word:Intern` would stop rejecting "Operations
-  // Intern" here while still working in scan.mjs.
-  //
-  // Side effect worth naming, since it changes this path's verdicts rather than
-  // just its structure: it now also gets the 2-3 char rule. Measured over 2324
-  // real titles that moves one verdict, and it moves it the permissive way —
-  // the negative "iOS" had been matching inside "Biosamples". Nothing becomes
-  // newly rejected.
   const titleMatches = buildTitleFilter(config.title_filter);
 
-  // Companies with a direct JSON `api:` endpoint (the no-CLI scan path).
   const tracked = Array.isArray(config.tracked_companies) ? config.tracked_companies : [];
   const companies = tracked
     .filter(c => c && c.api && c.enabled !== false)
@@ -501,9 +398,6 @@ export function parsePortals(rawOverride) {
   return { companies, titleMatches };
 }
 
-// ---------------------------------------------------------------------------
-// pipeline.md management
-// ---------------------------------------------------------------------------
 function readPipeline() {
   const content = readFile('data/pipeline.md') ?? '';
   const pending = [];
@@ -531,30 +425,12 @@ function markPipelineDone(url) {
   writeFile('data/pipeline.md', content);
 }
 
-// Both writes go through the shared writers in scan.mjs rather than this
-// module's own read-modify-write. Those writers hold pipeline-lock.mjs on the
-// file they touch, so this stops being a fourth, unlocked writer racing the
-// three appendToPipeline already names. The previous version read each file
-// whole, appended in memory, and wrote the whole thing back with a truncating
-// writeFileSync — so any row another scanner appended in between was erased,
-// silently, because every reader skips a malformed or missing row quietly.
-//
-// Delegating fixes three things at once that were all symptoms of hand-rolling
-// the write: the lock, the row format (formatScanHistoryRow emits every trailing
-// column; this module wrote seven and created a seven-column header), and the
-// date (the shared path stamps the local day, this one stamped the UTC day —
-// the defect #3240/#3241 fixed in the other scanners, which this module escaped
-// because that census finds scanners by looking for appendToScanHistory calls).
-//
-// It also picks up CAREER_OPS_DATA_DIR support for free: the shared paths are
-// DATA_ROOT-anchored, while the __dirname-relative paths here ignored it.
 async function addToPipeline(entries) {
   const history = readFile('data/scan-history.tsv') ?? 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\n';
   const seenUrls = new Set(history.split('\n').slice(1).map(l => l.split('\t')[0]).filter(Boolean));
 
   const existingPipeline = readFile('data/pipeline.md') ?? '# Pipeline\n\n## Pending\n';
   const existingApps     = readFile('data/applications.md') ?? '';
-  // extract URLs already tracked in applications.md (mirrors scan.mjs dedup logic)
   const appliedUrls = new Set(
     existingApps.split('\n')
       .map(l => l.match(/https?:\/\/[^\s|)]+/))
@@ -564,15 +440,12 @@ async function addToPipeline(entries) {
   const newEntries = entries.filter(e => {
     if (seenUrls.has(e.url)) return false;
     if (appliedUrls.has(e.url)) return false;
-    // skip if already queued in pipeline
     if (existingPipeline.includes(e.url)) return false;
     return true;
   });
 
   if (newEntries.length === 0) return 0;
 
-  // The shared writers take {url, company, title, location}; this module calls
-  // the title `role`.
   const offers = newEntries.map(e => ({
     url: e.url,
     company: e.company,
@@ -587,25 +460,18 @@ async function addToPipeline(entries) {
 }
 
 function extractCompanySlug(text, url) {
-  // Try to extract from text (e.g. "Senior Engineer at Acme" or "Company: Acme")
   const m = text.match(/(?:at|@|company[:\s]+)\s*([A-Z][A-Za-z0-9]{2,25})/);
   if (m) return m[1].toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  // Fall back to URL hostname (e.g. job-boards.greenhouse.io/acme → acme)
   if (url) {
     try {
       const parts = new URL(url).pathname.split('/').filter(Boolean);
       const slug = parts[0] ?? 'company';
       return slug.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    } catch { /* not a valid URL */ }
+    } catch { }
   }
   return 'company';
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
-// -- SCAN --
 async function cmdScan() {
   tracker.recordZeroToken('scan');
   tracker.recordZeroToken('evaluation');
@@ -631,8 +497,6 @@ async function cmdScan() {
       const matched = jobs.filter(j => titleMatches(j.title));
       console.log(`${jobs.length} listings, ${matched.length} matched`);
       for (const j of matched) {
-        // Skip postings without a public URL — falling back to the API
-        // endpoint would write an unusable link into the pipeline.
         if (!j.absolute_url) continue;
         found.push({ url: j.absolute_url, company: c.name, role: j.title, location: j.location?.name ?? '' });
       }
@@ -648,7 +512,6 @@ async function cmdScan() {
   }
 }
 
-// -- EVALUATE --
 async function cmdEvaluate(input, ctx) {
   tracker.recordZeroToken('scan');
   tracker.recordZeroToken('pdf payload');
@@ -657,7 +520,6 @@ async function cmdEvaluate(input, ctx) {
   let jdText = input;
 
   if (!input) {
-    // Interactive paste mode
     console.log('Paste job description or URL, then press Enter on an empty line:\n');
     const rl = readline.createInterface({ input: process.stdin });
     const lines = [];
@@ -707,49 +569,22 @@ async function cmdEvaluate(input, ctx) {
   }
 
   try {
-    // Save report
     const today   = localToday();
     const num     = reservedNumbers[0];
     const slug    = extractCompanySlug(jdText, typeof input === 'string' ? input : null);
     const numStr  = formatReportNumber(num);
     const relPath = `reports/${numStr}-${slug}-${today}.md`;
 
-    // Extract Legitimacy from LLM output or fall back to placeholder
     const legitMatch = result.match(/\*\*Legitimacy:\*\*\s*([^\n]+)/);
     const legitLine  = legitMatch ? `**Legitimacy:** ${legitMatch[1].trim()}` : '**Legitimacy:** unconfirmed';
     writeFile(relPath, `**URL:** ${input || '(pasted)'}\n${legitLine}\n\n${result}`);
 
-    // Capture the DENOMINATOR when the model writes one. The old pattern took
-    // only the numeric prefix, so `Score: 8/10` yielded `8` and the cell became
-    // `8.0/5` -- a ten-point score reinterpreted as a five-point one. That
-    // satisfies SCORE_CELL_RE, so it merged as a genuine score and fed
-    // stats.mjs's averages. normalizedTrackerScore refuses a denominator that
-    // is not 5, but only if it is handed one (#3796).
-    //
-    // The capture runs to END OF LINE rather than stopping at a denominator
-    // adjacent to the number. Requiring adjacency read `Score: 4.2 (strong
-    // fit)/10` -- a ten-point score with an annotation -- as a bare 4.2 and
-    // wrote `4.2/5`, the same wrong number the numeric prefix used to produce.
-    // The cost is that an unrelated fraction later in the line (`Score: 4.2 --
-    // matched 3/4 axes`) is refused as N/A rather than guessed at. That is the
-    // trade the shared helper already documents and the gemini path already
-    // pins: N/A is recoverable, a wrong score is not.
     const scoreMatch  = result.match(/(?:score|puntuaci[oó]n)[^\d]*(\d+(?:\.\d+)?[^\r\n]*)/i);
-    // An unparseable score used to become the EMPTY string, and merge-tracker
-    // refuses a blank required cell ("use the documented sentinel rather than a
-    // blank cell") -- so the evaluation was skipped whole, the same loss #3796
-    // documents for the drifted copies. The shared helper returns the `N/A`
-    // sentinel (#1799), which merges as an unscored row instead of as nothing.
     const scoreStr    = normalizedTrackerScore(scoreMatch ? scoreMatch[1] : '');
     const companyName = slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const reportLink  = `[${numStr}](reports/${numStr}-${slug}-${today}.md)`;
     const tsvLine     = `${num}\t${today}\t${companyName}\t(see report)\tEvaluated\t${scoreStr}\t❌\t${reportLink}\t\n`;
     const tsvFile     = `batch/tracker-additions/or-${numStr}-${slug}.tsv`;
-    // Header row, then the single data row. merge-tracker.mjs resolves the
-    // fields by NAME when the header is present (#3517), so this row cannot be
-    // read into the wrong columns. (Headerless files still work; they are the
-    // legacy form, and they are the ones that can hit the undecidable
-    // score-vs-status case.)
     writeFile(tsvFile, `${TSV_ADDITION_HEADER}\n${tsvLine}`);
 
     console.log(`\n✅ Report saved: ${relPath}`);
@@ -767,7 +602,6 @@ async function cmdEvaluate(input, ctx) {
   }
 }
 
-// -- PIPELINE --
 async function cmdPipeline(ctx) {
   const pending = readPipeline();
   if (pending.length === 0) {
@@ -794,7 +628,6 @@ async function cmdPipeline(ctx) {
   console.log('\n✅ Pipeline processing complete.\n');
 }
 
-// -- APPLY --
 async function cmdApply(ref, ctx) {
   tracker.recordZeroToken('scan');
   tracker.recordZeroToken('evaluation');
@@ -818,7 +651,6 @@ async function cmdApply(ref, ctx) {
 
   if (!reportContent) { console.error('Could not read report content.'); return; }
 
-  // Score-gate: warn and confirm before applying to low-fit roles (AGENTS.md Ethical Use)
   const scoreMatch = reportContent.match(/^\s*\*?\*?\s*(?:score|puntuaci[oó]n)\s*:\s*\*?\*?\s*(\d+(?:\.\d+)?)\s*\/\s*5/im);
   const scoreValue = scoreMatch ? parseFloat(scoreMatch[1]) : NaN;
   if (isFinite(scoreValue) && scoreValue < 4.0) {
@@ -856,17 +688,11 @@ async function cmdApply(ref, ctx) {
   console.log('\n─────────────────────────────────────────────────────\n');
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-// Only run the CLI when invoked directly (`node openrouter-runner.mjs ...`), so the
-// module can be imported (e.g. by test-all.mjs) without executing a command.
 const invokedDirectly = isMainModule(import.meta.url);
 const [,, command, ...args] = invokedDirectly ? process.argv : [];
 if (invokedDirectly) loadEnvFile();
 const ctx = invokedDirectly ? loadContext() : null;
 
-// Load free models list before running any AI command (skip when a model is pinned)
 if (invokedDirectly && ['evaluate', 'eval', 'pipeline', 'apply', 'models'].includes(command) && !process.env.CAREER_OPS_MODEL) {
   await loadFreeModels();
 }

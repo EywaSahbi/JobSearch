@@ -4,22 +4,13 @@ import { useEffect, useState } from "react";
 import { Bug, X, ShieldCheck, ThumbsUp, Search, Loader2 } from "lucide-react";
 import { collect, fingerprint, issueBody, issueUrl, type Diag } from "@/lib/report/report";
 import { searchIssues } from "@/lib/beta/issue-search.mjs";
-import "@/lib/report/logbuf"; // install the client error ring-buffer (side-effect)
+import "@/lib/report/logbuf";
 
 type SimilarIssue = { number: number; title: string; url: string };
 
-// Dupe-deflection at write (the maintainer's #1 triage cost): search open
-// issues client-side via GitHub's public search API — no key, no server of
-// ours. The search itself lives in lib/beta/issue-search.mjs, which returns
-// null when it could NOT run rather than folding that into an empty array —
-// see that file for the two days of silent false negatives that cost us.
 const REPO = "career-ops-hq/career-ops";
 const findSimilar = (q: string) => searchIssues(q, REPO, fetch);
 
-// Beta/RC differentiator: a small version+channel pill (only on a pre-release
-// channel) + a one-click "Report a bug" that opens a PRE-FILLED GitHub issue. No
-// telemetry to any server (local-first / firewall) — the user reviews the exact,
-// PII-scrubbed payload (preview-then-confirm) and clicks to open the issue himself.
 export function BetaBanner() {
   const [meta, setMeta] = useState<{ version: string; channel: string; sha: string } | null>(null);
   const [open, setOpen] = useState(false);
@@ -27,15 +18,8 @@ export function BetaBanner() {
   const [diag, setDiag] = useState<Diag | null>(null);
   const [similar, setSimilar] = useState<SimilarIssue[]>([]);
   const [searching, setSearching] = useState(false);
-  // Distinct from "similar is empty": one means we looked and found nothing,
-  // the other means we could not look. Merging them is the bug this fixes.
   const [searchFailed, setSearchFailed] = useState(false);
 
-  // Text search is behind an EXPLICIT click, never as-you-type: the user's
-  // words (which can name a company) must not reach api.github.com at keystroke
-  // time — that would break the banner's "nothing is sent until you click"
-  // pledge, and scrub() is a path/secret scrubber, not a free-text one, so it
-  // could not remove the company name anyway. The click IS the consent.
   const checkExisting = async () => {
     const words = desc.trim().split(/\s+/).slice(0, 6).join(" ");
     if (!words) return;
@@ -43,9 +27,6 @@ export function BetaBanner() {
     setSearchFailed(false);
     const found = await findSimilar(`label:web-alpha ${words}`);
     setSearching(false);
-    // The user ASKED this question, so the user gets an answer — including
-    // "I could not check". Returning the button to its resting state on a
-    // failed search made it look like a successful search that found nothing.
     if (found === null) {
       setSearchFailed(true);
       return;
@@ -73,11 +54,6 @@ export function BetaBanner() {
     const d = await collect();
     setDiag(d);
     setOpen(true);
-    // One exact-match search by fingerprint: same bug already filed → the
-    // strongest dedupe signal, shown before the user types a word.
-    // Fired without the user asking, so a failure here stays silent: an error
-    // about a question nobody asked is noise. The explicit "check existing"
-    // button below is where a failure has to be visible.
     findSimilar(`in:body "${fingerprint(d)}"`).then((found) => {
       if (found?.length) setSimilar(found);
     });
@@ -125,9 +101,6 @@ export function BetaBanner() {
               </button>
             )}
             {searchFailed && (
-              // Says what to DO, not just what broke: the whole point of the
-              // check is to spare a duplicate, and if we cannot run it the
-              // right move is to file anyway rather than to stall.
               <p className="mt-2 text-xs text-muted">
                 Couldn&apos;t reach GitHub to check — file it anyway, a duplicate is cheaper than a lost report.
               </p>

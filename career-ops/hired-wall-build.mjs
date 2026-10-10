@@ -1,30 +1,4 @@
 #!/usr/bin/env node
-/**
- * hired-wall-build.mjs — the Hired Wall's single builder.
- *
- * HIRED.md is the ledger. Each entry is one machine-readable comment line
- * (the source of truth) followed by its rendered card; this script APPENDS
- * new entries, regenerates every rendered card from the comments, bumps
- * docs/hired-count.json (what the README badge reads) and regenerates
- * docs/hired-wall.svg (the three most recent card-level stories shown under
- * the hero). One writer for all four surfaces so they cannot drift apart.
- *
- *   node hired-wall-build.mjs --rebuild
- *   node hired-wall-build.mjs --add --handle santifer --level handle \
- *        --role "Head of Applied AI" --geo "Spain" --weeks 8 \
- *        --story "..." --link "https://github.com/.../issues/N"
- *
- * Invariants the design promises publicly:
- *   - count == number of ledger lines in HIRED.md == the badge. Auditable.
- *   - numbers are permanent: a withdrawn story keeps its number as
- *     "counted, story withdrawn"; the count never shrinks silently.
- *   - `count`-level entries hold a number and no card (privacy level 3).
- *
- * Avatars: GitHub sanitizes SVGs in READMEs, so a remote <image href> would
- * never load. The workflow passes --fetch-avatars and the avatar bytes are
- * inlined as base64 data URIs at build time (~3KB per face, shields.io
- * pattern). Tests pass --avatar-fixture to stay offline.
- */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -48,7 +22,6 @@ Appends an entry to HIRED.md and/or regenerates the wall's derived surfaces
 
 const LEDGER_RE = /^<!-- hire n=(\d+) level=(handle|role|count)(?: handle=([^\s]+))? role="([^"]*)"(?: sector="([^"]*)")?(?: geo="([^"]*)")?(?: weeks=(\d+))? link="([^"]*)"(?: withdrawn)? -->$/;
 
-/** Parse every ledger comment of HIRED.md, in file order. */
 export function parseLedger(text) {
   const out = [];
   for (const line of text.split('\n')) {
@@ -78,7 +51,6 @@ export function ledgerLine(e) {
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** The rendered markdown card that sits under each ledger line. */
 export function renderCard(e) {
   if (e.withdrawn) return `**Hire #${e.n}** — counted, story withdrawn at the author's request.`;
   if (e.level === 'count') return `**Hire #${e.n}** — counted, story kept private by choice.`;
@@ -96,12 +68,6 @@ export function renderCard(e) {
   ].join('\n');
 }
 
-/**
- * Rebuild HIRED.md's entries section from its own ledger lines. Everything
- * between the ENTRIES markers is generated; prose outside them is
- * hand-written and never touched. Stories live IN the ledger section as a
- * quoted line right under each comment (kept verbatim on rebuild).
- */
 export function rebuildWall(text) {
   const start = text.indexOf('<!-- ENTRIES -->');
   const end = text.indexOf('<!-- /ENTRIES -->');
@@ -113,7 +79,6 @@ export function rebuildWall(text) {
     const m = lines[i].match(LEDGER_RE);
     if (!m) continue;
     const e = parseLedger(lines[i])[0];
-    // The story is the first quoted line following the ledger comment.
     for (let j = i + 1; j < lines.length && !lines[j].match(LEDGER_RE); j++) {
       const q = lines[j].match(/^> (.+)$/);
       if (q) { e.story = q[1]; break; }
@@ -126,8 +91,6 @@ export function rebuildWall(text) {
   return { text: rebuilt, entries };
 }
 
-// ── The README strip (SVG, three most recent card-level stories) ────────────
-
 async function avatarDataUri(handle, { fetchAvatars, fixture }) {
   if (fixture) return `data:image/png;base64,${readFileSync(fixture).toString('base64')}`;
   if (!fetchAvatars) return null;
@@ -137,7 +100,6 @@ async function avatarDataUri(handle, { fetchAvatars, fixture }) {
   return `data:image/png;base64,${buf.toString('base64')}`;
 }
 
-/** Word-wrap a quote to fit the card; clamps to 4 lines with an ellipsis. */
 function wrapQuote(s, max = 34) {
   const words = String(s).split(/\s+/);
   const lines = [''];
@@ -152,9 +114,6 @@ function wrapQuote(s, max = 34) {
 export async function buildSvg(entries, opts = {}) {
   const showable = entries.filter((e) => !e.withdrawn && e.level !== 'count').slice(0, 3);
   const total = entries.length;
-  // "Hay más": deliberadamente mudo — un chevron y el resto exacto en el gris
-  // de la tira, a la derecha. Nada de tarjetas cortadas ni desvanecidos: el
-  // fondo del README es del lector (claro u oscuro) y cualquier fade lava.
   const peek = total > 3;
   const W = 900, H = 178, GAP = 14;
   const CW = peek ? 280 : 288;
@@ -172,9 +131,6 @@ export async function buildSvg(entries, opts = {}) {
     if (!e) continue;
     const quote = wrapQuote(e.story ?? '', peek ? 33 : 34);
     const avatar = e.level === 'handle' ? await avatarDataUri(e.handle, opts) : null;
-    // Single-line rows have no wrapping: anything wider than the card was
-    // silently CLIPPED by the viewBox (hire #5's four-word role was). Ellipsize
-    // at ~the character count that fits the ~222px text run at each font size.
     const oneLine = (s, max) => { const t = String(s ?? ''); return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t; };
     const who = oneLine(e.level === 'handle' ? `@${e.handle}` : e.role, 33);
     const sub = oneLine([e.level === 'handle' ? e.role : (e.sector || null), e.geo || null].filter(Boolean).join(' · '), 40);
@@ -190,9 +146,6 @@ ${avatar
 ${e.weeks ? `<text x="${x + CW - 16}" y="${H - 20}" text-anchor="end" fill="#3fb950" font-size="10.5" font-weight="700">${e.weeks} weeks</text>` : ''}</g>`;
   }
   if (peek) {
-    // El resto es EXACTO siempre (la honestidad es la marca del muro), así que
-    // a 2-3 dígitos la fuente encoge en vez de truncar: "+9"/"+42" a 9.5,
-    // "+997" a 8 — cabe centrado en los 28px de aire hasta el borde.
     const rest = total - 3;
     const fs = rest >= 100 ? 8 : rest >= 10 ? 9 : 9.5;
     cards += `<text x="${W - 12}" y="${H / 2 + 1}" text-anchor="middle" fill="#8b949e" font-size="22" font-weight="600">›</text>
@@ -209,9 +162,6 @@ async function main() {
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); return; }
   const bad = validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
   if (bad) { process.exitCode = 1; return; }
-  // Writing is opt-in: a bare run (or one with only modifiers such as
-  // --fetch-avatars) would otherwise fall through to the rebuild below and
-  // rewrite three tracked files, bumping updatedAt to today (#4896).
   if (!hasFlag(args, '--rebuild') && !hasFlag(args, '--add')) {
     console.error(`hired-wall-build: pass --rebuild or --add; nothing was written.\n\n${USAGE}`);
     process.exitCode = 1;
@@ -227,10 +177,6 @@ async function main() {
     const link = flagValue(args, '--link');
     if (!LEVELS.includes(level) || !link) { console.error(`--add needs --level (${LEVELS.join('|')}) and --link.\n\n${USAGE}`); process.exitCode = 1; return; }
     const { entries } = rebuildWall(text);
-    // Every field arrives from an untrusted issue body: strip anything that
-    // could break the ledger comment (quotes, comment terminators, newlines)
-    // or smuggle markup, and clamp lengths. Display escaping happens later in
-    // renderCard/buildSvg; this is the STORAGE boundary.
     const clean = (s, max) => String(s ?? '').replace(/["<>]|--/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
     const e = {
       n: entries.length ? Math.max(...entries.map((x) => x.n)) + 1 : 1,

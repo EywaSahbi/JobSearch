@@ -1,158 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * story-provenance-check.mjs — Zero-LLM story-bank provenance checker.
- *
- * Companion to jd-skill-gap.mjs (read that file first — this one deliberately
- * follows its shape: regex-based extraction, no LLM call, classify-and-report
- * only, never auto-edits the user's data files). Where jd-skill-gap.mjs
- * classifies JD *skills* against cv.md in three buckets (existing /
- * supportedByResume / gap), this script classifies *numeric claims found in
- * interview-prep/story-bank.md* against cv.md in FOUR buckets — the extra
- * state is the whole point of this checker (see "Why four buckets" below).
- *
- * ── Background (issue #2947) ─────────────────────────────────────────
- *
- * `cv.md` is user-authored. `story-bank.md` is *accumulated* — commonly
- * extracted from past interview-prep documents, which are themselves
- * AI-written mappings of the user's experience onto a specific job posting's
- * language. AGENTS.md used to say story-bank.md carries "the same trust
- * level as cv.md". It doesn't, in practice: nothing enforced that a
- * story-bank claim traces back to a user-authored file. That is the
- * unguarded channel this script exists to catch:
- *
- *   JD-shaped phrasing in a prep doc -> absorbed into story-bank.md as a
- *   standalone story -> treated as cv.md-equivalent fact -> surfaces in CV
- *   bullets, cover letters, and interview talk tracks -> drifts further on
- *   reuse.
- *
- * See AGENTS.md's "Source-of-Truth Boundary" section for the tiered file
- * list this script's classification exists to enforce.
- *
- * ── Why four buckets, not jd-skill-gap.mjs's three ────────────────────
- *
- * jd-skill-gap.mjs only ever asks "does cv.md have a trace of this or not" —
- * a binary trace/no-trace question is enough there because nothing is ever
- * auto-added to cv.md either way. This problem needs a state jd-skill-gap.mjs
- * has no equivalent for: not "no trace found (yet)" but "asked, and the user
- * genuinely could not confirm it". A binary verified/unverified flag can't
- * represent that — a scale figure from a job years ago may simply be
- * unknowable, and treating "I don't know" the same as "not yet checked"
- * invites a future re-scan (or a leading confirmation prompt) to silently
- * launder a guess into a "verified" fact. `user-cannot-confirm` is a durable
- * third state, distinct from `derived-unverified`, that must never decay
- * back into either "verified" or "not yet checked" through repetition.
- *
- *   existing            — the claim's number (or, for a range, both its
- *                          endpoints) appears in cv.md, OR the story-bank
- *                          entry's own Provenance field explicitly reads
- *                          `user-stated YYYY-MM-DD` (the user has already
- *                          confirmed this figure even though cv.md's prose
- *                          doesn't carry that precision — AGENTS.md's tiering
- *                          language allows a claim to satisfy this bar by
- *                          tracing to a primary file OR carrying an explicit
- *                          provenance marker, not only the former).
- *   supportedByResume    — the number itself isn't in cv.md, but cv.md's
- *                          prose describes the same underlying fact/role
- *                          closely enough (word-overlap heuristic) that the
- *                          claim reads as plausible-adjacent, just unverified
- *                          at this precision.
- *   derived-unverified    — the number appears ONLY in story-bank.md, has no
- *                          traceable cv.md support, and has not been
- *                          explicitly confirmed via the Provenance field.
- *   user-cannot-confirm    — the story-bank entry's Provenance field is
- *                          explicitly set to `user-cannot-confirm`. This is a
- *                          HARD override: it wins over whatever the numeric
- *                          heuristic would otherwise conclude, and it is
- *                          never silently reclassified back to
- *                          derived-unverified (or up to existing) on a later
- *                          run just because the same claim gets cited again.
- *                          See "Confirmation UX invariant" below.
- *
- * ── Provenance field convention (story-bank.md) ───────────────────────
- *
- * match-star.mjs's parser already reads story-bank.md as `### [Theme] Title`
- * blocks of `**Label:** value` lines (Situation / Task / Action / Result /
- * Reflection / Source / Best for questions about). A `**Source:**` field
- * already exists there for a different purpose (where the story itself came
- * from — e.g. a debrief transcript). This script introduces a SEPARATE label
- * for the same block shape, so it composes with the existing parser
- * convention instead of overloading a field that already means something
- * else:
- *
- *   **Provenance:** source: cv.md
- *   **Provenance:** user-stated 2026-08-10
- *   **Provenance:** derived-unverified
- *   **Provenance:** user-cannot-confirm
- *
- * Absent field == `derived-unverified` (the safe default: unmarked numeric
- * claims get no special trust). This script only READS the field — writing
- * it back is the explicit responsibility of a future confirmation workflow
- * (see next section), never this one.
- *
- * ── Confirmation UX invariant (DESIGN REQUIREMENT — read before building
- *    the consuming workflow) ───────────────────────────────────────────
- *
- * This script is read-only: it reports `derived-unverified` findings, it
- * does not resolve them. Building the interactive confirmation flow that
- * asks the user and writes the Provenance marker back to story-bank.md is
- * explicitly OUT OF SCOPE for this script (issue #2947) — but the contract
- * that flow MUST honor is documented here so a future implementer can't get
- * it wrong:
- *
- *   1. When a `derived-unverified` finding is surfaced to the user, the
- *      prompt must NOT lead with the unverified number as if confirm/deny
- *      were the only options. Leading with the number invites a guess, and a
- *      confirmed guess is worse than an honest unknown — it launders the
- *      guess into a "verified" fact.
- *   2. Present the claim plainly and offer FOUR distinct, unbiased outcomes:
- *        (a) confirm the claim is accurate as stated
- *        (b) provide the correct figure
- *        (c) mark it narrative-only / not a quantified claim
- *        (d) "I don't know" -> sets `user-cannot-confirm`, durably
- *   3. `user-cannot-confirm` must NEVER decay back into being treated as
- *      verified through repeated citation or a later re-scan. Every
- *      consumer of story-bank.md (CV generation, cover letters, interview
- *      prep) must treat a `user-cannot-confirm` entry as narrative texture
- *      only — never as a quantified claim in interview-facing output where a
- *      follow-up question would probe it. This script enforces the
- *      READ-side half of that invariant (the override always wins, see
- *      classifyStoryBank() below); the WRITE-side half (never re-prompting
- *      a `user-cannot-confirm` entry into a guess) belongs to that future
- *      workflow.
- *
- * ── Pattern coverage (what IS and ISN'T scanned) ──────────────────────
- *
- * Deliberately not exhaustive — matches jd-skill-gap.mjs's design stance
- * that under-extraction is recoverable (the user can still read the story)
- * while over-extraction would misreport narrative prose as a "claim". Five
- * patterns, each documented at its declaration below:
- *
- *   percent      \d+(\.\d+)?%                      "cut costs 40%"
- *   plus-noun     \d+\+\s+word                       "500+ employees"
- *   hour-range    N hours/hrs (→|->|to) M hours/hrs   "8 hours to 2 hours"
- *   scale-hyphen  \d+-(person|member)                 "15-person team"
- *   scale-noun    \d+ (students|employees|...)        "50 students"
- *
- * Known gaps (not covered, intentionally, to keep the pattern set legible
- * and low-noise — same tradeoff jd-skill-gap.mjs's SKILL_TOKEN_RE makes):
- *   - spelled-out numbers ("fifty students")
- *   - currency figures ("$40K budget") — verify-cv-facts.mjs already owns
- *     currency/metric-noun extraction for generated documents; this script
- *     stays scoped to story-bank.md's narrative shapes instead of
- *     duplicating that gate
- *   - non-ASCII digit scripts (verify-cv-facts.mjs's foldDigits() solves
- *     this for generated CVs; story-bank.md is authored in the profile's
- *     language, so this is a smaller gap here, but still a gap)
- *   - a bare number with no adjacent noun/unit ("trained 40 in Q1")
- *
- * Usage:
- *   node story-provenance-check.mjs
- *   node story-provenance-check.mjs --summary
- *   node story-provenance-check.mjs --story-bank path/to/file.md --cv path/to/cv.md
- *   node story-provenance-check.mjs --self-test
- */
-
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { flagValue } from './lib/cli-flags.mjs';
@@ -160,46 +7,31 @@ import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { splitStoryBlocks, isValidStory, getField, STORY_FIELDS } from './lib/story-bank.mjs';
 
-// ── Config ──────────────────────────────────────────────────────────
-
 const DATA_ROOT = getCareerOpsRoot();
 const DEFAULT_STORY_BANK_PATH = join(DATA_ROOT, 'interview-prep', 'story-bank.md');
 const DEFAULT_CV_PATH = join(DATA_ROOT, 'cv.md');
 
-// ── Numeric claim patterns ──────────────────────────────────────────
-// Each pattern extracts {kind, text, index, values}. `values` are the
-// numbers a cv.md match must reproduce for the claim to count as `existing`.
-
 const CLAIM_PATTERNS = [
-  // "cut costs 40%" / "improved completion 12.5%"
   {
     kind: 'percent',
     re: /\d+(?:\.\d+)?%/g,
     values: (m) => [parseFloat(m[0])],
   },
-  // "500+ employees", "50+ courses" — number, literal +, a following word.
-  // The following word is NOT captured as a required noun (kept loose on
-  // purpose — real prose has too many phrasings to enumerate), it only
-  // anchors the pattern away from bare "50+" with nothing after it.
   {
     kind: 'plus-noun',
     re: /\b(\d+)\+\s+[a-zA-Z]+/g,
     values: (m) => [parseFloat(m[1])],
   },
-  // "8 hours to 2 hours", "8 hrs -> 2 hrs" — the classic before/after
-  // automation-story shape. Both endpoints must match cv.md for `existing`.
   {
     kind: 'hour-range',
     re: /\b(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)\s*(?:→|->|to)\s*(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)\b/gi,
     values: (m) => [parseFloat(m[1]), parseFloat(m[2])],
   },
-  // "15-person team", "6-member panel"
   {
     kind: 'scale-hyphen',
     re: /\b(\d+)-(?:person|member)\b/gi,
     values: (m) => [parseFloat(m[1])],
   },
-  // "50 students", "200 employees", "12 instructors"
   {
     kind: 'scale-noun',
     re: /\b(\d+)\s+(?:students?|employees?|people|staff|learners?|instructors?|departments?|cohorts?)\b/gi,
@@ -207,14 +39,8 @@ const CLAIM_PATTERNS = [
   },
 ];
 
-// Generic number scanner used to build the set of numeric values present in
-// cv.md. Deliberately permissive (no unit/context requirement) — cv.md is
-// the trust anchor, so over-matching here can only make MORE claims count as
-// `existing`, never fewer, which is the safe direction to err in.
 const NUMBER_SCAN_RE = /\d+(?:\.\d+)?/g;
 
-// Filtered out of context-word overlap so common connective words don't
-// manufacture a false supportedByResume match.
 const STOPWORDS = new Set([
   'this', 'that', 'these', 'those', 'with', 'from', 'into', 'onto', 'over',
   'were', 'have', 'that', 'were', 'while', 'about', 'their', 'there',
@@ -224,54 +50,18 @@ const STOPWORDS = new Set([
   'only', 'also', 'just', 'like', 'very', 'used', 'using',
 ]);
 
-// ── Story-bank parsing ──────────────────────────────────────────────
-// Splitting and validity come from lib/story-bank.mjs, the same definition
-// match-star.mjs and negotiation-roi.mjs use (#4514). What this checker adds
-// is coverage: it keeps EVERY block and every table row outside a block, not
-// only the valid stories, because a figure in a malformed entry is still a
-// figure in story-bank.md. Hiding it from the checker would hide exactly the
-// unverified numbers #2947 exists to surface. Invalid entries are flagged,
-// never dropped.
-
-/** First `**Provenance:**` value in `text`, lowercased, or null. */
 function provenanceIn(text) {
-  // The marker must open its own line (optional indent, at most one list or
-  // quote marker). A `**Provenance:**` quoted inside another field's value is
-  // story text, not the story's marker (issue #4819).
   const m = text.match(/^[ \t]*(?:[-*+>][ \t]+)?\*\*Provenance:\*\*[ \t]*(.+)$/im);
   return m ? m[1].trim().toLowerCase() : null;
 }
 
-/**
- * Parse story-bank.md into checkable entries: every `### ` block, valid or
- * not; every run of text a story was cut off from by a table or heading; and
- * every table row outside a block. Each is attributed to itself, so a figure
- * is never credited to a field it isn't in.
- *
- * Provenance is the exception, on purpose. A story and the text cut off from
- * it are ONE unit for the marker, as they were before a story ended at a
- * table or heading: a marker in either covers both. Otherwise a Result line
- * that happens to sit below a table would lose its story's
- * `user-cannot-confirm` and come back as derived-unverified, asking the user
- * to confirm a figure they already said they can't (the decay AGENTS.md's
- * confirmation invariant forbids). Table rows inherit only that denial, never
- * `source:` or `user-stated`: rows after a story are often separate Block F
- * rows, and a denial can only make a classification stricter.
- *
- * @param {string} content
- * @returns {Array<{kind: 'story'|'trailing'|'table-row', title: string, provenance: string|null, body: string, valid: boolean, line: number, actionAfterCut?: string}>}
- */
 function parseStoryBlocks(content) {
   const { blocks, tableRows, trailing } = splitStoryBlocks(content);
 
-  // The story's own text first, then its cut-off runs in file order: the
-  // first marker found is the unit's, the same rule as reading the block whole.
   const unitProvenance = blocks.map((b, i) => [b.raw, ...trailing.filter((t) => t.story === i).map((t) => t.text)]
     .map(provenanceIn).find((p) => p) ?? null);
 
   const stories = blocks.map((b, i) => {
-    // An Action below the cut is why such a story reads as invalid; say so
-    // instead of "no Action", which sends the user looking for a missing line.
     const cut = trailing.find((t) => t.story === i && getField(t.text, STORY_FIELDS.action));
     return {
       kind: 'story',
@@ -306,10 +96,6 @@ function parseStoryBlocks(content) {
   return [...stories, ...cutOff, ...rows];
 }
 
-/**
- * Entries the other readers cannot see, with why.
- * @param {ReturnType<typeof parseStoryBlocks>} entries
- */
 function malformedEntries(entries) {
   const reason = (e) => {
     if (e.kind === 'table-row') return 'table row: not a ### block';
@@ -320,13 +106,6 @@ function malformedEntries(entries) {
   return entries.filter((e) => !e.valid).map((e) => ({ title: e.title, kind: e.kind, line: e.line, reason: reason(e) }));
 }
 
-// ── Claim extraction ─────────────────────────────────────────────────
-
-/**
- * Extract numeric claims from a story block's body text.
- * @param {string} body
- * @returns {Array<{kind: string, text: string, index: number, values: number[]}>}
- */
 function extractClaims(body) {
   const claims = [];
   for (const { kind, re, values } of CLAIM_PATTERNS) {
@@ -340,11 +119,6 @@ function extractClaims(body) {
   return claims;
 }
 
-/**
- * Numeric values present anywhere in a text (cv.md), as a Set for O(1) lookup.
- * @param {string} text
- * @returns {Set<number>}
- */
 function extractNumbers(text) {
   const out = new Set();
   let m;
@@ -353,18 +127,6 @@ function extractNumbers(text) {
   return out;
 }
 
-/**
- * Map of numeric value -> array of context-word lists, one per occurrence of
- * that number in cv.md. This scopes the `existing` bucket's number match to
- * the same metric/context, not a bare digit-string coincidence: a story
- * claiming "15-person team" must not count as verified just because cv.md
- * separately says "15 years of experience" with no team/headcount language
- * nearby (issue #2947, CodeRabbit finding — unscoped number matching).
- * Reuses contextWords(), the same mechanism already used to scope the
- * `supportedByResume` bucket below, instead of a second parallel heuristic.
- * @param {string} cvText
- * @returns {Map<number, string[][]>}
- */
 function buildCvNumberContexts(cvText) {
   const map = new Map();
   const re = new RegExp(NUMBER_SCAN_RE);
@@ -378,71 +140,10 @@ function buildCvNumberContexts(cvText) {
   return map;
 }
 
-/**
- * Content words (length >= 4, not a stopword, not itself a number) in a
- * window around a claim's position — the signal used for the
- * `supportedByResume` heuristic.
- *
- * The strip keeps letters, combining marks and digits of ANY script. It used
- * to be `[^a-z0-9\s]`, which deletes every non-ASCII letter, and that broke
- * this checker in both directions on a CV that is not written in ASCII:
- *
- *   - Cyrillic, Greek, Hebrew, Arabic, CJK — every character is stripped, the
- *     window yields NO words at all, and an empty list makes both
- *     hasScopedNumberMatch (`claimWords.includes`) and hasContextOverlap
- *     (`words.some`) unconditionally false. So `existing` and
- *     `supportedByResume` are unreachable and every claim the patterns do
- *     extract lands in `derived-unverified` — including a figure sitting
- *     verbatim in cv.md with matching context.
- *   - Accented Latin — the strip does not just delete, it re-cuts the word:
- *     "évaluation" becomes " valuation", a DIFFERENT real English word that
- *     can then overlap cv.md prose that has nothing to do with the claim.
- *     Shorter words vanish outright ("Größe", "naïve", "señor" all fall under
- *     the length floor once split).
- *
- * That matters more here than in a grouping key. `derived-unverified` is what
- * AGENTS.md's "Confirmation UX invariant" hands to the user to confirm or
- * deny, and its stated risk is that a confirmed guess launders a guess into a
- * verified fact. A checker that reports 100% unverified for a non-ASCII CV
- * hands over a list where every entry is noise, which is how a user learns to
- * confirm without reading.
- *
- * `\p{L}\p{M}\p{N}` is the alphabet tracker-parse.mjs's normalizeTextKey
- * settled on for exactly this class of bug (#2393/#2429/#2569/#2666), down to
- * keeping \p{M} so Indic matras survive. It is mirrored rather than imported:
- * normalizeTextKey builds a solid identity KEY and this needs word boundaries
- * preserved, and importing tracker-parse.mjs would make a story-bank check
- * fail hard on a missing tracker-aliases.json it has no other use for.
- *
- * @param {string} body
- * @param {number} matchIndex
- * @param {number} matchLength
- * @param {number} windowChars
- * @returns {string[]}
- */
-/**
- * NFKC, lowercased, with the combining dot a lowercased Turkish `İ` leaves
- * behind removed.
- *
- * Extracted so the two sides of every comparison below are folded IDENTICALLY.
- * contextWords() folds the claim window; hasContextOverlap() searches cv.md.
- * Folding only one of them is a bug that hides: a cv.md written "İstanbul"
- * lowercases to `i` + U+0307 and stops matching a claim word the strip has
- * already reduced to plain "istanbul".
- *
- * @param {string} text
- * @returns {string}
- */
 function foldForContext(text) {
   return String(text ?? '')
-    // NFKC before the strip so a full-width "４０％" folds like "40%", the same
-    // normalization order normalizeTextKey uses.
     .normalize('NFKC')
     .toLowerCase()
-    // Lowercasing a Turkish dotted capital leaves a bare combining dot
-    // (U+0307) behind, and \p{M} in the strip below keeps it — so "İstanbul"
-    // and "Istanbul" would not compare equal. Same one-character strip, and
-    // the same reason, as normalizeTextKey's.
     .replace(/\u0307/gu, '');
 }
 
@@ -452,35 +153,9 @@ function contextWords(body, matchIndex, matchLength, windowChars = 90) {
   const snippet = foldForContext(body.slice(start, end))
     .replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ');
   const words = snippet.split(/\s+/).filter(Boolean);
-  // `\p{N}` not `\d`: a token of Devanagari or full-width digits is just as
-  // much "a number, not a content word" as an ASCII one.
   return [...new Set(words.filter((w) => w.length >= 4 && !STOPWORDS.has(w) && !/^\p{N}+$/u.test(w)))];
 }
 
-/**
- * Whether any context word appears, on a word boundary, in cv.md prose.
- *
- * The boundary is a lookaround pair, not `\b`. `\b` is defined against `\w`,
- * which is `[A-Za-z0-9_]` — so for a Cyrillic, Greek, Hebrew, Arabic or CJK
- * word BOTH sides of every edge are non-word characters and the assertion is
- * never satisfied:
- *
- *   /\bсократил\b/i.test('сократил расходы')   ->  false
- *
- * That made this the second half of the same defect as the ASCII strip in
- * contextWords: even once the words survive folding, they could never be found
- * in cv.md, so `supportedByResume` stayed unreachable for a non-Latin CV and
- * every claim still fell to `derived-unverified`.
- *
- * Mirrors the `bounded()` helper scan.mjs already uses for company names, down
- * to its escape set — `\-` is an invalid identity escape under `u`. Both
- * operands here are folded output (letters, marks, digits and spaces only), so
- * the escape is defensive rather than load-bearing.
- *
- * @param {string[]} words - Claim context words, already folded.
- * @param {string} cvText - Raw cv.md; folded here so both sides match.
- * @returns {boolean}
- */
 function hasContextOverlap(words, cvText) {
   const haystack = foldForContext(cvText);
   const bounded = (w) => new RegExp(
@@ -490,30 +165,12 @@ function hasContextOverlap(words, cvText) {
   return words.some((w) => bounded(w).test(haystack));
 }
 
-/**
- * Whether a claim's context words overlap with the context words of at
- * least one cv.md occurrence of the same number — the scoping check that
- * keeps the `existing` bucket from firing on a bare digit-string
- * coincidence (see buildCvNumberContexts() above).
- * @param {string[]} claimWords
- * @param {string[][]} cvContextLists
- * @returns {boolean}
- */
 function hasScopedNumberMatch(claimWords, cvContextLists) {
   return cvContextLists.some((cvWords) => cvWords.some((w) => claimWords.includes(w)));
 }
 
 const USER_STATED_RE = /^user-stated\s+\d{4}-\d{2}-\d{2}$/;
 
-// ── Classification ───────────────────────────────────────────────────
-
-/**
- * Classify every numeric claim in story-bank.md against cv.md into the four
- * buckets documented at the top of this file.
- * @param {string} storyBankText
- * @param {string} cvText
- * @returns {{existing: object[], supportedByResume: object[], derivedUnverified: object[], userCannotConfirm: object[]}}
- */
 function classifyStoryBank(storyBankText, cvText) {
   const cvNumberContexts = buildCvNumberContexts(cvText);
   const stories = parseStoryBlocks(storyBankText);
@@ -525,11 +182,6 @@ function classifyStoryBank(storyBankText, cvText) {
     for (const claim of claims) {
       const entry = { story: story.title, claim: claim.text, pattern: claim.kind };
 
-      // HARD override — checked first, wins over every heuristic below, and
-      // is never itself overridden. This is the invariant #2947 exists to
-      // guarantee: an explicit "I don't know" must not decay into "verified"
-      // or back into "unverified-but-maybe" on a later run just because the
-      // heuristic below would have reached a different conclusion this time.
       if (story.provenance === 'user-cannot-confirm') {
         buckets.userCannotConfirm.push({
           ...entry,
@@ -538,14 +190,6 @@ function classifyStoryBank(storyBankText, cvText) {
         continue;
       }
 
-      // Explicit user-confirmed provenance markers — checked before the
-      // numeric/context heuristics below, not as a fallback after them.
-      // Without this ordering, a story carrying `user-stated YYYY-MM-DD` or
-      // `source: cv.md` could get misclassified into `supportedByResume` (or
-      // worse) whenever the heuristic below happened to find only partial
-      // context overlap, even though the marker already asserts the claim is
-      // verified. AGENTS.md's tiering language allows either a trace to a
-      // primary file OR an explicit provenance marker to satisfy `existing`.
       if (story.provenance && (USER_STATED_RE.test(story.provenance) || story.provenance === 'source: cv.md')) {
         buckets.existing.push({
           ...entry,
@@ -556,11 +200,6 @@ function classifyStoryBank(storyBankText, cvText) {
 
       const claimWords = contextWords(story.body, claim.index, claim.text.length);
 
-      // Scoped number match: the number must appear in cv.md AND the cv.md
-      // occurrence's own context must share a term with the claim's context
-      // — a bare digit-string coincidence elsewhere in cv.md (e.g. cv.md's
-      // "15 years of experience" against a story's "15-person team") must
-      // not count as `existing`.
       const matchesCv = claim.values.every((v) => {
         const cvContextLists = cvNumberContexts.get(v);
         return cvContextLists ? hasScopedNumberMatch(claimWords, cvContextLists) : false;
@@ -582,18 +221,6 @@ function classifyStoryBank(storyBankText, cvText) {
   return buckets;
 }
 
-/**
- * Explain a low-confidence run so an empty/near-empty result isn't misread
- * as "scanned and clean" — same purpose as jd-skill-gap.mjs's
- * diagnoseExtraction().
- * @param {boolean} storyBankExists
- * @param {boolean} cvExists
- * @param {number} storyCount
- * @param {number} claimCount
- * @param {string} [storyBankPath]
- * @param {string} [cvPath]
- * @returns {{reason: string, message: string}|null}
- */
 function diagnose(storyBankExists, cvExists, storyCount, claimCount, storyBankPath = DEFAULT_STORY_BANK_PATH, cvPath = DEFAULT_CV_PATH) {
   if (!storyBankExists) {
     return { reason: 'no-story-bank', message: `${storyBankPath} not found — nothing was checked.` };
@@ -613,10 +240,7 @@ function diagnose(storyBankExists, cvExists, storyCount, claimCount, storyBankPa
   return null;
 }
 
-// ── Exports (for test-all.mjs and other consumers) ───────────────────
 export { parseStoryBlocks, malformedEntries, extractClaims, extractNumbers, classifyStoryBank, diagnose };
-
-// ── CLI ──────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 const summaryMode = args.includes('--summary');
@@ -683,7 +307,6 @@ Brings 15 years of unrelated professional background in adult education prior to
 **Best for questions about:** negotiation, cost savings
 `;
 
-  // Fixture 1: numeric claim present in cv.md -> existing
   const result = classifyStoryBank(fakeStoryBank, fakeCv);
   eq(
     'hour-range claim matching cv.md verbatim numbers is existing',
@@ -691,36 +314,24 @@ Brings 15 years of unrelated professional background in adult education prior to
     true
   );
 
-  // Fixture 2: cv.md prose supports the underlying fact without the exact figure -> supportedByResume
   eq(
     'scale-hyphen claim not in cv.md, but cv.md prose supports the fact, is supportedByResume',
     result.supportedByResume.some((c) => c.story === 'LMS Migration Team' && c.pattern === 'scale-hyphen'),
     true
   );
 
-  // Fixture 2b (regression, CodeRabbit finding — unscoped number matching):
-  // cv.md separately contains the bare number 15 in a completely unrelated
-  // sentence ("15 years of professional experience", no team/headcount
-  // language nearby). A claim of "a 15-person team" must NOT be promoted to
-  // `existing` just because that digit string coincidentally appears
-  // elsewhere in cv.md — the match must be scoped to shared context, not a
-  // bare digit-string coincidence.
   eq(
     'a claim number matching cv.md only via an unrelated coincidental occurrence is NOT existing',
     result.existing.some((c) => c.story === 'LMS Migration Team' && c.pattern === 'scale-hyphen'),
     false
   );
 
-  // Fixture 3: numeric claim only in story-bank.md, no cv.md trace, no marker -> derived-unverified
   eq(
     'plus-noun claim with no cv.md trace is derived-unverified',
     result.derivedUnverified.some((c) => c.story === 'Statewide Rollout' && c.pattern === 'plus-noun'),
     true
   );
 
-  // Fixture 4: explicit user-cannot-confirm marker overrides the heuristic
-  // (which alone would have said derived-unverified, since cv.md has no
-  // trace of the vendor negotiation or the 40% figure at all).
   eq(
     'percent claim under an explicit user-cannot-confirm marker is user-cannot-confirm, not derived-unverified',
     result.userCannotConfirm.some((c) => c.story === 'Vendor Negotiation' && c.pattern === 'percent'),
@@ -732,10 +343,6 @@ Brings 15 years of unrelated professional background in adult education prior to
     false
   );
 
-  // Fixture 5: stability across repeated runs — a user-cannot-confirm entry
-  // must classify identically every time, not just once. Re-run the same
-  // classification from scratch (a fresh parse + fresh classify, exactly
-  // what a second CLI invocation would do) and diff the two results.
   const rerun1 = classifyStoryBank(fakeStoryBank, fakeCv);
   const rerun2 = classifyStoryBank(fakeStoryBank, fakeCv);
   eq('repeated classification of the same story-bank is byte-identical (idempotent)', rerun1, rerun2);
@@ -745,9 +352,6 @@ Brings 15 years of unrelated professional background in adult education prior to
     true
   );
 
-  // Fixture 6: explicit user-stated marker counts as an existing-equivalent
-  // confirmation even though cv.md doesn't carry the exact figure — the
-  // "OR carry an explicit provenance marker" half of the AGENTS.md rule.
   const userStatedBank = `
 ### [Scale] Conference Talk
 **Provenance:** user-stated 2026-01-15
@@ -764,13 +368,6 @@ Brings 15 years of unrelated professional background in adult education prior to
     true
   );
 
-  // Fixture 7 (regression, CodeRabbit finding — explicit markers evaluated
-  // too late): a claim whose number is NOT in cv.md, but whose surrounding
-  // context happens to share a word with cv.md ("cohort", verbatim from
-  // fakeCv's "per cohort"), must still resolve straight to `existing` via
-  // the marker — not get redirected into `supportedByResume` by the
-  // context-overlap heuristic running first. Tested for both explicit
-  // marker forms: `user-stated YYYY-MM-DD` and the literal `source: cv.md`.
   const userStatedOverlapBank = `
 ### [Scale] Certification Program
 **Provenance:** user-stated 2026-02-01
@@ -792,14 +389,6 @@ Brings 15 years of unrelated professional background in adult education prior to
     false
   );
 
-  // Control case (CodeRabbit follow-up, PR #2948): the negative assertion
-  // above passes vacuously if the context-overlap heuristic stops producing
-  // any overlap at all (e.g. a future change to the stopword list or context
-  // window), silently stopping this test from actually proving the marker
-  // wins an ordering race. Classify the identical story body with the
-  // Provenance line removed and assert it DOES land in supportedByResume —
-  // proving the heuristic really would fire here, so the marker is what's
-  // overriding it above, not an absence of overlap in the first place.
   const noMarkerOverlapBank = userStatedOverlapBank.replace(/\*\*Provenance:\*\* user-stated 2026-02-01\n/, '');
   const noMarkerOverlapResult = classifyStoryBank(noMarkerOverlapBank, fakeCv);
   eq(
@@ -837,14 +426,12 @@ Brings 15 years of unrelated professional background in adult education prior to
     true
   );
 
-  // diagnose() — low-confidence signaling
   eq('missing story-bank.md is diagnosed as no-story-bank', diagnose(false, true, 0, 0).reason, 'no-story-bank');
   eq('missing cv.md is diagnosed as no-cv', diagnose(true, false, 0, 0).reason, 'no-cv');
   eq('zero parsed stories is diagnosed as no-stories-parsed', diagnose(true, true, 0, 0).reason, 'no-stories-parsed');
   eq('stories parsed but zero claims is diagnosed as no-numeric-claims-found', diagnose(true, true, 3, 0).reason, 'no-numeric-claims-found');
   eq('a conclusive run (claims found) is not diagnosed', diagnose(true, true, 3, 2), null);
 
-  // parseStoryBlocks — theme-prefixed and bare titles both parse
   const blocks = parseStoryBlocks(fakeStoryBank);
   eq('parses all four story blocks', blocks.length, 4);
   eq('strips the [Theme] prefix from the title', blocks[0].title, 'Onboarding Workflow');
@@ -854,8 +441,6 @@ Brings 15 years of unrelated professional background in adult education prior to
   console.log(`\nstory-provenance-check self-test: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }
-
-// ── Main ─────────────────────────────────────────────────────────────
 
 if (isMainModule(import.meta.url)) {
   if (selfTestMode) {
@@ -868,10 +453,6 @@ if (isMainModule(import.meta.url)) {
 
     const result = classifyStoryBank(storyBankText, cvText);
     const entries = storyBankExists ? parseStoryBlocks(storyBankText) : [];
-    // Every `### ` block counts, valid or not: this checker did parse them and
-    // did check their figures. A missing Action is reported in `malformed`,
-    // not as "no stories parsed". Table rows don't count, so a bank of nothing
-    // but table rows is still a low-confidence result.
     const storyCount = entries.filter((e) => e.kind === 'story').length;
     const malformed = malformedEntries(entries);
     const claimCount = result.existing.length + result.supportedByResume.length

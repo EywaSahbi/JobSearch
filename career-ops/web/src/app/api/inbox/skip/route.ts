@@ -7,10 +7,6 @@ import { setInboxSkip } from "@/lib/inbox-skip.mjs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Inbox Skip/undo: flip `- [ ]` ↔ `- [x]` on the matching data/pipeline.md row.
-// This is NOT /api/status — Home DecisionCard Skip writes a tracker Discarded
-// status; the inbox is the pipeline checklist.
-
 const ERROR_HTTP: Record<string, number> = {
   "invalid-url": 400,
   "unmatched": 404,

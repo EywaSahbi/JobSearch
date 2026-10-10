@@ -10,15 +10,12 @@ import (
 	"github.com/santifer/career-ops/dashboard/internal/model"
 )
 
-// CanonicalizeArchetype maps raw, noisy LLM-extracted archetype strings
-// into structured canonical categories for high-signal analytics.
 func CanonicalizeArchetype(raw string) string {
 	r := strings.ToLower(strings.TrimSpace(raw))
 	if r == "" || r == "unknown" || r == "none" || r == "n/a" || r == "—" || r == "-" || strings.HasPrefix(r, "none ") {
 		return "Unclassified"
 	}
 
-	// Priority-based keyword classification
 	if strings.Contains(r, "agentic") || strings.Contains(r, "automation") {
 		return "Agentic & Automation"
 	}
@@ -53,7 +50,6 @@ func CanonicalizeArchetype(raw string) string {
 	return "Other / Cross-Functional"
 }
 
-// isFalseCityState checks if extracted strings represent false positive location fragments.
 func isFalseCityState(city, state string) bool {
 	c := strings.ToLower(strings.TrimSpace(city))
 	s := strings.ToUpper(strings.TrimSpace(state))
@@ -67,8 +63,6 @@ func isFalseCityState(city, state string) bool {
 	return false
 }
 
-// titleCase returns a UTF-8 rune-aware title-cased version of s:
-// each word is lowercased and its first rune is converted with unicode.ToUpper.
 func titleCase(s string) string {
 	words := strings.Fields(s)
 	for i, w := range words {
@@ -82,7 +76,6 @@ func titleCase(s string) string {
 	return strings.Join(words, " ")
 }
 
-// CanonicalizeLocation normalizes casing and eliminates noise strings from location data.
 func CanonicalizeLocation(raw string) string {
 	loc := strings.TrimSpace(raw)
 	if loc == "" || loc == "—" || loc == "-" || loc == "N/A" {
@@ -132,8 +125,6 @@ func CanonicalizeLocation(raw string) string {
 		if city == "" {
 			return ""
 		}
-		// Trailing comma produces an empty state component (e.g. "Berlin,").
-		// Return just the canonical city rather than appending a bare ", ".
 		if state == "" {
 			return city
 		}
@@ -145,7 +136,6 @@ func CanonicalizeLocation(raw string) string {
 		return city + ", " + state
 	}
 
-	// 3+ parts: normalize every component using the stable casing rule and filter false positives.
 	var normalized []string
 	for i, p := range parts {
 		trimmed := strings.TrimSpace(p)
@@ -175,12 +165,9 @@ func CanonicalizeLocation(raw string) string {
 	return strings.Join(normalized, ", ")
 }
 
-// ComputeStatsMetrics builds dimension-based breakdowns (archetype, work
-// mode, location, pay, pay histogram, and insight captions) from parsed applications.
 func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 	sm := model.StatsMetrics{}
 
-	// 1. Archetype aggregation
 	type archAcc struct {
 		count      int
 		scoreSum   float64
@@ -227,7 +214,6 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		return sm.Archetypes[i].Label < sm.Archetypes[j].Label
 	})
 
-	// 2. Work mode breakdown
 	modeCounts := make(map[string]int)
 	modeTotal := 0
 	for _, app := range apps {
@@ -246,7 +232,6 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		return sm.WorkModes[i].Label < sm.WorkModes[j].Label
 	})
 
-	// 3. Location breakdown
 	locCounts := make(map[string]int)
 	locTotal := 0
 	for _, app := range apps {
@@ -269,7 +254,6 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		sm.Locations = sm.Locations[:maxLocations]
 	}
 
-	// 4. Pay statistics and histogram
 	var payValues []float64
 	payBuckets := map[string]int{
 		"< $100K":       0,
@@ -326,13 +310,12 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		}
 	}
 
-	// 5. Score Quality Tiers for Pie Chart breakdown
 	tierCounts := map[string]int{
-		"Elite (≥4.5)":      0,
-		"Strong (4.0-4.4)":  0,
-		"Viable (3.5-3.9)":  0,
+		"Elite (≥4.5)":       0,
+		"Strong (4.0-4.4)":   0,
+		"Viable (3.5-3.9)":   0,
 		"Moderate (3.0-3.4)": 0,
-		"Below Bar (<3.0)":  0,
+		"Below Bar (<3.0)":   0,
 	}
 	scoreTotal := 0
 	for _, app := range apps {
@@ -371,7 +354,6 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 					Pct:   safePct(count, scoreTotal),
 				})
 			}
-			// Elite and Strong together = score >= 4.0
 			if t == "Elite (≥4.5)" || t == "Strong (4.0-4.4)" {
 				qualityBarCount += count
 			}
@@ -379,7 +361,6 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		sm.QualityBarPct = safePct(qualityBarCount, scoreTotal)
 	}
 
-	// 5.5 Seniority Mix Pie Chart
 	seniorityCounts := map[string]int{
 		"Executive":         0,
 		"Staff / Principal": 0,
@@ -411,17 +392,12 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		}
 	}
 
-	// Insights are generated at render time (renderInsights) to respect the
-	// active language toggle; do not store them here.
-
 	return sm
 }
 
-// GenerateInsights produces localized strategic insights from metrics.
 func GenerateInsights(sm model.StatsMetrics) []string {
 	var insights []string
 
-	// Volume & Fit insight
 	if len(sm.Archetypes) > 0 {
 		topArch := sm.Archetypes[0]
 		var bestFitArch model.ArchetypeStat
@@ -441,14 +417,12 @@ func GenerateInsights(sm model.StatsMetrics) []string {
 		}
 	}
 
-	// Work Mode insight
 	if len(sm.WorkModes) > 0 {
 		topMode := sm.WorkModes[0]
 		insights = append(insights, fmt.Sprintf(i18n.Current.InsightWorkMode,
 			topMode.Pct, topMode.Label))
 	}
 
-	// Pay insight
 	if sm.Pay.Count > 0 {
 		insights = append(insights, fmt.Sprintf(i18n.Current.InsightPayBenchmark,
 			sm.Pay.MedianPayMax/1000, sm.Pay.MaxPayMax/1000, sm.Pay.Count))
@@ -457,8 +431,6 @@ func GenerateInsights(sm model.StatsMetrics) []string {
 	return insights
 }
 
-// labelCountStats converts a label->count map into sorted LabelCountStat
-// rows with pct-of-total computed against denom.
 func labelCountStats(counts map[string]int, denom int) []model.LabelCountStat {
 	stats := make([]model.LabelCountStat, 0, len(counts))
 	for label, count := range counts {
@@ -471,7 +443,6 @@ func labelCountStats(counts map[string]int, denom int) []model.LabelCountStat {
 	return stats
 }
 
-// median returns the median of a pre-sorted slice of float64s.
 func median(sorted []float64) float64 {
 	n := len(sorted)
 	if n == 0 {
@@ -483,7 +454,6 @@ func median(sorted []float64) float64 {
 	return (sorted[n/2-1] + sorted[n/2]) / 2
 }
 
-// deriveSeniority extracts the seniority level from a raw job title.
 func deriveSeniority(role string) string {
 	r := strings.ToLower(role)
 	if strings.Contains(r, "chief") || strings.Contains(r, "vp ") || strings.Contains(r, "vice president") || strings.Contains(r, "head") || strings.Contains(r, "director") {

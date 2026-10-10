@@ -26,23 +26,13 @@ func funnelRank(status string) int {
 	return 0
 }
 
-// StatusLedger is what the dashboard needs from status-log.tsv, the
-// append-only transition ledger beside the tracker
-// ({tracker#}\t{date}\t{from}\t{to}\t{source}\t{note}, see DATA_CONTRACT.md).
 type StatusLedger struct {
-	// Reached is the highest funnel stage each tracker # ever reached, so a
-	// row that moved on to Rejected still counts the Interview it had.
-	Reached map[int]int
-	// LatestDate is the date of each tracker #'s most recent surviving
-	// transition — what the DATE column shows. Absent when the row has none.
+	Reached    map[int]int
 	LatestDate map[int]string
 }
 
 var reLedgerDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
-// ReadStatusLedger reads only the ledger beside the active tracker, including
-// tracker overrides and the legacy root layout. Missing history is harmless;
-// other read failures must not silently erase previously reached stages.
 func ReadStatusLedger(root string) (StatusLedger, error) {
 	content, err := os.ReadFile(filepath.Join(filepath.Dir(resolveTrackerPath(root)), "status-log.tsv"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -54,8 +44,6 @@ func ReadStatusLedger(root string) (StatusLedger, error) {
 	return parseStatusLedger(string(content)), nil
 }
 
-// ReadFunnelHistory is the funnel-only view of ReadStatusLedger, kept for
-// callers that need nothing but the reached stages.
 func ReadFunnelHistory(root string) (map[int]int, error) {
 	ledger, err := ReadStatusLedger(root)
 	if err != nil {
@@ -73,19 +61,6 @@ type ledgerObservation struct {
 	date string
 }
 
-// parseStatusLedger folds the ledger once for both views.
-//
-// Reached keeps its long-standing, lenient rule: any line with a numeric
-// tracker # and non-empty date/from/to contributes both states' ranks.
-//
-// LatestDate mirrors foldObservations in funnel-velocity.mjs rather than
-// taking a plain maximum, because the ledger is append-only and corrects
-// itself by appending: a `to` of "-" retracts the row's latest surviving
-// observation (so a mis-click's later date does not linger), and a
-// `correction` line re-dates the latest observation with the same target
-// (so a transition moved to an earlier day actually moves). Source validity
-// is deliberately not a gate here — for a display date a `backfill` line is
-// still the best information there is.
 func parseStatusLedger(content string) StatusLedger {
 	reached := make(map[int]int)
 	timelines := make(map[int][]ledgerObservation)
@@ -156,9 +131,6 @@ func parseStatusLedger(content string) StatusLedger {
 	return StatusLedger{Reached: reached, LatestDate: latest}
 }
 
-// ApplyStatusDates stamps each row's latest ledger transition date onto
-// StatusDate. Rows whose tracker # was synthesized (TrackerNumberMissing) are
-// skipped: a display number must never join another row's ledger history.
 func ApplyStatusDates(apps []model.CareerApplication, dates map[int]string) {
 	if len(dates) == 0 {
 		return

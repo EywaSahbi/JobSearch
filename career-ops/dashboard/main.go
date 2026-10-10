@@ -46,13 +46,10 @@ func (m *appModel) reloadPipelineData() {
 	if historyErr == nil {
 		m.progressMetrics = data.ComputeProgressMetrics(apps, ledger.Reached)
 	}
-	// After a failed ledger read LatestDate is nil, so the DATE column falls
-	// back to each row's tracker date while current statuses still refresh.
 	data.ApplyStatusDates(apps, ledger.LatestDate)
 	m.pipeline = m.pipeline.WithReloadedData(apps, metrics)
 	enrichArchetypes(m.careerOpsPath, apps, &m.pipeline)
 	m.statsMetrics = data.ComputeStatsMetrics(apps)
-	// Count only apps with a score so the header reflects evaluated offers.
 	m.evaluatedCount = 0
 	for _, a := range apps {
 		if a.Score > 0 {
@@ -60,24 +57,16 @@ func (m *appModel) reloadPipelineData() {
 		}
 	}
 	if historyErr != nil {
-		// Refresh current statuses, but retain historical metrics and surface
-		// the failed history read in the TUI after rebuilding the pipeline.
 		m.pipeline, _ = m.pipeline.Update(screens.PipelineHistoryFailedMsg{Err: historyErr.Error()})
 	}
 }
 
-// enrichArchetypes lazy-loads each app's report-derived archetype (used by
-// the stats screen's breakdown table) and, as a side effect, primes the
-// pipeline model's report preview cache the same way main()'s startup loop
-// does — so a manual refresh doesn't blank out report previews.
 func enrichArchetypes(careerOpsPath string, apps []model.CareerApplication, pm *screens.PipelineModel) {
 	for i := range apps {
 		if apps[i].ReportPath == "" {
 			continue
 		}
 		archetype, tldr, remote, comp := data.LoadReportSummary(careerOpsPath, apps[i].ReportPath)
-		// Only overwrite when the report actually supplies a non-empty archetype;
-		// preserve any value already derived from the tracker.
 		if archetype != "" {
 			apps[i].Archetype = archetype
 		}
@@ -91,12 +80,10 @@ func (m appModel) Init() tea.Cmd {
 	return nil
 }
 
-// Update manages global app state and routes incoming messages to active screens.
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "t", "T":
-			// Toggle language globally, unless the user is actively typing in a text input field
 			if !(m.state == viewPipeline && m.pipeline.IsTextInputActive()) {
 				i18n.ToggleLang()
 			}
@@ -138,7 +125,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case screens.PipelineUpdateStatusAndNotesMsg:
-		// Issue 1380: atomic status + notes write from the discard reason picker.
 		err := data.UpdateApplicationStatusAndNotes(msg.CareerOpsPath, msg.App, msg.NewStatus, msg.NotesAppend)
 		m.reloadPipelineData()
 		if err != nil {
@@ -186,9 +172,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		err := data.UpdateApplicationStatus(m.careerOpsPath, msg.App, msg.NewStatus)
 		m.reloadPipelineData()
 		if err != nil {
-			// A sidecar failure can follow a successful tracker write. Reflect
-			// the persisted status, retaining the old one if it cannot be read
-			// or the report identity is no longer unique.
 			if msg.App.ReportNumber != "" {
 				savedStatus, matches := "", 0
 				for _, app := range data.ParseApplications(m.careerOpsPath) {
@@ -269,24 +252,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// openCmd wraps openWithDefaultApp (OS-specific) as a tea.Cmd. Shared by the
-// job-URL (`o`, pipeline and report viewer) and CV-PDF (`d`) actions.
 func openCmd(target string) tea.Cmd {
 	return func() tea.Msg {
 		if err := openWithDefaultApp(target); err != nil {
-			// Issue 3913: the dashboard runs with tea.WithAltScreen(), so a
-			// message on stderr is never visible. Report the failure back to
-			// the pipeline screen, which flashes it in the help bar.
 			return screens.PipelineOpenFailedMsg{Target: target, Err: err.Error()}
 		}
 		return nil
 	}
 }
 
-// runGeneratePDF shells out to node generate-pdf.mjs in the career-ops root,
-// opens the resulting PDF on success, and reports the outcome back to the
-// pipeline screen as a PipelinePDFGeneratedMsg. Runs in a tea.Cmd goroutine,
-// so the UI stays responsive while Chromium renders.
 func runGeneratePDF(msg screens.PipelineGeneratePDFMsg) tea.Cmd {
 	return func() tea.Msg {
 		args := []string{"generate-pdf.mjs", msg.HTMLPath, msg.PDFPath}
@@ -310,9 +284,6 @@ func runGeneratePDF(msg screens.PipelineGeneratePDFMsg) tea.Cmd {
 	}
 }
 
-// summarizeCmdError condenses a failed command into one help-bar-sized line:
-// the last non-empty output line when there is one (generate-pdf.mjs prints
-// its error there), otherwise the exec error itself.
 func summarizeCmdError(err error, out []byte) string {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -393,14 +364,12 @@ func main() {
 
 	careerOpsPath := *pathFlag
 
-	// Load applications
 	apps := data.ParseApplications(careerOpsPath)
 	if apps == nil {
 		fmt.Fprintf(os.Stderr, "Error: could not find applications.md in %s or %s/data/\n", careerOpsPath, careerOpsPath)
 		os.Exit(1)
 	}
 
-	// Compute metrics
 	ledger, err := data.ReadStatusLedger(careerOpsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -410,7 +379,6 @@ func main() {
 	metrics := data.ComputeMetrics(apps)
 	progressMetrics := data.ComputeProgressMetrics(apps, ledger.Reached)
 
-	// Batch-load all report summaries
 	t := theme.NewTheme("auto")
 	pm := screens.NewPipelineModel(t, apps, metrics, careerOpsPath, 120, 40)
 

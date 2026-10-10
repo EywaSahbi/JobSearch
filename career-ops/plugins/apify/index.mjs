@@ -1,30 +1,3 @@
-// @ts-check
-// ── Reference seed ── This bundled plugin is a stable, reviewed example. To
-// extend it, publish career-ops-plugin-<id> with "supersedesBundled": true and
-// your version takes precedence once installed (see docs/PLUGINS.md). Bundled
-// seeds take only security/compat fixes — feature work happens in the successor repo.
-//
-// Apify provider plugin — runs any Apify actor and maps its dataset items to
-// the {title, url, company, location} Job shape the scanner expects. All
-// variation (which actor, what input, how to read fields) lives in portals.yml.
-//
-// Ported from the generic Apify provider contributed by @ageem23 in #693 (with
-// thanks); it also homes the LinkedIn-via-Apify use case from #791/#1202. As a
-// KEYED provider it lives here in plugins/ (not the zero-key providers/ dir):
-// enable it in config/plugins.yml and put APIFY_TOKEN in .env. It fires ONLY on
-// a portals.yml entry that sets `provider: apify` — never via auto-detection.
-//
-//   tracked_companies:
-//     - name: "Indeed — VP Engineering (Chicago)"
-//       provider: apify
-//       actor: misceres/indeed-scraper
-//       input: { position: "VP of Engineering", location: "Chicago, IL", maxItems: 25 }
-//       field_map:
-//         title:    [positionName, title]    # array = first non-empty wins
-//         url:      url
-//         company:  [company, companyName]
-//         location: [location, formattedLocation]
-
 import { mkdirSync, writeFileSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
@@ -37,9 +10,6 @@ function getPath(obj, p) {
   return p.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
-// A valid field_map entry is a single key ('positionName') or an ordered list
-// of fallback keys (['positionName', 'title']). Reject any other shape at
-// config-load time with a clear error instead of crashing mid-scan.
 export function isFieldSpec(spec) {
   if (typeof spec === 'string') return true;
   if (Array.isArray(spec) && spec.length > 0 && spec.every(s => typeof s === 'string')) return true;
@@ -57,9 +27,6 @@ function pickField(item, spec) {
 
 const ALLOWED_DEFAULT_KEYS = new Set(['title', 'url', 'company', 'location']);
 
-// Actors return URLs from arbitrary external sites — treat them as untrusted.
-// Reject anything that isn't https so javascript:/data:/file:/http: URLs can't
-// end up clickable in pipeline.md or in the JD-cache filename hash.
 export function isHttpsUrl(value) {
   try {
     return new URL(String(value)).protocol === 'https:';
@@ -84,8 +51,6 @@ function yamlEscape(str) {
   return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-// Lightweight HTML → text for actor description fields (enough for downstream
-// snippet extraction and full evaluation, not a full parser).
 export function htmlToText(s) {
   const raw = String(s || '');
   if (!raw || !/[<&]/.test(raw)) return raw.trim();
@@ -102,7 +67,6 @@ export function htmlToText(s) {
     cleaned = cleaned.replace(/<[^>]+>/g, '');
   } while (cleaned !== prev);
   return cleaned
-    // Decode &amp; LAST so `&amp;#60;` round-trips to `&#60;` not `<`.
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -115,10 +79,6 @@ export function htmlToText(s) {
     .trim();
 }
 
-// Write jds/{slug}-{hash}.md and return its relative path. The URL-derived hash
-// keeps two distinct postings sharing a company+title from colliding. Atomic
-// (flag:'wx') against the 10-worker TOCTOU race; any FS failure returns null so
-// the caller falls back to the remote URL.
 function saveJd(normalized, descriptionBody, sourceLabel) {
   let relPath = null;
   try {
@@ -169,11 +129,9 @@ export function normalizeItem(item, fieldMap, defaults) {
   return out;
 }
 
-/** The keyed provider hook. Reads APIFY_TOKEN from the plugin's scoped ctx.env. */
 export default {
   provider: {
     id: 'apify',
-    // Keyed providers never auto-detect (the engine also forces this to null).
     detect() { return null; },
 
     async fetch(entry, ctx) {

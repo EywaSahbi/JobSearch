@@ -1,18 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * generate-latex.mjs — Validate and compile a generated .tex CV file to PDF
- *
- * Usage:
- *   node generate-latex.mjs <input.tex> [output.pdf]
- *   node generate-latex.mjs <input.tex> [output.pdf] --compile-only
- *
- * Default: validates career-ops template structure (from templates/cv-template.tex).
- * --compile-only: skip template validation; compile any user-owned .tex (latex-tex mode).
- *
- * Requires: tectonic (preferred) or pdflatex on PATH.
- */
-
 import { readFile, writeFile, stat, copyFile, rm } from 'fs/promises';
 import { resolve, basename, dirname, join } from 'path';
 import { execFileSync } from 'child_process';
@@ -28,43 +15,20 @@ const REQUIRED_COMMANDS = [
   '\\\\resumeProjectHeading',
 ];
 
-// Proper Unicode script test (not a hand-picked codepoint range) so
-// supplementary-plane ideographs (CJK Unified Ideographs Extension B and
-// later, e.g. U+20000+) are covered, not just the BMP. Needs the `u` flag --
-// without it, \p{Script=...} throws, and a bare codepoint-range class only
-// ever sees UTF-16 surrogate halves for anything above U+FFFF, never the
-// real character.
 const CJK_RE = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u;
 
-// xeCJK (Latin-doc CJK) or ctex (Chinese-doc-class CJK) means the .tex
-// already loads a CJK-capable font setup (see templates/cv-template.cjk.tex).
-// Matches xeCJK/ctex anywhere in a \usepackage package list (not just as the
-// sole argument, e.g. `\usepackage{fontspec,xeCJK}`), and ctex's own document
-// classes (`\documentclass{ctexart}` and friends), which auto-configure
-// xeCJK/LuaTeX-ja/CJK depending on engine without a separate \usepackage.
 const CJK_PACKAGE_RE = /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xeCJK|ctex)\b[^}]*\}|\\documentclass(?:\[[^\]]*\])?\{ctex(?:art|rep|book)?\}/;
 
-/**
- * Resolve the LaTeX engine available on PATH, preferring tectonic (XeTeX
- * backend, supports CJK via fontspec/xeCJK) over pdflatex (no CJK support).
- * @returns {string|null}
- */
 export function resolveLatexEngine() {
   for (const candidate of ['tectonic', 'pdflatex']) {
     try {
       execFileSync(candidate, ['--version'], { stdio: 'pipe' });
       return candidate;
-    } catch { /* not found */ }
+    } catch { }
   }
   return null;
 }
 
-/**
- * @param {string} content
- * @param {boolean} compileOnly
- * @param {string|null} [engine] - resolved LaTeX engine ('tectonic'/'pdflatex'/null); affects CJK handling
- * @returns {{ issues: string[], counts: object }}
- */
 export function validateLatexContent(content, compileOnly, engine = null) {
   const issues = [];
   let resumeItemCount = 0;
@@ -93,8 +57,6 @@ export function validateLatexContent(content, compileOnly, engine = null) {
   if (CJK_RE.test(content)) {
     const hasCjkPackage = CJK_PACKAGE_RE.test(content);
     if (engine === 'tectonic' && hasCjkPackage) {
-      // tectonic's backend is XeTeX, so fontspec/xeCJK (loaded by
-      // templates/cv-template.cjk.tex) can render CJK glyphs — no issue.
     } else if (engine === 'tectonic') {
       issues.push('CJK characters detected but no CJK package (xeCJK/ctex) is loaded. Generate from the CJK-aware template instead: `node build-cv-latex.mjs <input.json> <output.tex> --template=cjk` (templates/cv-template.cjk.tex), or use `pdf` mode (HTML to PDF, which renders CJK) for these CVs.');
     } else {
@@ -134,13 +96,6 @@ export function validateLatexContent(content, compileOnly, engine = null) {
   };
 }
 
-/**
- * @param {string} absPath
- * @param {string} content
- * @param {string|null} outputPath
- * @param {boolean} compileOnly
- * @returns {Promise<object>}
- */
 export async function compileLatexFile(absPath, content, outputPath, compileOnly) {
   const engine = resolveLatexEngine();
   const { issues, counts } = validateLatexContent(content, compileOnly, engine);
@@ -217,7 +172,7 @@ export async function compileLatexFile(absPath, content, outputPath, compileOnly
       if (errorLines.length > 0) {
         latexError = errorLines.join('\n');
       }
-    } catch { /* no log */ }
+    } catch { }
 
     report.compiled = false;
     report.compileError = latexError;
@@ -254,8 +209,6 @@ export async function compileLatexFile(absPath, content, outputPath, compileOnly
   return report;
 }
 
-// ── CLI flags + help ──────────────────────────────────────
-
 const KNOWN_FLAGS = ['--compile-only', '--help', '-h'];
 
 const USAGE = `Usage:
@@ -268,13 +221,6 @@ Requires tectonic (preferred) or pdflatex on PATH.`;
 async function main() {
   const rawArgs = process.argv.slice(2);
 
-  // Before the positional reads below: every argv token that is not
-  // --compile-only is consumed as a PATH, so an unrecognized flag does not
-  // fall through to a default, it silently becomes a filename. `--help`
-  // landed in args[0] and was resolved as the input .tex ("Error reading
-  // /…/--help: ENOENT"), and a mistyped `--compileonly` landed in args[1]
-  // as the OUTPUT path while template validation it meant to skip ran anyway.
-  // This is the defect lib/cli-flags.mjs was written for; see its header.
   validateFlags(rawArgs, KNOWN_FLAGS, USAGE);
 
   const compileOnly = rawArgs.includes('--compile-only');

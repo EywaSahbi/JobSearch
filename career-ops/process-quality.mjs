@@ -1,37 +1,4 @@
 #!/usr/bin/env node
-/**
- * process-quality.mjs — Recruiting-Process Friction Aggregator for career-ops
- *
- * Parses data/active-interviews.md, extracts inline `[process-friction]` tags
- * from the Notes column, and aggregates them per company into a friction
- * signal — independent of company/role fit (#960) and interviewer red-flag
- * behavior (#1232). This tracks a third, distinct axis: is the *recruiting
- * process itself* (scheduling, communication clarity, tooling) well-run?
- *
- * Tagging convention (candidate-authored, in the Notes column of
- * data/active-interviews.md):
- *   [process-friction]                          — friction occurred, no detail
- *   [process-friction: <short reason>]           — friction occurred, with detail
- *
- * This is a company/process-level signal only — never tied to a named
- * individual recruiter. See issue #1466.
- *
- * Example friction patterns (illustrative, NOT an enforced taxonomy — the
- * tag stays free-text; tag anything that fits the spirit even if it doesn't
- * match one of these verbatim):
- *   [process-friction: call scheduled for a rejection with no info beyond what email would convey]
- *   [process-friction: prescreen repeated info already given in a prior round]
- *   [process-friction: interview rescheduled 2+ times same week]
- *   [process-friction: no confirmation after stated timeline passed]
- *
- * Run: node process-quality.mjs             (JSON to stdout)
- *      node process-quality.mjs --summary   (human-readable table)
- *      node process-quality.mjs --min-threshold 2  (min total interviews per company to report)
- *      node process-quality.mjs --file path/to/active-interviews.md  (override the data path; test isolation)
- *      node process-quality.mjs --self-test
- *
- * Issue #1466 — github.com/career-ops-hq/career-ops
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -48,55 +15,21 @@ const DEFAULT_ACTIVE_INTERVIEWS_PATH = existsSync(join(CAREER_OPS, 'data/active-
 
 const FRICTION_TAG = /\[process-friction(?::\s*([^\]]+))?\]/i;
 
-// --- CLI args ---
 const args = process.argv.slice(2);
 const summaryMode = args.includes('--summary');
 const selfTestMode = args.includes('--self-test');
-// --file overrides the data path — mirrors validate-portals.mjs / verify-portals.mjs's
-// --file convention. Primarily for test isolation: it lets tests point at a
-// controlled temp path instead of depending on whatever data/active-interviews.md
-// happens to exist (or not) in the caller's real workspace.
 const fileFlagValue = flagValue(args, '--file');
 const ACTIVE_INTERVIEWS_PATH = fileFlagValue !== undefined
   ? fileFlagValue
   : DEFAULT_ACTIVE_INTERVIEWS_PATH;
-// safeIntFlag, not parseInt: this file had NO shape check, so unlike
-// detect-reposts it did not even fall back — `--min-threshold
-// 999999999999999999999` was ACCEPTED and reported as `"minThreshold": 1e+21`,
-// the exact "metadata reports a value that is not the one in effect" failure
-// detect-reposts.mjs documents isSafeInteger as existing to prevent (#2982).
-// "abc" and "-5" already fell back to 1 via the clamp below; "3.5" silently
-// became 3. All of them now take the documented fallback.
 const rawMinThreshold = safeIntFlag(flagValue(args, '--min-threshold'), 1);
-// Clamped here (not just inside aggregateProcessQuality) so printSummary's
-// displayed threshold always matches the threshold actually applied.
 const MIN_THRESHOLD = Number.isFinite(rawMinThreshold) && rawMinThreshold >= 0 ? rawMinThreshold : 1;
 
-// Case-insensitive column lookup shared by extractFriction and
-// aggregateProcessQuality — the header wording comes from a candidate-edited
-// markdown file, so "Notes" vs "notes" vs " Notes " must all resolve the
-// same way. Centralized here so both call sites can never drift apart.
 function findColumn(row, name) {
   const key = Object.keys(row || {}).find(k => k.trim().toLowerCase() === name);
   return key ? String(row[key] ?? '') : '';
 }
 
-// --- Parse data/active-interviews.md ---
-//
-// Table format: `| Company | Role | Round | Date/Time | Interviewer | Status | Notes |`
-// A separator row (all dashes/colons/pipes) follows the header and is skipped.
-// Only well-formed rows (same column count as the header) are kept; malformed
-// rows are silently dropped rather than crashing the parser.
-//
-// Only the FIRST contiguous block of pipe-formatted lines is parsed as the
-// table. This intentionally stops at the first non-table line rather than
-// collecting every pipe-formatted line in the file — a document with more
-// than one markdown table (e.g. a second table added later, or Landmines-
-// style tables from other files if ever concatenated) must not have its
-// unrelated rows merged into the active-interviews result.
-//
-// Exported so external tests can call parseActiveInterviews() directly on a
-// markdown string.
 export function parseActiveInterviews(content) {
   if (typeof content !== 'string' || !content.trim()) return [];
 
@@ -142,12 +75,6 @@ export function parseActiveInterviews(content) {
   return rows;
 }
 
-// --- Friction extraction ---
-//
-// Reads the Notes column (case-insensitive lookup, since header wording is
-// candidate-editable free text) and pulls out the [process-friction] tag if
-// present. Returns { hasFriction, reason } — reason is '' when the tag is
-// present without a detail string.
 export function extractFriction(row) {
   if (!row || typeof row !== 'object') return { hasFriction: false, reason: '' };
   const notes = findColumn(row, 'notes');
@@ -156,20 +83,8 @@ export function extractFriction(row) {
   return { hasFriction: true, reason: (match[1] || '').trim() };
 }
 
-// Local alias so the call sites below read unchanged; the definition moved to
-// lib/placeholder-cell.mjs, which was one of two identical copies.
 const isPlaceholder = isPlaceholderCompany;
 
-// --- Core aggregation ---
-//
-// Groups rows by company (case-insensitive, trimmed), counts total
-// interview rows and friction-tagged rows per company, and returns only
-// companies with totalInterviews >= minThreshold. Companies are sorted by
-// frictionCount descending, then frictionRate descending, then company name
-// ascending (stable, deterministic ordering for tests and CLI output).
-//
-// Exported so external tests can call aggregateProcessQuality() directly on
-// a parsed row list.
 export function aggregateProcessQuality(rows, minThreshold = 1) {
   if (!Array.isArray(rows)) return [];
   const threshold = Number.isFinite(minThreshold) && minThreshold >= 0 ? minThreshold : 1;
@@ -181,25 +96,10 @@ export function aggregateProcessQuality(rows, minThreshold = 1) {
     if (!row || typeof row !== 'object') continue;
     const company = companyKey(row);
 
-    // `?` is the documented marker for an undisclosed end employer (#1596), not
-    // a company name. Grouping on it merged every unrelated employer into ONE
-    // row and reported a friction rate averaged across all of them — the number
-    // a user acts on ("this company wastes my time") computed over companies
-    // they never dealt with. merge-tracker already refuses that merge; this
-    // aggregate has to refuse it too.
-    //
-    // The channel is what distinguishes those rows, so it becomes the bucket.
-    // A row naming neither employer nor channel supports no per-company claim
-    // at all and is dropped rather than given one.
     let label = company;
     if (isPlaceholder(company)) {
       const via = findColumn(row, 'via').trim();
       if (!via || isPlaceholder(via)) continue;
-      // The prefix is ALWAYS `?`, never the cell's own spelling. isPlaceholder
-      // accepts `?`, `—`, `-` and an empty cell, and every one of them means the
-      // same thing — but keeping them verbatim keys `— (via Hays)` apart from
-      // `? (via Hays)`, splitting one channel's totals. That is this function's
-      // own bug in miniature, so it gets the same answer: normalize, then group.
       label = `? (via ${via})`;
     }
 
@@ -241,7 +141,6 @@ function loadActiveInterviews(path = ACTIVE_INTERVIEWS_PATH) {
   return parseActiveInterviews(readFileSync(path, 'utf-8'));
 }
 
-// --- Summary mode ---
 function printSummary(signals) {
   console.log(`\n${'='.repeat(78)}`);
   console.log('  Process Quality Signal — career-ops');
@@ -275,7 +174,6 @@ function printSummary(signals) {
   console.log('');
 }
 
-// --- Self-test ---
 function runSelfTest() {
   const md = [
     '# Active Interviews',
@@ -329,15 +227,12 @@ function runSelfTest() {
   check(parseActiveInterviews('').length === 0, 'empty markdown returns no rows');
   check(parseActiveInterviews(null).length === 0, 'non-string input returns no rows (no crash)');
 
-  // A second, unrelated table later in the same document must NOT be merged
-  // into the parsed rows — only the first contiguous table block is parsed.
   const twoTablesMd = md + '\n\nSome other section.\n\n' +
     '| Foo | Bar |\n|-----|-----|\n| unrelated | table |\n';
   const twoTablesRows = parseActiveInterviews(twoTablesMd);
   check(twoTablesRows.length === 5, 'a second markdown table later in the document is not merged in');
   check(!twoTablesRows.some(r => r.Company === undefined && 'Foo' in r), 'second-table columns (Foo/Bar) never appear in the result');
 
-  // Threshold filtering: companies with fewer interviews than minThreshold are excluded.
   const highThreshold = aggregateProcessQuality(rows, 2);
   check(highThreshold.some(s => s.company === 'Beta Corp'), 'threshold=2: Beta Corp (2 rows) included');
   check(highThreshold.some(s => s.company === 'Acme'), 'threshold=2: Acme (2 rows) included');
@@ -347,7 +242,6 @@ function runSelfTest() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-// --- Run (CLI only; guarded so the module is safely importable for tests) ---
 const KNOWN_FLAGS = ['--file', '--min-threshold', '--summary', '--self-test', '--help', '-h'];
 const VALUE_FLAGS = ['--file', '--min-threshold'];
 
@@ -360,17 +254,6 @@ const USAGE = `Usage:
   node process-quality.mjs --help                 # show this message`;
 
 if (isMainModule(import.meta.url)) {
-  // Inside the main-module guard, not at import time: rejection-latency.mjs
-  // imports parseActiveInterviews from here, so a top-level check would judge
-  // the IMPORTER's argv and reject its flags as unrecognized (#2919).
-  //
-  // A mistyped --file was previously ignored, so the script silently reported
-  // on data/active-interviews.md instead of the path that was asked for.
-  //
-  // requireOperand: without it, `--file --min-threshold` reads --min-threshold
-  // as the file path and `--min-threshold --summary` parses to NaN and falls
-  // back to the default of 1 — both silently, at exit 0 (#3087). Neither flag
-  // has a more specific missing-value message of its own.
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
 
   if (selfTestMode) {

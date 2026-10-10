@@ -1,15 +1,5 @@
-/**
- * Derive a stable ATS vendor label from a job or careers URL.
- *
- * Known platforms use their provider id so callers can route directly to the
- * matching scanner plugin. An otherwise-valid web URL returns its lower-cased
- * hostname instead of collapsing to "unknown": the long tail is useful signal
- * even before career-ops has a provider for it.
- */
-
 const hostIs = (host, suffix) => host === suffix || host.endsWith(`.${suffix}`);
 
-/** @type {Array<{ id: string, test: (host: string) => boolean }>} */
 export const ATS_HOST_PATTERNS = [
   { id: 'greenhouse', test: (h) => hostIs(h, 'greenhouse.io') },
   { id: 'lever', test: (h) => hostIs(h, 'lever.co') },
@@ -31,11 +21,6 @@ export const ATS_HOST_PATTERNS = [
 
 export const KNOWN_ATS_VENDORS = Object.freeze(ATS_HOST_PATTERNS.map(({ id }) => id));
 
-/**
- * @param {unknown} rawUrl
- * @returns {string|null} provider id for a known ATS, hostname for the long
- *   tail, or null when the value is not an HTTP(S) URL.
- */
 export function atsVendorOf(rawUrl) {
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
   let parsed;

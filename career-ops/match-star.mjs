@@ -1,31 +1,11 @@
 #!/usr/bin/env node
 
-/**
- * match-star.mjs — Zero-LLM, zero-browser ATS behavioural question matcher.
- *
- * Parses interview-prep/story-bank.md, scores each STAR story against the
- * question text (and optionally a JD file), and returns the top match(es)
- * formatted to ATS paste length (250–500 words).
- *
- * Usage:
- *   node match-star.mjs "Tell me about a time you led a project under pressure"
- *   node match-star.mjs "Describe a conflict you resolved" --jd jds/acme.md
- *   node match-star.mjs "Give an example of handling ambiguity" --top 2
- *   node match-star.mjs --list    # list all stories with their tags
- */
-
 import { readFileSync, existsSync } from 'fs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { join } from 'path';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { parseStories, splitStoryBlocks, isValidStory } from './lib/story-bank.mjs';
 
-// ── Config ──────────────────────────────────────────────────────────
-
-// From the data root, not the cwd. interview-prep/ is USER_PATHS in
-// update-system.mjs, and a bare relative path resolves against wherever the
-// process was started — so this read the checkout's story bank (usually absent)
-// for anyone whose data lives elsewhere.
 const STORY_BANK_PATH = join(getCareerOpsRoot(), 'interview-prep', 'story-bank.md');
 
 const args       = process.argv.slice(2);
@@ -35,7 +15,6 @@ const jdPath     = jdFlag !== -1 ? args[jdFlag + 1] : null;
 const topFlag    = args.indexOf('--top');
 const topRaw     = topFlag !== -1 ? parseInt(args[topFlag + 1], 10) : NaN;
 const TOP_N      = Number.isInteger(topRaw) && topRaw > 0 ? topRaw : 1;
-// Exclude flag operands by index position, not by value, to preserve repeated text in the question
 const excludeIdx = new Set([
   ...(jdFlag  !== -1 ? [jdFlag + 1]  : []),
   ...(topFlag !== -1 ? [topFlag + 1] : []),
@@ -44,27 +23,7 @@ const question = args
   .filter((a, i) => !a.startsWith('--') && !excludeIdx.has(i))
   .join(' ').trim();
 
-// ── Parser ───────────────────────────────────────────────────────────
-// parseStories lives in lib/story-bank.mjs so every story-bank reader shares
-// one definition of a story (#4514). Re-exported below for existing callers.
-
-// ── Scoring ──────────────────────────────────────────────────────────
-
-/**
- * Tokenize text into lowercase words, stripping punctuation.
- * @param {string} text
- * @returns {string[]}
- */
 function tokenize(text) {
-  // Letters, marks and digits of ANY script. The previous `[^a-z0-9\s]` class
-  // deleted every non-Latin character, so a story bank written in Russian,
-  // Hindi, Greek or Ukrainian tokenized to [] and scored 0 against a question
-  // in the same language — the matcher was inert, not degraded, for anyone whose
-  // `language.output` is not English (#2847).
-  //
-  // \p{M} is included deliberately: without it Devanagari matras become spaces
-  // and shatter a word into fragments that match nothing (the mistake caught in
-  // #2781's review of the sibling role tokenizer).
   return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
 }
 
@@ -75,39 +34,25 @@ const STOPWORDS = new Set([
   'when','how','give','example','describe','situation','where','what',
 ]);
 
-/**
- * Score a story against a question + optional JD text.
- * Higher = better match.
- * @param {object} story
- * @param {string[]} queryTokens
- * @param {string[]} jdTokens
- * @returns {number}
- */
 function score(story, queryTokens, jdTokens) {
   const signal = queryTokens.filter(t => !STOPWORDS.has(t));
   let s = 0;
 
-  // Tag match: highest weight (tags are explicit "best for" labels).
-  // Tokenized exact membership (mirrors the JD-boost path below) so short query
-  // tokens (ai, ml, go, qa…) can't spuriously collide inside longer tag words.
   const tagTokens = new Set(story.tags.flatMap(tokenize));
   for (const token of signal) {
     if (tagTokens.has(token)) s += 3;
   }
 
-  // Title/theme match
   const titleTokens = tokenize(story.title + ' ' + story.theme);
   for (const token of signal) {
     if (titleTokens.includes(token)) s += 2;
   }
 
-  // Action + result match (the most substantive parts)
   const bodyTokens = tokenize(story.action + ' ' + story.result);
   for (const token of signal) {
     if (bodyTokens.includes(token)) s += 1;
   }
 
-  // JD boost: stopword-filtered JD tokens matched against tokenized tags (exact token overlap)
   if (jdTokens.length > 0) {
     const jdSignal = new Set(jdTokens.filter(t => !STOPWORDS.has(t)));
     for (const tag of story.tags) {
@@ -119,14 +64,6 @@ function score(story, queryTokens, jdTokens) {
   return s;
 }
 
-// ── Formatter ────────────────────────────────────────────────────────
-
-/**
- * Format a STAR story as ATS-ready prose (250–500 words).
- * @param {object} story
- * @param {string} question
- * @returns {string}
- */
 function formatAts(story, question) {
   const parts = [];
 
@@ -137,7 +74,6 @@ function formatAts(story, question) {
   if (story.reflection) parts.push(story.reflection);
 
   const wordArr = parts.filter(Boolean).join(' ').split(/\s+/).filter(Boolean);
-  // Enforce 500-word ceiling; prose below 250 words gets a warning
   const prose   = wordArr.slice(0, 500).join(' ');
   const words   = Math.min(wordArr.length, 500);
   const notice  = wordArr.length < 250
@@ -155,10 +91,7 @@ function formatAts(story, question) {
   ].filter(s => s !== null).join('\n');
 }
 
-// ── Exports (for test-all.mjs and other consumers) ───────────────────
 export { parseStories, tokenize, score, STOPWORDS };
-
-// ── Main ─────────────────────────────────────────────────────────────
 
 if (isMainModule(import.meta.url)) {
 if (!existsSync(STORY_BANK_PATH)) {
@@ -170,9 +103,6 @@ if (!existsSync(STORY_BANK_PATH)) {
 const content = readFileSync(STORY_BANK_PATH, 'utf-8');
 const stories = parseStories(content);
 
-// Say what is in the file but cannot be read, so an empty or short bank is
-// never mistaken for the whole story (#4514). Never rewrites the file: it is
-// user data, and converting it is the agent's job, with the user's say-so.
 const { blocks, tableRows } = splitStoryBlocks(content);
 const invalid = blocks.filter(b => !isValidStory(b));
 if (tableRows.length || invalid.length) {
@@ -215,7 +145,6 @@ if (jdPath) {
   jdTokens = tokenize(readFileSync(jdPath, 'utf-8'));
 }
 
-// Score and rank
 const ranked = stories
   .map(s => ({ story: s, score: score(s, queryTokens, jdTokens) }))
   .sort((a, b) => b.score - a.score)
@@ -238,4 +167,4 @@ for (let i = 0; i < ranked.length; i++) {
 if (ranked.length > 0 && ranked[0].score === 0) {
   console.log('⚠️  No strong match found. Consider adding a story to story-bank.md that covers this competency.');
 }
-} // end CLI guard
+}

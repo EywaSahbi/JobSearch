@@ -4,10 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2, Loader2 } from "lucide-react";
 
-// disc#9: remove a bogus tracker row (e.g. a job marked Evaluated after the CLI
-// errored mid-run). Hard delete via the core write-gate (/api/tracker/delete →
-// tracker.mjs delete), behind a confirm. The soft option (status → Discarded) lives
-// in StatusSelect and stays for real-but-passed applications.
 export function DeleteFromTracker({ n }: { n: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -51,7 +47,6 @@ export function DeleteFromTracker({ n }: { n: string }) {
         setBusy(false);
         return;
       }
-      // Row is gone — leave the (now-orphaned) report page for the pipeline.
       router.push("/pipeline");
       router.refresh();
     } catch {

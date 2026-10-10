@@ -15,12 +15,8 @@ import (
 	"github.com/santifer/career-ops/dashboard/internal/theme"
 )
 
-// StatsClosedMsg is emitted when the stats screen is dismissed.
 type StatsClosedMsg struct{}
 
-// StatsModel implements the dimension-breakdown analytics screen (archetype,
-// work mode, location, pay histogram, score tier pie chart, and automated insights),
-// complementing the funnel/rate-focused Progress screen with high-signal visual charts.
 type StatsModel struct {
 	metrics      model.StatsMetrics
 	evaluated    int
@@ -30,7 +26,6 @@ type StatsModel struct {
 	theme        theme.Theme
 }
 
-// NewStatsModel creates a new stats screen.
 func NewStatsModel(t theme.Theme, metrics model.StatsMetrics, evaluated, width, height int) StatsModel {
 	return StatsModel{
 		metrics:   metrics,
@@ -41,48 +36,29 @@ func NewStatsModel(t theme.Theme, metrics model.StatsMetrics, evaluated, width, 
 	}
 }
 
-// Init implements tea.Model.
 func (m StatsModel) Init() tea.Cmd {
 	return nil
 }
 
 const (
-	// twoColumnMinWidth is the terminal width at which renderBody switches from a
-	// single stacked column to two side-by-side columns. It has to clear the
-	// widest fixed-content panel: the pie chart's 17-column disc, its 4-column
-	// gap and its legend come to 55 columns that nothing can shrink, and the
-	// right column is only m.width/2-2 wide. At 110 the layout engaged four
-	// columns before that fit, and the pie wrapped into the panel below it.
 	twoColumnMinWidth = 114
 
-	// panelPadW is the horizontal padding every stats panel adds around its rows
-	// (Padding(0, 2), so two columns on each side).
 	panelPadW = 4
 
-	// Fixed cell widths, named so the bar budget and the lipgloss.Width call that
-	// renders the cell cannot drift apart — that drift is what let the rows
-	// overflow in the first place.
-	archetypeCountW = 10 // "%4d (%.0f%%)"
-	archetypeScoreW = 10 // "★ %.1f/5"
-	labelCountW     = 18 // work-mode and location label cell
-	payLabelW       = 16 // salary band label cell
-	barGapW         = 1  // single space either side of an archetype bar
+	archetypeCountW = 10
+	archetypeScoreW = 10
+	labelCountW     = 18
+	payLabelW       = 16
+	barGapW         = 1
 
-	// minReadableBarW is the point below which an archetype bar stops conveying
-	// proportion, so the label cell gives up its width instead.
 	minReadableBarW = 8
 )
 
-// Resize updates dimensions.
 func (m *StatsModel) Resize(width, height int) {
 	m.width = width
 	m.height = height
 }
 
-// contentWidth returns the number of columns a single panel may occupy. Above
-// twoColumnMinWidth renderBody places each panel inside a box roughly half the
-// terminal wide, so a panel that sizes itself off m.width overflows that box
-// and is wrapped by lipgloss — losing its indent in the process.
 func (m StatsModel) contentWidth() int {
 	if m.width >= twoColumnMinWidth {
 		return m.width/2 - 2
@@ -90,8 +66,6 @@ func (m StatsModel) contentWidth() int {
 	return m.width
 }
 
-// rightColumnWidth returns the width of the second column of the two-column
-// layout, which renderBody gives whatever contentWidth leaves over.
 func (m StatsModel) rightColumnWidth() int {
 	if m.width >= twoColumnMinWidth {
 		return m.width - m.contentWidth() - 4
@@ -99,11 +73,6 @@ func (m StatsModel) rightColumnWidth() int {
 	return m.width
 }
 
-// barWidth returns the bar column for a panel row whose other cells occupy
-// fixedCells columns: the preferred width, clamped to what the panel column
-// has left, and floored at one glyph so a tight column yields a short chart
-// rather than no chart. Without the clamp a row came out wider than the box
-// holding it and lipgloss wrapped it, dropping the panel's indent.
 func (m StatsModel) barWidth(avail, fixedCells int) int {
 	preferred := 25
 	if avail < 90 {
@@ -112,8 +81,6 @@ func (m StatsModel) barWidth(avail, fixedCells int) int {
 	return max(1, min(preferred, avail-panelPadW-fixedCells))
 }
 
-// countCells renders each row's trailing count cell and returns them with the
-// widest, so the variable-width count column can be budgeted before the bar.
 func countCells(stats []model.LabelCountStat, format string) ([]string, int) {
 	cells := make([]string, len(stats))
 	widest := 0
@@ -124,7 +91,6 @@ func countCells(stats []model.LabelCountStat, format string) ([]string, int) {
 	return cells, widest
 }
 
-// Update processes navigation and input events for the stats analytics dashboard.
 func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 	switch keyEvent := msg.(type) {
 	case tea.KeyMsg:
@@ -132,7 +98,7 @@ func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 		case "q", "esc":
 			return m, func() tea.Msg { return StatsClosedMsg{} }
 		case "t", "T":
-			return m, nil // Toggle handled at app level
+			return m, nil
 		case "j", "down":
 			m.scrollOffset = m.scrollOffset + 1
 		case "k", "up":
@@ -141,11 +107,7 @@ func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 			m.scrollOffset += m.height / 2
 		case "pgup", "ctrl+u":
 			m.scrollOffset = max(0, m.scrollOffset-m.height/2)
-		} // end inner key switch
-		// Clamp against the full untruncated body height so panels beyond
-		// the first screen-full remain reachable regardless of terminal size.
-		// Using m.View() would measure the already-truncated render and
-		// produce a maxOffset of ~2, making content below the fold unreachable.
+		}
 		contentLines := strings.Count(m.renderBody(), "\n") + 1
 		maxOffset := contentLines - (m.height - 4)
 		if maxOffset < 0 {
@@ -156,25 +118,19 @@ func (m StatsModel) Update(msg tea.Msg) (StatsModel, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = keyEvent.Width, keyEvent.Height
-	} // end outer msg switch
+	}
 	return m, nil
 }
 
-// renderBody builds the full untruncated body string used both by View (for
-// display after slicing) and by Update (to measure true content height for
-// scroll clamping). Keeping it separate prevents Update from measuring the
-// already-truncated View output, which previously capped maxOffset at ~2.
 func (m StatsModel) renderBody() string {
 	insights := m.renderInsights()
 	archetypes := m.renderArchetypeChart()
-	// showQualityBadge=true for the Fit Quality pie (score metric belongs there),
-	// false for Seniority Mix (the badge would be semantically meaningless).
 	pieChart := m.renderPieChart(i18n.Current.FitQualityDistribution, i18n.Current.QualityBreakdown, m.metrics.ScoreTiers, []lipgloss.Color{
-		m.theme.Green,  // Elite (>=4.5)
-		m.theme.Sky,    // Strong (4.0-4.4)
-		m.theme.Yellow, // Viable (3.5-3.9)
-		m.theme.Peach,  // Moderate (3.0-3.4)
-		m.theme.Red,    // Below Bar (<3.0)
+		m.theme.Green,
+		m.theme.Sky,
+		m.theme.Yellow,
+		m.theme.Peach,
+		m.theme.Red,
 		m.theme.Mauve,
 	}, true)
 	seniorityPieChart := m.renderPieChart(i18n.Current.SeniorityMix, i18n.Current.SeniorityMix, m.metrics.SeniorityMix, []lipgloss.Color{
@@ -221,7 +177,6 @@ func (m StatsModel) renderBody() string {
 			"",
 		)
 	}
-	// Single-column stacked layout on smaller terminals
 	return lipgloss.JoinVertical(lipgloss.Left,
 		"",
 		insights,
@@ -241,7 +196,6 @@ func (m StatsModel) renderBody() string {
 	)
 }
 
-// View renders the stats screen.
 func (m StatsModel) View() string {
 	header := m.renderHeader()
 	help := m.renderHelp()
@@ -259,7 +213,7 @@ func (m StatsModel) View() string {
 		bodyLines = bodyLines[offset:]
 	}
 
-	availHeight := m.height - 4 // header + help + padding
+	availHeight := m.height - 4
 	if availHeight < 3 {
 		availHeight = 3
 	}
@@ -323,10 +277,6 @@ func (m StatsModel) renderInsights() string {
 	return padStyle.Render(boxStyle.Render(strings.Join(bulletLines, "\n")))
 }
 
-// renderPieChart draws a high-definition radial terminal pie chart with aspect ratio correction and legend.
-// showQualityBadge controls whether the ">=4.0 quality bar" summary badge is appended to the legend;
-// it should be true only for the Fit Quality Distribution chart (where the metric is meaningful)
-// and false for the Seniority Mix chart (where it would be semantically out of place).
 func (m StatsModel) renderPieChart(title, legendHeading string, stats []model.LabelCountStat, sliceColors []lipgloss.Color, showQualityBadge bool) string {
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 	sectionTitle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Mauve).Render(i18n.PieChartSectionTitle(title))
@@ -344,7 +294,6 @@ func (m StatsModel) renderPieChart(title, legendHeading string, stats []model.La
 		return padStyle.Render(sectionTitle + "\n" + dimStyle.Render(i18n.Current.NoData))
 	}
 
-	// Calculate cumulative boundaries [0.0 ... 1.0]
 	cumFractions := make([]float64, len(stats))
 	cum := 0.0
 	for i, s := range stats {
@@ -352,18 +301,16 @@ func (m StatsModel) renderPieChart(title, legendHeading string, stats []model.La
 		cumFractions[i] = cum
 	}
 
-	// Draw radial pie chart: Radius = 4 (Grid height = 9, width = 17)
 	radius := 4
 	var pieLines []string
 	for y := -radius; y <= radius; y++ {
 		var row strings.Builder
-		for x := -2 * radius; x <= 2 * radius; x++ {
-			nx := float64(x) / 2.0 // correct for 2:1 character aspect ratio
+		for x := -2 * radius; x <= 2*radius; x++ {
+			nx := float64(x) / 2.0
 			ny := float64(y)
 			dist := math.Sqrt(nx*nx + ny*ny)
 
 			if dist <= float64(radius)+0.2 {
-				// Clockwise angle starting from top (12 o'clock)
 				angle := math.Atan2(nx, -ny)
 				if angle < 0 {
 					angle += 2 * math.Pi
@@ -395,7 +342,6 @@ func (m StatsModel) renderPieChart(title, legendHeading string, stats []model.La
 		pieLines = append(pieLines, row.String())
 	}
 
-	// Build Legend lines
 	var legendLines []string
 	legendLines = append(legendLines, lipgloss.NewStyle().Bold(true).Foreground(m.theme.Text).Render(legendHeading))
 	for i, s := range stats {
@@ -416,7 +362,6 @@ func (m StatsModel) renderPieChart(title, legendHeading string, stats []model.La
 		legendLines = append(legendLines, "", summaryBadge)
 	}
 
-	// Combine Pie and Legend side by side
 	pieBlock := strings.Join(pieLines, "\n")
 	legendBlock := strings.Join(legendLines, "\n")
 
@@ -438,13 +383,8 @@ func (m StatsModel) renderArchetypeChart() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Size against the panel column, not the terminal: in the two-column
-	// layout this panel is rendered into a box half the terminal wide.
 	avail := m.contentWidth()
 
-	// The count cell overflows its nominal width once a share rounds to 100%
-	// (a single archetype, or one that dominates), so measure it rather than
-	// assuming — an over-full cell wraps and takes the row with it.
 	maxCount := 0
 	counts := make([]string, len(m.metrics.Archetypes))
 	countW := archetypeCountW
@@ -458,8 +398,6 @@ func (m StatsModel) renderArchetypeChart() string {
 		return labelW + countW + 2*barGapW + archetypeScoreW
 	}
 
-	// Prefer the wide label cell, but fall back to the narrow one when the panel
-	// is too tight to leave a readable bar beside it.
 	labelW := 26
 	if m.width < 90 || m.barWidth(avail, fixedCells(26)) < minReadableBarW {
 		labelW = 20
@@ -519,7 +457,6 @@ func (m StatsModel) renderLabelCountTable(title string, stats []model.LabelCount
 		}
 	}
 
-	// The count cell is variable-width, so measure it before budgeting the bar.
 	counts, countW := countCells(stats, "  %d (%.0f%%)")
 	barMaxW := m.barWidth(m.contentWidth(), labelCountW+countW)
 
@@ -577,7 +514,6 @@ func (m StatsModel) renderPay() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// 1. Summary KPIs
 	labelStyle := lipgloss.NewStyle().Foreground(m.theme.Text)
 	valueStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Green)
 	sepStyle := lipgloss.NewStyle().Foreground(m.theme.Overlay)
@@ -599,7 +535,6 @@ func (m StatsModel) renderPay() string {
 	)
 	lines = append(lines, padStyle.Render(info))
 
-	// 2. Salary Distribution Histogram
 	if len(m.metrics.PayHistogram) > 0 {
 		lines = append(lines, "")
 		histTitle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Peach).Render(i18n.Current.SalaryBandDist)
@@ -612,10 +547,7 @@ func (m StatsModel) renderPay() string {
 			}
 		}
 
-		// The count cell is variable-width, so measure it before budgeting the bar.
 		counts, countW := countCells(m.metrics.PayHistogram, "  %2d (%.0f%%)")
-		// This panel sits in the right-hand column, which gets whatever the left
-		// one leaves over rather than the same width.
 		barMaxW := m.barWidth(m.rightColumnWidth(), payLabelW+countW)
 
 		for i, b := range m.metrics.PayHistogram {
@@ -674,8 +606,6 @@ func (m StatsModel) renderHelp() string {
 	return style.Render(keys + strings.Repeat(" ", gap) + brand)
 }
 
-// scoreColor returns a color based on the fit score value, matching
-// ProgressModel.rateColor's traffic-light convention adapted to a 0-5 scale.
 func (m StatsModel) scoreColor(score float64) lipgloss.Color {
 	switch {
 	case score >= 4.0:

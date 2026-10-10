@@ -1,7 +1,3 @@
-% Fictional example CV for latex-tex tests (resumeSubheading family,
-% \resumeItemWithoutTitle{}{...} bullet variant + \resumeSubItem skills).
-% The preamble macro definitions below intentionally contain \resumeItem{#1}{#2}
-% and \textbf{#1}{: #2} — regression guards: extraction must skip the preamble.
 \documentclass[letterpaper,10pt]{article}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
@@ -46,8 +42,6 @@
   \resumeSubheading{Example Corp}{2022 -- Present}{Backend Engineer}{Remote}
   \resumeItemListStart
     \resumeItemWithoutTitle{}{Built REST APIs in Python serving 20k daily active users.}
-    % Old bullet kept for reference — commented calls must NOT become slots:
-    %\resumeItemWithoutTitle{}{Stale commented bullet that must never be extracted.}
     \resumeItemWithoutTitle{}{Reduced batch job runtime by 35 percent with parallel workers.}
   \resumeItemListEnd
 \resumeSubHeadingListEnd

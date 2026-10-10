@@ -10,8 +10,6 @@ import { scoreNum, scoreTone } from "@/lib/format";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
 import type { Application } from "@/lib/career-ops";
 
-// Awaiting-decision row: a scored role with no terminal status. Primary action
-// opens the report (PDF + Apply live there). Skip / Applied still write status.
 export function DecisionCard({ app }: { app: Application }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"" | "Applied" | "Discarded">("");
@@ -27,7 +25,6 @@ export function DecisionCard({ app }: { app: Application }) {
       setDone(status);
       router.refresh();
     } catch {
-      /* ignore */
     } finally {
       setBusy("");
     }
@@ -55,8 +52,6 @@ export function DecisionCard({ app }: { app: Application }) {
         )}
       </div>
       <div className="flex items-center gap-2">
-        {/* Primary is the report (PDF + Apply live there). Marking Applied from
-            Today skipped that path and wrote a status with no application. */}
         <Link
           href={`/pipeline/${app.n}`}
           className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-brand-soft px-2.5 py-1.5 text-xs font-medium text-brand-text transition hover:bg-brand/15 max-sm:min-h-[44px]"

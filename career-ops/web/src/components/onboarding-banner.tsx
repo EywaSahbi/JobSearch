@@ -21,13 +21,10 @@ const LABELS: Record<string, string> = {
   "portals.yml": "the companies to scan",
 };
 
-// Detect (via the core's doctor.mjs) whether setup is incomplete, and offer to
-// finish it CONVERSATIONALLY — the assistant asks in plain language and writes
-// the canonical files (no YAML to edit). This is the #1 adoption barrier.
 export function OnboardingBanner() {
   const [d, setD] = useState<Doctor | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const [cli, setCli] = useState(true); // assume until read (avoid CTA flash)
+  const [cli, setCli] = useState(true);
 
   useEffect(() => {
     setCli(hasCli());
@@ -65,8 +62,6 @@ export function OnboardingBanner() {
           <Sparkles className="size-4" /> Set me up with the assistant
         </button>
       ) : (
-        // The assistant needs a CLI to run — without one the kickoff would silently
-        // drop. Send them to connect one first.
         <Link
           href="/config"
           className="mt-4 inline-flex items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-medium text-brand-foreground transition-colors hover:bg-brand-200"

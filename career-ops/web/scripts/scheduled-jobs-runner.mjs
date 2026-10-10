@@ -182,12 +182,6 @@ function firstErrorLine(result) {
   return String(raw).split(/\r?\n/).find(Boolean)?.slice(0, 300) || "Scan failed";
 }
 
-/*
- * Keep the temporary portal overlay scoped to each retry. A thrown setup or
- * spawn error is retryable just like a non-zero scanner exit, while cleanup
- * still runs before the next attempt.
- */
-
 export function executeJob(root, job, options = {}) {
   const spawnFn = options.spawnFn || spawnSync;
   const startedAt = Date.now();
@@ -229,7 +223,6 @@ export function executeJob(root, job, options = {}) {
         try {
           fs.rmSync(tempPortals, { force: true });
         } catch {
-          // Temporary filter cleanup is best effort.
         }
       }
     }
@@ -249,8 +242,6 @@ export async function recordCompletion(storePath, claim, result, inMemoryStore =
   const apply = (store) => {
     const job = claim.job;
     const queueItem = claim.queueId && store.queue.find((item) => item.id === claim.queueId && item.claimToken === claim.claimToken);
-    // A stale worker may finish after another worker reclaimed the item. Its
-    // result must not overwrite the newer claim's run or job metadata.
     if (claim.queueId && !queueItem) return;
     const current = store.jobs.find((item) => item.id === job.id);
     if (current) {

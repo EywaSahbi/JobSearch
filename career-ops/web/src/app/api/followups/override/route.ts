@@ -8,13 +8,6 @@ import { followupsLogPath, withFollowupsWrite, followupsWriteError } from "@/lib
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Pin an application's NEXT follow-up date, overriding the computed cadence.
-// Stored as a directive line in data/follow-ups.md —
-//   - next #42 2026-07-10 (set 2026-07-02)
-// — which the core followup-cadence.mjs reads (parseNextOverrides). The pin
-// wins over the computed schedule (it even revives a cold application) until a
-// follow-up is logged on/after the set-date, which resumes the normal cadence.
-
 const pinRe = (appNum: number) => new RegExp(`^-\\s+next\\s+#${appNum}\\s`, "i");
 
 export async function POST(req: Request) {
@@ -38,8 +31,6 @@ export async function POST(req: Request) {
     return await withFollowupsWrite(() => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       let existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "# Follow-ups\n\n";
-      // Supersede: drop any previous pin lines for this application (the parser
-      // takes the last one anyway; pruning keeps the file tidy).
       const kept = existing.split("\n").filter((line) => !pinRe(appNum).test(line));
       existing = kept.join("\n");
       if (!existing.endsWith("\n")) existing += "\n";
@@ -52,7 +43,6 @@ export async function POST(req: Request) {
   }
 }
 
-// Clear the pin for an application (the computed cadence takes over again).
 export async function DELETE(req: Request) {
   let body: { appNum?: string | number };
   try {

@@ -1,23 +1,3 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// Gem provider — hits the public GraphQL batch endpoint behind
-// jobs.gem.com/<boardId> SPA boards.
-//
-// Verified live via bare POSTs with no auth headers and no cookies — the
-// endpoint is unauthenticated for public boards. Two queries:
-//   - JobBoardList(boardId): the listing — title, locations, department,
-//     employment/location type, but NO date field.
-//   - ExternalJobPostingQuery(boardId, extId): per-job detail, carries
-//     firstPublishedTsSec (the postedAt source), plus descriptionHtml,
-//     jobPostSectionHtml, and compensationHtml for the job description.
-//     Since the endpoint is literally a *batch* endpoint, every job's
-//     detail query is folded into ONE extra POST (one operation per extId)
-//     rather than N round-trips.
-// The `{boardId}/{extId}` URL pattern is confirmed against a real captured
-// browser session (page referer for a real job matched this exact shape),
-// not just inferred from field naming.
-
 import { decodeEntities } from './_html-entities.mjs';
 import { countryNameFromIso } from './_country.mjs';
 
@@ -73,38 +53,23 @@ const JOB_DETAIL_QUERY = `query ExternalJobPostingQuery($boardId: String!, $extI
 }
 `;
 
-// NaN-safe — firstPublishedTsSec is unix SECONDS, unlike most providers' ms epochs.
 function toEpochMsFromSeconds(value) {
   if (value == null) return undefined;
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n * 1000 : undefined;
 }
 
-// REST uses ISO timestamps (`first_published_at`); keep invalid/missing dates
-// as an omitted field so recency filters do not mistake them for epoch zero.
 function toEpochMs(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
   const parsed = typeof value === 'number' ? value * 1000 : Date.parse(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-// Same tag-strip + entity-decode convention as the other scraping providers
-// (deutschebahn.mjs, hecklerkoch.mjs, etc.) that get raw HTML back. Entities
-// are decoded BEFORE tags are stripped: a double-encoded tag like
-// "&lt;strong&gt;Role&lt;/strong&gt;" isn't a literal "<...>" yet, so
-// stripping first leaves it untouched and a later decode turns it back into
-// what looks like real markup in the plain-text output.
 function htmlToText(html) {
   if (typeof html !== 'string' || !html) return '';
   return decodeEntities(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// Concatenate intro + body + outro in page order, then append compensationHtml
-// as a labeled trailing section (it's a distinct field, not prose that flows
-// from the outro). Any absent field is dropped rather than leaving a gap, so
-// a posting with only descriptionHtml (the common case) renders identically
-// to before this field list was widened.
-/** @param {any} posting */
 function buildJobDescriptionText(posting) {
   const intro = htmlToText(posting?.jobPostSectionHtml?.introHtml);
   const body = htmlToText(posting?.descriptionHtml);
@@ -115,7 +80,6 @@ function buildJobDescriptionText(posting) {
   return compensation ? [text, `Compensation: ${compensation}`].filter(Boolean).join('\n\n') : text;
 }
 
-/** @param {string} url */
 function assertGemUrl(url) {
   let parsed;
   try {
@@ -129,7 +93,6 @@ function assertGemUrl(url) {
   return url;
 }
 
-/** Resolve an explicitly pinned URL for Gem's documented REST job-board API. */
 function resolveRestApiUrl(entry) {
   const raw = typeof entry.api === 'string' ? entry.api : '';
   if (!raw) return null;
@@ -144,7 +107,6 @@ function resolveRestApiUrl(entry) {
   return parsed;
 }
 
-/** @param {import('./_types.js').PortalEntry} entry */
 function resolveBoardId(entry) {
   const raw = typeof entry.careers_url === 'string' ? entry.careers_url : '';
   if (!raw) return null;
@@ -159,33 +121,13 @@ function resolveBoardId(entry) {
   return match ? match[1] : null;
 }
 
-// Canonical REST posting shape is exactly `/{vanity_path}/{id}` (see the
-// confirmed live example `jobs.gem.com/gem/4965519002`). Without this, any
-// HTTPS jobs.gem.com URL — including non-posting pages like `/login` — is
-// accepted as a job. The id segment isn't always numeric: the public Gem
-// REST board also returns opaque, nonnumeric canonical ids, so this only
-// requires exactly two nonempty path segments rather than a digit-only id.
 const GEM_POSTING_PATH_RE = /^\/[^/?#]+\/[^/?#]+\/?$/;
 
-/**
- * Whole-word, case-insensitive containment (same check as ashby's, breezy's
- * and recruitee's containsWholeWord).
- * @param {string} text
- * @param {string} word
- */
 function containsWholeWord(text, word) {
   const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu').test(text);
 }
 
-/**
- * Location name plus the country behind `isoCountry` when the name doesn't
- * already say it. Gem sends the country only as an ISO code ("USA", "GBR"),
- * which location_filter can't match, so "London" or "Remote, US" never showed
- * the country a block/allow list names — the same gap fixed for ashby,
- * breezy and recruitee.
- * @param {any} loc
- */
 function formatLocation(loc) {
   const parts = [];
   let place = typeof loc?.name === 'string' ? loc.name.trim() : '';
@@ -196,7 +138,6 @@ function formatLocation(loc) {
   return parts.join(' · ');
 }
 
-/** @type {Provider} */
 export default {
   id: 'gem',
 
@@ -208,13 +149,10 @@ export default {
   },
 
   async fetch(entry, ctx) {
-    // Gem documents this unauthenticated REST surface for custom career pages.
-    // Keep the existing GraphQL path for jobs.gem.com SPA boards, while
-    // allowing operators to pin a verified REST URL from a captured page.
     const restApiUrl = resolveRestApiUrl(entry);
     if (restApiUrl) {
       assertGemUrl(restApiUrl.href);
-      const json = /** @type {any} */ (await ctx.fetchJson(restApiUrl.href, { redirect: 'error' }));
+      const json = (await ctx.fetchJson(restApiUrl.href, { redirect: 'error' }));
       return parseRestResponse(json, entry.name);
     }
     const boardId = resolveBoardId(entry);
@@ -224,9 +162,7 @@ export default {
     const body = JSON.stringify([
       { operationName: 'JobBoardList', variables: { boardId }, query: JOB_BOARD_LIST_QUERY },
     ]);
-    // redirect:'error' prevents SSRF via server-side redirects; combined with
-    // assertGemUrl above it guarantees the final hostname stays in the allowlist.
-    const json = /** @type {any} */ (await ctx.fetchJson(GEM_API_URL, {
+    const json = (await ctx.fetchJson(GEM_API_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', batch: 'true' },
       body,
@@ -240,23 +176,20 @@ export default {
     const postings = listResult?.data?.oatsExternalJobPostings?.jobPostings;
     if (!Array.isArray(postings)) return [];
 
-    const validPostings = postings.filter(/** @param {any} p */ p => p.extId && p.title);
+    const validPostings = postings.filter(p => p.extId && p.title);
 
-    // Enrichment, not core data — postedAt/description matter but their
-    // absence shouldn't fail the whole board. One extra batched POST (one
-    // ExternalJobPostingQuery op per job) rather than N round-trips.
     const postedAtByExtId = new Map();
     const descriptionByExtId = new Map();
     if (validPostings.length > 0) {
       try {
         const detailBody = JSON.stringify(
-          validPostings.map(/** @param {any} p */ p => ({
+          validPostings.map(p => ({
             operationName: 'ExternalJobPostingQuery',
             variables: { boardId, extId: p.extId },
             query: JOB_DETAIL_QUERY,
           }))
         );
-        const detailJson = /** @type {any} */ (await ctx.fetchJson(GEM_API_URL, {
+        const detailJson = (await ctx.fetchJson(GEM_API_URL, {
           method: 'POST',
           headers: { 'content-type': 'application/json', batch: 'true' },
           body: detailBody,
@@ -272,12 +205,10 @@ export default {
           }
         }
       } catch {
-        // Listing still stands without dates/description — recency filtering
-        // and content_filter just won't apply to this board.
       }
     }
 
-    return validPostings.map(/** @param {any} p */ p => ({
+    return validPostings.map(p => ({
       title: p.title || '',
       url: `https://jobs.gem.com/${boardId}/${p.extId}`,
       company: entry.name,
@@ -288,16 +219,6 @@ export default {
   },
 };
 
-/**
- * Extract the row array from Gem's documented GET response. The endpoint has
- * appeared both as a bare array and wrapped in `job_posts`; accepting both
- * keeps the provider tolerant. `[]`/`{}`/`null` are legitimately contentless
- * (an empty board), so they resolve to no rows — but any OTHER nonempty
- * object shape is undocumented and gets rejected loudly rather than silently
- * read as "zero jobs," which would make a changed Gem response look like an
- * empty board and drop every posting without a trace.
- * @param {any} json
- */
 function extractRestRows(json) {
   if (Array.isArray(json)) return json;
   if (json === null || json === undefined) return [];
@@ -311,11 +232,6 @@ function extractRestRows(json) {
   throw new Error(`gem: unsupported REST response envelope — expected an array or {job_posts: [...]}, got ${typeof json}`);
 }
 
-/**
- * Parse Gem's documented GET response.
- * @param {any} json
- * @param {string} companyName
- */
 export function parseRestResponse(json, companyName) {
   const rows = extractRestRows(json);
   return rows.filter(j => j && typeof j.title === 'string' && j.title.trim() && typeof j.absolute_url === 'string')

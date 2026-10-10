@@ -1,16 +1,7 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// Collage HR public job-site API.  A job-site address is an explicit tenant
-// identifier, not a company-name slug we should guess.  Entries may provide
-// the exact API URL or a public Collage careers URL from which the final path
-// segment is read.
-
 const API_ORIGIN = 'https://api.collage.co';
 const COLLAGE_API_HOST = 'api.collage.co';
 const COLLAGE_SITE_HOST_RE = /^secure\.collage\.co$/;
 
-/** @param {string} url */
 function assertCollageApiUrl(url) {
   let parsed;
   try { parsed = new URL(url); } catch { throw new Error(`collage: invalid URL: ${url}`); }
@@ -24,7 +15,6 @@ function assertCollageApiUrl(url) {
   return url;
 }
 
-/** @param {import('./_types.js').PortalEntry} entry */
 function resolveApiUrl(entry) {
   const explicit = typeof entry.api === 'string' ? entry.api.trim() : '';
   if (explicit) return assertCollageApiUrl(explicit);
@@ -55,7 +45,6 @@ function toEpochMs(value) {
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 
-/** @param {unknown} value */
 function absoluteHttpsUrl(value) {
   const raw = text(value);
   if (!raw) return '';
@@ -68,7 +57,6 @@ function absoluteHttpsUrl(value) {
   }
 }
 
-/** @param {any} json @param {string} companyName */
 export function parseCollageResponse(json, companyName) {
   const rows = Array.isArray(json) ? json : Array.isArray(json?.positions) ? json.positions : null;
   if (!rows) throw new Error('collage: unrecognized response envelope (expected a positions array)');
@@ -90,7 +78,6 @@ export function parseCollageResponse(json, companyName) {
   }).filter(Boolean);
 }
 
-/** @type {Provider} */
 export default {
   id: 'collage',
   detect(entry) {

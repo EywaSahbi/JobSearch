@@ -1,10 +1,5 @@
 import { ChevronDown, ExternalLink } from "lucide-react";
 
-// Transparency = our differentiator ("why it's a 4.0 for YOU"). The wording is
-// the CANONICAL public text from career-ops.org/methodology + /docs — rendered
-// verbatim, NOT a web reinterpretation of the rubric (whose weights live in the
-// core, modes/_shared.md). Native <details> → no client JS.
-
 const DIMENSIONS: [string, string][] = [
   ["Match", "how well your CV maps to the role's requirements"],
   ["North-star alignment", "how far the role moves you toward your stated career goal"],

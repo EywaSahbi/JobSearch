@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-/**
- * clean-markers.mjs — audit/strip invisible Unicode from generated text outputs.
- *
- * Job descriptions, forms, and pasted recruiter messages are untrusted data. They can carry
- * invisible Unicode that gets copied into generated CVs, cover letters, or emails without the
- * user ever seeing it. This audits and optionally removes those hidden characters before output
- * leaves the user's machine.
- *
- *   node clean-markers.mjs audit  <file...>                 # report only, never modifies
- *   node clean-markers.mjs clean  <file...>                 # strip markers, then report
- *   node clean-markers.mjs clean  --ascii cover-letter.md   # also force plain-ASCII punctuation
- *   node clean-markers.mjs --help                           # show this message (-h is an alias)
- *
- * Exit code 1 if any file FAILS audit — usable as a pre-send gate. Dependency-free: text only,
- * no package installs, no PDF metadata editing.
- */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { extname } from 'node:path';
 import { validateFlags } from './lib/cli-flags.mjs';
@@ -43,8 +27,6 @@ function cleanText(t, ascii){
   if(ascii) out=out.replace(/[‘’‚‛]/g,"'").replace(/[“”„‟]/g,'"').replace(/[–—―]/g,'-').replace(/…/g,'...');
   return out;
 }
-// Never scan or transform inside <style>/<script> — marker removal and --ascii must not touch CSS/JS.
-// Mask both block types before scanning/cleaning, restore them after (same approach as generate-pdf.mjs).
 const CODE_BLOCK = /<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi;
 function maskCode(html){
   const masks=[];
@@ -60,7 +42,6 @@ function processFile(file, mode, opts){
   if(TEXT_EXT.has(ext)){
     const t = readFileSync(file,'utf8');
     const isHtml = ext==='.html'||ext==='.htm';
-    // For HTML, exclude BOTH <style> and <script> from scanning AND cleaning (mask, then restore).
     const found = scanText(isHtml ? maskCode(t).masked : t);
     if(mode==='clean' && (Object.keys(found).length || opts.ascii)){
       let cleaned;
@@ -91,7 +72,6 @@ const USAGE = `Usage:
   node clean-markers.mjs --help                     # print this usage block and exit`;
 
 const argv = process.argv.slice(2);
-// Everything after `--` is a path, so a file named -draft.md is not read as a flag.
 const endOfOptions = argv.indexOf('--');
 validateFlags(endOfOptions === -1 ? argv : argv.slice(0, endOfOptions), KNOWN_FLAGS, USAGE);
 const mode = argv[0]==='clean' ? 'clean' : 'audit';

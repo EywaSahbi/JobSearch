@@ -1,18 +1,4 @@
 #!/usr/bin/env node
-/**
- * Structural coverage of translated modes (#3168). Offline, read-only, Node only.
- * Adapted from alinaqvi1129's initial checker in PR #3228.
- *
- * node i18n-drift.mjs [--lang tr ...] [--json | --summary]
- * Drift is advisory (exit 0); invalid arguments or unreadable inputs exit 1.
- *
- * Compare heading levels IN ORDER, never translated words. Coverage measures
- * structural slots, not translation completeness: equal-shaped replacements,
- * changed prose and empty sections cannot be detected. Fenced report examples
- * are excluded; their contract belongs to the evaluation-template parity gate.
- * Without stable section IDs, repeated levels can have multiple alignments.
- * Report all possible missing locations instead of inventing a missing name.
- */
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +8,6 @@ import { isNestedCheckout } from './lib/mjs-files.mjs';
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const LANGUAGE = /^[a-z]{2}(?:-[A-Za-z0-9]{2,8})*$/;
 
-/** Top-level Markdown ATX/setext headings, with one-based source lines. */
 export function extractHeadings(text) {
   const headings = [];
   let fence = null;
@@ -34,7 +19,6 @@ export function extractHeadings(text) {
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
-    // Comment-looking text in code is literal, including fence info strings.
     const rawOpen = raw.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (!comment && rawOpen && (rawOpen[1][0] !== '`' || !rawOpen[2].includes('`'))) {
       fence = rawOpen[1];
@@ -87,7 +71,6 @@ export function extractHeadings(text) {
       paragraph = null;
       continue;
     }
-    // Indented code, list/quote blocks and thematic breaks are not paragraphs.
     if (!line.trim() || /^(?: {4}|\t| {0,3}(?:>|[-+*] |\d+[.)] |[-*_]{3,}\s*$))/.test(line)) {
       paragraph = null;
     } else {
@@ -97,11 +80,6 @@ export function extractHeadings(text) {
   return headings;
 }
 
-/**
- * Longest common subsequence of heading levels. Prefix/suffix tables let us
- * inspect ALL optimal alignments: an unmatched heading is certain only when
- * none can match it. Candidate count is not the number of missing sections.
- */
 export function compareStructure(canonicalText, translatedText) {
   const canonical = extractHeadings(canonicalText);
   const translated = extractHeadings(translatedText);
@@ -149,7 +127,6 @@ function modePath(value) {
     && !/^(?:README\.md|_profile(?:\.template)?\.md|_custom(?:\.template)?\.md)$/i.test(posix.basename(value));
 }
 
-// Do not follow symlinks or nested checkouts while reading mode sources.
 function sourcePath(root, relativePath) {
   let path = root;
   for (const part of ['modes', ...relativePath.split('/')]) {
@@ -161,7 +138,6 @@ function sourcePath(root, relativePath) {
   return path;
 }
 
-/** README table: translated filename -> source path relative to modes/. */
 export function parseReadmeMapping(readmePath) {
   const map = new Map();
   if (!readmePath || !existsSync(readmePath)) return map;
@@ -192,7 +168,6 @@ function markdownFiles(dir) {
   }).sort();
 }
 
-/** Compare the shipped subset, plus README-promised files that were deleted. */
 export function checkLang(lang, root = ROOT) {
   if (!discoverLangs(root).includes(lang)) throw new Error(`language directory not found: modes/${lang}/`);
   const maps = new Map();
@@ -206,8 +181,6 @@ export function checkLang(lang, root = ROOT) {
     seen.add(key);
     const source = mapping(language).get(file) ?? file;
     const [first, ...tail] = source.split('/');
-    // Some languages translate another locale (NL -> FR); follow its declared
-    // source to the canonical root rather than measuring two stale mirrors.
     if (tail.length && LANGUAGE.test(first)) return canonicalFor(first, tail.join('/'), seen);
     return modePath(source) ? source : null;
   };

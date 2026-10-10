@@ -1,9 +1,3 @@
-"""Schickt Jobs in die Inbox von career-ops (https://github.com/career-ops-hq/career-ops).
-
-Pro Job entsteht dort eine Datei jds/<firma>-<titel>-<id>.md mit dem Stellentext
-und eine Zeile in data/pipeline.md, die auf diese Datei zeigt. In career-ops
-bewertet "/career-ops pipeline" dann alles, was in der Inbox liegt.
-"""
 import json
 import os
 import re
@@ -26,12 +20,10 @@ SENT_RE = re.compile(r"-([0-9a-f]{12})\.md$")
 
 
 def is_ready(root):
-    """Liegt unter root wirklich ein career-ops?"""
     return (root / "modes").is_dir() and (root / "package.json").is_file()
 
 
 def sent_ids(root):
-    """IDs der Jobs, die schon in career-ops liegen (stehen im Dateinamen)."""
     jds = root / "jds"
     if not jds.is_dir():
         return set()
@@ -43,7 +35,6 @@ def one_line(value):
 
 
 def clean(job):
-    """Bringt einen Eintrag aus der Ansicht in feste Form. None, wenn er unbrauchbar ist."""
     if not isinstance(job, dict):
         return None
     job_id, title = job.get("id"), one_line(job.get("title"))
@@ -72,7 +63,6 @@ def slug(text):
 
 
 def jd_name(job):
-    # kurz halten: Windows-Pfade enden bei 260 Zeichen
     return f"{slug(job['company'] + ' ' + job['title'])[:80].strip('-')}-{job['id']}.md"
 
 
@@ -109,7 +99,6 @@ def jd_text(job, today):
 
 
 def cell(value):
-    """Wie sanitizeMarkdownField in scan.mjs von career-ops: "|" würde die Zeile in falsche Spalten teilen."""
     for char in "\\[]":
         value = value.replace(char, "\\" + char)
     return value.replace("|", "/")
@@ -125,7 +114,6 @@ def pipeline_line(job, name):
 
 
 def write(path, text):
-    """Erst daneben schreiben, dann ersetzen: so bleibt nie eine halbe Datei zurück."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -133,7 +121,6 @@ def write(path, text):
 
 
 def add_pending(path, lines):
-    """Hängt lines ans Ende des Abschnitts "Pending" von data/pipeline.md."""
     text = path.read_text(encoding="utf-8") if path.exists() else SKELETON
     marker = next((m for m in PENDING if m in text), None)
     if marker is None:
@@ -150,7 +137,6 @@ def add_pending(path, lines):
 
 
 def send(root, jobs, today):
-    """Legt jobs in die Inbox. Gibt die IDs der neu gesendeten Jobs zurück."""
     known = sent_ids(root)
     files, lines, new = [], [], []
     try:
@@ -166,7 +152,6 @@ def send(root, jobs, today):
         if lines:
             add_pending(root / "data" / "pipeline.md", lines)
     except OSError:
-        # ohne Zeile in der Inbox darf kein Job als gesendet gelten
         for file in files:
             file.unlink(missing_ok=True)
         raise

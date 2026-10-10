@@ -13,12 +13,6 @@ function webUrlFrom(value) {
   return match?.[0] ?? null;
 }
 
-/**
- * Convert a historical posting URL into the board-shaped URL expected by the
- * corresponding provider. Unknown vendors keep the original URL: they remain
- * visible in the derived seed set and become scannable automatically once a
- * provider with the same id exists.
- */
 export function atsBoardUrlOf(rawUrl, vendor = atsVendorOf(rawUrl)) {
   let u;
   try { u = new URL(rawUrl); } catch { return null; }
@@ -26,8 +20,6 @@ export function atsBoardUrlOf(rawUrl, vendor = atsVendorOf(rawUrl)) {
 
   const parts = u.pathname.split('/').filter(Boolean);
   if (vendor === 'greenhouse') {
-    // Older Greenhouse postings use boards.greenhouse.io, but the current
-    // provider detects the public boards API at job-boards.greenhouse.io.
     if (u.hostname.toLowerCase() === 'boards.greenhouse.io') {
       u.hostname = 'job-boards.greenhouse.io';
     }
@@ -67,10 +59,6 @@ function seedOf(company, rawUrl, source) {
 function linkedReportNumbers(reportCell, notesCell) {
   const link = String(reportCell ?? '').match(/\[([^\]]*)\]\(([^)]+)\)/);
   if (!link) return extractTrackerReportNumbers(reportCell, notesCell);
-  // Reuse the tracker's canonical local-target validation. It rejects HTTP(S)
-  // and protocol-relative links, and returns both numbers on a label/target
-  // mismatch. Exactly one number therefore proves a local, self-consistent
-  // report link. A present-but-invalid link must not fall back to Notes.
   const validated = extractTrackerReportNumbers(reportCell);
   return validated.length === 1 ? validated : [];
 }
@@ -101,14 +89,6 @@ export function parseTrackerAtsSeeds(text, { reportsRoot } = {}) {
   for (const line of lines) {
     if (!line.startsWith('|') || isHeaderRow(line) || isSeparatorRow(line)) continue;
     const cells = line.split('|').map((cell) => cell.trim());
-    // The canonical nine-column tracker has no URL column. Its Report cell
-    // links to the evaluation report that owns the posting's **URL:** field.
-    // Custom trackers may carry URL directly; prefer it but never scrape an
-    // arbitrary Notes URL, which may be unrelated evidence.
-    // The URL cell may be a markdown link (#3516): read its HREF through the
-    // shared extractor rather than relying on WEB_URL_RE happening to stop
-    // at the link's closing paren — the same contract every tracker reader
-    // follows, and one regex edit away from breaking if left implicit.
     const directUrl = columns.url == null ? null : extractCellUrl(cells[columns.url]);
     const reportNumbers = linkedReportNumbers(
       columns.report == null ? '' : cells[columns.report],
@@ -139,10 +119,6 @@ function readIfPresent(file) {
   try { return readFileSync(file, 'utf-8'); } catch { return ''; }
 }
 
-/**
- * Read the user's tracker and scan history without writing either one.
- * Duplicate postings from the same board collapse to one provider fetch.
- */
 export function loadHistoryAtsSeeds({
   dataRoot = getCareerOpsRoot(),
   trackerPath = resolveTrackerPath(dataRoot),

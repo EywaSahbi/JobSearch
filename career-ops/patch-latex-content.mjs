@@ -1,18 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * patch-latex-content.mjs — Apply prose patches to a user-owned LaTeX CV in place.
- *
- * Usage:
- *   node patch-latex-content.mjs <source.tex> <patches.json> <output.tex>
- *
- * patches.json:
- *   { "patches": [ { "id": "bullet-0", "text": "Tailored bullet text" } ] }
- *
- * Optional manifest fields in patches.json (from extract-latex-content.mjs):
- *   { "slots": [...], "patches": [...] }
- */
-
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, dirname } from 'path';

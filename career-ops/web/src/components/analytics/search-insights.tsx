@@ -4,13 +4,6 @@ import { useEffect, useState } from "react";
 import { statsModel } from "@/lib/analytics/view-model.mjs";
 import type { StatsModel, BreakdownSection, ThresholdSection, VendorSection } from "@/lib/analytics/view-model.mjs";
 
-// The "Insights" view: analyze-patterns.mjs, rendered.
-//
-// The core already refuses to claim things its sample cannot support, and every
-// one of those refusals is surfaced here rather than smoothed over — a panel
-// that quietly drops a caveat is how a hedged number becomes a rule someone
-// filters their search by. The gating lives in lib/analytics/view-model.mjs and
-// is unit-tested; this file only renders the decision.
 export function SearchInsights() {
   const [model, setModel] = useState<StatsModel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,8 +43,6 @@ export function SearchInsights() {
     const { current, threshold, message } = model.progress;
     const pct = threshold ? Math.min(100, Math.round((current / threshold) * 100)) : 0;
     return (
-      // The core's own words, plus the distance to the bar. Showing "4 of 5" is
-      // the difference between "come back later" and knowing exactly when.
       <div className="mt-6 rounded-2xl border border-dashed border-border bg-surface/30 px-6 py-8 text-center">
         <p className="font-display text-lg text-landing">Not enough applications yet</p>
         <p className="mx-auto mt-1.5 max-w-md text-sm text-muted">{message}</p>
@@ -109,8 +100,6 @@ function Threshold({ section }: { section: ThresholdSection }) {
   return (
     <Panel title={section.label} hint={section.sampleSize ? `${section.sampleSize} decided outcomes` : undefined}>
       <p className="mt-2 text-3xl tabular-nums text-foreground">
-        {/* Withheld when the core says the sample does not support it: a
-            "recommended 4.7" off three outcomes reads as a rule. */}
         {section.value === null ? <span className="text-faint">—</span> : section.value.toFixed(1)}
       </p>
       {section.provisional && (
@@ -154,8 +143,6 @@ function Vendor({ section }: { section: VendorSection }) {
   if (!section.claimable) {
     return (
       <Panel title={section.label}>
-        {/* No chart at all, and the reason stated. An advance rate over 0
-            identified applications is not a small number, it is no number. */}
         <p className="mt-2 text-sm text-muted">
           {section.identified} of the applications could be matched to an ATS vendor
           {section.minSampleForClaim ? `, and ${section.minSampleForClaim} are needed before a per-vendor rate means anything` : ""}.

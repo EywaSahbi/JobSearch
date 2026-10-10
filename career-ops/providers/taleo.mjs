@@ -1,11 +1,3 @@
-// Taleo Enterprise Edition single-company adapter for `tracked_companies:`.
-// Users point it at the canonical public section URL
-// `https://<tenant>.taleo.net/careersection/<section>/jobsearch.ftl`; the
-// provider fetches that shell first, then replays its anonymous
-// `POST /careersection/rest/jobboard/searchjobs` request.
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
 import { BROWSER_LIKE_USER_AGENT, fetchJsonWithRetry, fetchTextWithRetry, sleep } from './_http.mjs';
 import { htmlToText } from './_html-to-text.mjs';
 
@@ -51,13 +43,6 @@ function resolveBoard(entry) {
   return null;
 }
 
-/**
- * Taleo's location column sometimes carries the raw JSON-encoded array the
- * UI groups multi-location postings from (e.g. `["AB-Calgary"]` or
- * `["AB-Calgary","AB-Edmonton"]`) instead of plain text. Detect that shape
- * and join it into readable text; anything else (including a genuinely
- * plain string) passes through unchanged.
- */
 function parseLocationField(value) {
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -68,7 +53,7 @@ function parseLocationField(value) {
           const joined = parsed.map((v) => htmlToText(v)).filter(Boolean).join('; ');
           return joined;
         }
-      } catch { /* not valid JSON; fall through to the raw string */ }
+      } catch { }
     }
   }
   return value;
@@ -141,7 +126,6 @@ function toEpochMs(value) {
   return Number.isNaN(n) ? undefined : n;
 }
 
-/** @param {any} json @param {{url:URL,section:string}} board @param {string[]} headings @param {string} company */
 export function parseTaleoResponse(json, board, headings, company) {
   if (json == null || Array.isArray(json)) return [];
   if (typeof json !== 'object') {
@@ -185,7 +169,7 @@ function decodeDetail(value) {
   if (typeof value !== 'string' || !value.trim()) return '';
   let decoded = value;
   if (/%[0-9a-f]{2}/i.test(decoded)) {
-    try { decoded = decodeURIComponent(decoded); } catch { /* keep the original text */ }
+    try { decoded = decodeURIComponent(decoded); } catch { }
   }
   return htmlToText(decoded);
 }
@@ -205,7 +189,6 @@ function findJobPosting(node) {
   return null;
 }
 
-/** Extract the public JobPosting description embedded in Taleo detail HTML. */
 export function parseTaleoDetail(html) {
   if (typeof html !== 'string') return '';
   for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
@@ -213,7 +196,7 @@ export function parseTaleoDetail(html) {
       const posting = findJobPosting(JSON.parse(match[1]));
       const description = decodeDetail(posting?.description);
       if (description) return description;
-    } catch { /* another JSON-LD block may still be usable */ }
+    } catch { }
   }
   return '';
 }
@@ -236,7 +219,6 @@ function buildBody(page) {
   };
 }
 
-/** @type {Provider} */
 export default {
   id: 'taleo',
   detect(entry) {
@@ -271,18 +253,9 @@ export default {
       const total = rawTotal == null || (typeof rawTotal === 'string' && !rawTotal.trim())
         ? Number.NaN
         : Number(rawTotal);
-      // Terminate once nothing came back, or once we've accumulated at least
-      // as many rows as the source's own reported total. A page returning
-      // fewer rows than the assumed/reported pageSize is NOT a reliable
-      // end-of-results signal — some Taleo boards return uneven page sizes
-      // (e.g. 14 rows on page 1, 16 on page 2) — so that is deliberately not
-      // a termination condition here. The `maxPages` loop bound above is the
-      // safety net when `total` is missing or not a usable number.
       if (!rawCount || (Number.isFinite(total) && all.length >= total)) break;
     }
 
-    // Health probes are deliberately list-only. Normal scans enrich a bounded
-    // prefix so a very large board cannot trigger an unbounded request fanout.
     const probing = Number.isInteger(ctx.maxPages) && ctx.maxPages > 0;
     if (entry.fetchDetails === true && !probing) {
       const jobs = all.slice(0, detailLimit(entry));
@@ -293,7 +266,6 @@ export default {
           const description = parseTaleoDetail(detailHtml);
           if (description) jobs[i].description = description;
         } catch {
-          // Detail enrichment is best-effort. Keep the parsed listing row.
         }
       }
     }

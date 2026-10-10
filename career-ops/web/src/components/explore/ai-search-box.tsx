@@ -10,9 +10,6 @@ const EXAMPLES = [
   "Head of Applied AI at healthtech, posted this week",
 ];
 
-// The "magic" natural-language box: a soft contained halo at rest that intensifies
-// on focus (erupts into the full-viewport hunt on submit). Effect CSS co-located
-// per the Tailwind v4 stale-CSS HMR gotcha.
 const STYLE = `
 .co-aibox{position:relative;border-radius:1.1rem;border:1px solid var(--co-border,hsl(0 0% 50% /.22));background:color-mix(in srgb, var(--bg) 55%, transparent);transition:border-color .3s,box-shadow .3s}
 .co-aibox::before{content:"";position:absolute;inset:-1px;border-radius:1.1rem;padding:1px;background:radial-gradient(70% 140% at 28% -10%, hsl(26 82% 55% /.45), transparent 62%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.45;transition:opacity .3s;pointer-events:none}

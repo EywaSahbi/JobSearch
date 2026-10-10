@@ -1,7 +1,3 @@
-"""Tests für career_ops.py.
-
-    python -m unittest
-"""
 import http.client
 import json
 import tempfile
@@ -159,7 +155,7 @@ class CareerOpsTest(unittest.TestCase):
         )
 
     def test_failed_inbox_write_leaves_no_job_marked_as_sent(self):
-        (self.root / "data" / "pipeline.md").mkdir(parents=True)  # lässt sich nicht als Datei schreiben
+        (self.root / "data" / "pipeline.md").mkdir(parents=True)
 
         with self.assertRaises(OSError):
             career_ops.send(self.root, [JOB], TODAY)
@@ -174,8 +170,6 @@ class CareerOpsTest(unittest.TestCase):
 
 
 class ServerTest(unittest.TestCase):
-    """Die Routen /api/career-ops des lokalen Servers aus scraper.py."""
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -194,7 +188,6 @@ class ServerTest(unittest.TestCase):
     def call(self, method, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
         self.addCleanup(conn.close)
-        # der Server lässt nur Anfragen an seine eigene Adresse zu
         conn.request(method, "/api/career-ops", body=body, headers={"Host": f"127.0.0.1:{scraper.PORT}"})
         res = conn.getresponse()
         text = res.read().decode("utf-8")
@@ -234,7 +227,7 @@ class ServerTest(unittest.TestCase):
         self.assertFalse((self.root / "gibt-es-nicht").exists())
 
     def test_post_reports_a_failed_write(self):
-        (self.root / "data" / "pipeline.md").mkdir(parents=True)  # lässt sich nicht als Datei schreiben
+        (self.root / "data" / "pipeline.md").mkdir(parents=True)
 
         status, data = self.call("POST", json.dumps({"jobs": [JOB]}))
 

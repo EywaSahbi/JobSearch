@@ -1,10 +1,3 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// JustJoin.it provider — hits the current candidate offers API.
-// Browser URLs under https://justjoin.it/job-offers/... are accepted for
-// detection, but fetches use https://justjoin.it/api/candidate-api/offers.
-
 const ALLOWED_HOSTS = new Set(['justjoin.it']);
 const API_BASE = 'https://justjoin.it/api/candidate-api/offers';
 const JOB_BASE = 'https://justjoin.it/job-offer/';
@@ -98,7 +91,6 @@ export function parseJustJoinResponse(json) {
     .filter(Boolean);
 }
 
-/** @type {Provider} */
 export default {
   id: 'justjoin',
 

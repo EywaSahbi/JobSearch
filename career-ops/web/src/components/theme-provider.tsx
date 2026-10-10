@@ -34,9 +34,6 @@ function savedTheme(): Theme | null {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Keep the server and first client snapshots identical. The bootstrap script
-  // establishes the document class before paint; the effect adopts it after
-  // hydration without forcing React to rebuild theme-dependent controls.
   const [theme, setThemeState] = useState<Theme>("dark");
 
   useEffect(() => {
@@ -45,8 +42,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onSystemTheme = () => {
-      // A stored choice wins over later OS changes. With no stored choice, keep
-      // the bootstrap behavior live when the system preference changes.
       if (savedTheme()) return;
       const next = media.matches ? "dark" : "light";
       setThemeState(next);
@@ -73,7 +68,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, next);
     } catch {
-      /* Private browsing/storage-disabled environments remain usable. */
     }
   }, []);
 

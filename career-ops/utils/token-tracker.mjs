@@ -1,45 +1,26 @@
-/**
- * utils/token-tracker.mjs — Token tracking and cost estimation for career-ops
- */
-
 export const RATES = {
-  // MiniMax models
   'MiniMax-M3': { input: 0.60 / 1000000, output: 2.40 / 1000000, cachedInput: 0.12 / 1000000 },
   'MiniMax-M2.7': { input: 0.30 / 1000000, output: 1.20 / 1000000, cachedInput: 0.06 / 1000000 },
 
-  // OpenAI models
   'gpt-4o-mini': { input: 0.150 / 1000000, output: 0.600 / 1000000 },
   'gpt-4o': { input: 2.50 / 1000000, output: 10.00 / 1000000 },
 
-  // Gemini models (Developer API paid tier, USD per token; free tier is $0)
   'gemini-3.6-flash': { input: 1.50 / 1000000, output: 7.50 / 1000000, cachedInput: 0.15 / 1000000 },
   'gemini-3.5-flash': { input: 1.50 / 1000000, output: 9.00 / 1000000, cachedInput: 0.15 / 1000000 },
   'gemini-2.5-flash': { input: 0.075 / 1000000, output: 0.300 / 1000000, cachedInput: 0.0375 / 1000000 },
   'gemini-2.5-pro': { input: 1.25 / 1000000, output: 5.00 / 1000000, cachedInput: 0.625 / 1000000 },
 
-  // OpenRouter / DeepSeek models
   'deepseek/deepseek-chat': { input: 0.14 / 1000000, output: 0.28 / 1000000 },
   'deepseek-chat': { input: 0.14 / 1000000, output: 0.28 / 1000000 },
   'deepseek/deepseek-reasoner': { input: 0.55 / 1000000, output: 2.19 / 1000000 },
   'deepseek-reasoner': { input: 0.55 / 1000000, output: 2.19 / 1000000 },
 
-  // Anthropic / Claude models
   'claude-3-5-sonnet': { input: 3.0 / 1000000, output: 15.0 / 1000000 },
   'claude-3-5-haiku': { input: 0.80 / 1000000, output: 4.00 / 1000000 },
   'claude-3-opus': { input: 15.00 / 1000000, output: 75.00 / 1000000 },
   'claude-3-haiku': { input: 0.25 / 1000000, output: 1.25 / 1000000 },
 };
 
-/**
- * Normalize an OpenAI-compatible usage object, applying safe defaults.
- *
- * Four evaluator call sites previously duplicated this exact extraction.
- * Centralising it here keeps the fallback order (prompt_tokens_details →
- * cached_tokens → 0) in one authoritative place.
- *
- * @param {object|null|undefined} usage - Raw `data.usage` from the API response.
- * @returns {{ prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens: number }}
- */
 export function normalizeOpenAIUsage(usage) {
   return {
     prompt_tokens: usage?.prompt_tokens ?? 0,
@@ -52,7 +33,6 @@ export function normalizeOpenAIUsage(usage) {
 export function estimateCost(model, usage, provider) {
   if (provider === 'ollama') return 0;
   if (provider === 'openrouter' && !process.env.CAREER_OPS_MODEL) {
-    // OpenRouter free rotation models are free
     return 0;
   }
 
@@ -60,7 +40,6 @@ export function estimateCost(model, usage, provider) {
   if (model) {
     rate = RATES[model];
     if (!rate) {
-      // try matching prefix or substring
       const key = Object.keys(RATES).find(k => model.includes(k));
       if (key) {
         rate = RATES[key];
@@ -143,7 +122,6 @@ export function formatBreakdown(accumulator, model, provider) {
   lines.push('Token breakdown:');
   
   const steps = ['scan', 'evaluation', 'pdf payload'];
-  // Ensure any other recorded steps are printed too
   for (const key of Object.keys(accumulator.steps)) {
     if (!steps.includes(key)) {
       steps.push(key);

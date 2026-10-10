@@ -1,23 +1,5 @@
 #!/usr/bin/env node
 import { validateFlags } from './lib/cli-flags.mjs';
-/**
- * stats.mjs — Lifetime pipeline stats aggregator (zero-token). #1604
- *
- * One JSON contract for "how is my pipeline doing, lifetime": tracker roll-up,
- * cumulative funnel, lifetime scanner totals from scan-history.tsv, portal
- * coverage from portals.yml, and follow-up compliance. Reads durable data
- * files only — no LLM cost anywhere.
- *
- * Run: node stats.mjs             (JSON to stdout)
- *      node stats.mjs --summary   (human-readable table)
- *
- * Sections degrade to null when their source file is missing, and
- * `metadata.sources` says which files were found — a fresh clone with zero
- * user data emits the full contract shape with null sections.
- *
- * `runs` aggregates data/scan-runs.tsv (per-run counters written by scan.mjs,
- * #1604 PR-2) — null until the first non-dry scan creates the file.
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -44,21 +26,13 @@ const PORTAL_HEALTH_FILE = join(DATA_ROOT, 'data', 'portal-health.tsv');
 
 const CANONICAL_STATUSES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'];
 
-// In-flight applications. Deliberately NARROWER than the dashboard's
-// ActiveApps (which also counts Evaluated): an evaluated-but-never-sent row is
-// a candidate, not an application in flight. Hired is a terminal success, not
-// in flight, so it is intentionally excluded here (but see PURSUED/funnel).
 const ACTIVE_STATUSES = new Set(['Applied', 'Responded', 'Interview', 'Offer']);
 
-// Rows that count toward avgScoreApplied — jobs the user actually pursued.
-// Plain avgScore mixes in SKIP/Discarded and understates real fit. Hired is
-// the fullest pursuit of all, so it belongs here.
 const PURSUED_STATUSES = new Set(['Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected']);
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const pct = (part, total) => (total > 0 ? round1((part / total) * 100) : 0);
 
-/** Canonical display form ("aplicado" → "Applied", "skip" → "SKIP"); unknown → "Unknown" (counted, never dropped). */
 function canonicalStatus(raw) {
   const norm = normalizeStatus(String(raw ?? ''));
   if (norm === 'skip') return 'SKIP';
@@ -66,15 +40,6 @@ function canonicalStatus(raw) {
   return CANONICAL_STATUSES.includes(cased) ? cased : 'Unknown';
 }
 
-// ── Tracker roll-up ─────────────────────────────────────────────────
-
-/**
- * Roll up applications.md: counts per canonical status, score stats, pdf and
- * report coverage, in-flight count. Header-aware via tracker-parse.mjs; CRLF
- * input is normalized first (Windows checkouts).
- *
- * @param {string} content - Raw applications.md text.
- */
 export function computeTrackerStats(content) {
   const lines = String(content ?? '').replace(/\r/g, '').split('\n');
   const colmap = resolveColumns(lines);
@@ -110,7 +75,6 @@ export function computeTrackerStats(content) {
   };
 }
 
-/** Map of tracker number → canonical status (for follow-up compliance). */
 export function trackerStatusByNum(content) {
   const lines = String(content ?? '').replace(/\r/g, '').split('\n');
   const colmap = resolveColumns(lines);
@@ -122,50 +86,12 @@ export function trackerStatusByNum(content) {
   return byNum;
 }
 
-/**
- * Tracker numbers that followup-cadence.mjs's own cadence math already
- * classifies 'cold' (Applied, zero response after applied_max_followups
- * follow-ups). Reuses `analyzeFromContent` — the same function
- * followup-cadence.mjs's CLI runs — instead of re-deriving the
- * applied_max_followups/cadence rule here (#2123). A row can only be
- * classified cold when its status is 'applied', so every number returned
- * here is already a subset of ACTIVE_STATUSES.
- *
- * Missing follow-ups content (`null`/absent file, the common case) degrades
- * gracefully: analyzeFromContent treats it as zero logged follow-ups for
- * every row, so nothing can cross the follow-up-count threshold and this
- * returns an empty set — never an error, never a guess.
- *
- * @param {string} trackerContent - Raw applications.md text.
- * @param {string|null} followupsContent - Raw follow-ups.md text, or null when absent.
- */
 export function computeColdAppNums(trackerContent, followupsContent) {
   const result = analyzeFromContent(trackerContent, followupsContent || '');
   if (result.error) return new Set();
   return new Set(result.entries.filter((e) => e.urgency === 'cold').map((e) => e.num));
 }
 
-// ── Cumulative funnel ───────────────────────────────────────────────
-
-/**
- * Cumulative funnel: everX = "reached stage X or beyond, ever". The math
- * mirrors the dashboard's ComputeProgressMetrics (career.go): Rejected counts
- * into everApplied and everResponded (a rejection is a reply), Hired counts into every
- * stage through everOffer (a landed job proves the offer and everything before
- * it), and each later stage sums itself plus everything beyond it. Rates are
- * relative to everApplied.
- *
- * Keys are deliberately NOT bare status names — `tracker.byStatus.Applied` is
- * "currently in Applied" while `everApplied` is "ever applied"; the same word
- * for two different numbers would read as a bug.
- *
- * Snapshot interview/offer counts are lower bounds; use ledger history to
- * recover stages reached before a rejection or withdrawal (#3273).
- *
- * This is the canonical funnel definition for career-ops going forward;
- * dashboard/web consuming this JSON instead of keeping independent copies is
- * a named follow-up in #1604.
- */
 export function computeFunnel(byStatus) {
   const n = (k) => byStatus[k] || 0;
   const everApplied = n('Applied') + n('Responded') + n('Interview') + n('Offer') + n('Hired') + n('Rejected');
@@ -184,21 +110,6 @@ export function computeFunnel(byStatus) {
   };
 }
 
-/**
- * Ledger-aware funnel: everX counts DISTINCT tracker rows that ever reached
- * stage X, folding the transition ledger so a row now sitting in a terminal
- * snapshot still counts for the stages it passed through — an Offer that was
- * declined (now Discarded) counts into everOffer; a Rejected that reached
- * Interview counts into everInterview. This resolves the snapshot limitation
- * computeFunnel() documents (#1428) for every row the ledger covers; a row with
- * no ledger history falls back to its current status alone, so pre-ledger middle
- * stages stay lower bounds. A current Rejected proves a response (rank 2)
- * with no ledger, matching the snapshot math. Same shape as computeFunnel() plus
- * `basis:'ledger'`.
- *
- * @param {Map<number,string>} statusByNum - num → current canonical status.
- * @param {Array<{num:number,from:string,to:string}>} ledger - parseStatusLogStages output.
- */
 export function computeFunnelWithHistory(statusByNum, ledger) {
   const reached = recoverFunnelStages(statusByNum, ledger);
   let everApplied = 0, everResponded = 0, everInterview = 0, everOffer = 0;
@@ -221,28 +132,16 @@ export function computeFunnelWithHistory(statusByNum, ledger) {
   };
 }
 
-// ── Lifetime scanner totals ─────────────────────────────────────────
-
-/** ISO week key ("2026-W27") for a YYYY-MM-DD string; null for bad input. Exported for the year-boundary tests. */
 export function isoWeek(dateStr) {
   const d = new Date(`${dateStr}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return null;
-  const day = (d.getUTCDay() + 6) % 7; // Mon=0
-  d.setUTCDate(d.getUTCDate() - day + 3); // nearest Thursday decides the ISO year
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);
   const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
   const week = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
-/**
- * Lifetime totals from scan-history.tsv. Malformed rows (no URL in column 0)
- * are skipped rather than crashing — a torn row from an interrupted append
- * must never poison the aggregate. Extra trailing columns (e.g. the
- * fingerprint column, #1597) are ignored.
- *
- * @param {string} content - Raw scan-history.tsv text.
- * @param {{weeks?: number}} [opts] - How many trailing weeks of addedPerWeek to keep.
- */
 export function computeScanStats(content, { weeks = 8 } = {}) {
   const lines = String(content ?? '').replace(/\r/g, '').split('\n').filter((l) => l.trim());
   const byPortal = {}, byStatus = {};
@@ -251,8 +150,8 @@ export function computeScanStats(content, { weeks = 8 } = {}) {
   let totalRecorded = 0, added = 0, firstSeen = null, lastSeen = null;
   for (const line of lines) {
     const { url, first_seen: date, portal, company, status: statusRaw } = parseScanHistoryLine(line);
-    if (url === 'url') continue; // header
-    if (!/^https?:\/\//.test(url)) continue; // torn/malformed row
+    if (url === 'url') continue;
+    if (!/^https?:\/\//.test(url)) continue;
     totalRecorded++;
     const status = (statusRaw || 'added').trim() || 'added';
     byStatus[status] = (byStatus[status] || 0) + 1;
@@ -275,7 +174,6 @@ export function computeScanStats(content, { weeks = 8 } = {}) {
   return { totalRecorded, added, byStatus, byPortal, distinctCompanies: companies.size, firstSeen, lastSeen, addedPerWeek };
 }
 
-/** Lowercased set of company names that ever appeared in scan-history.tsv. */
 export function scanCompanyNames(content) {
   const names = new Set();
   for (const line of String(content ?? '').replace(/\r/g, '').split('\n')) {
@@ -287,28 +185,12 @@ export function scanCompanyNames(content) {
   return [...names];
 }
 
-// ── Portal coverage ─────────────────────────────────────────────────
-
-/**
- * Configured-vs-producing portal coverage.
- *
- * producingPct = share of configured tracked_companies whose name has EVER
- * appeared as a scanned job's company. A low number usually means "no matching
- * openings from that company yet", NOT a broken portal — the --summary label
- * carries the same caveat. Matching is exact-lowercase between portals.yml
- * `name` and the scanner's company string; that undercounts when names differ
- * ("Acme" vs "Acme, Inc."). Documented v1 contract — no silent fuzzy-matching.
- *
- * @param {string} portalsYmlContent - Raw portals.yml text.
- * @param {object|null} scanStats - Result of computeScanStats (for activePortals).
- * @param {string[]} [producingCompanyNames] - From scanCompanyNames().
- */
 export function computePortalStats(portalsYmlContent, scanStats, producingCompanyNames = [], portalHealthContent = null) {
   let cfg;
   try {
     cfg = yaml.load(String(portalsYmlContent ?? '')) || {};
   } catch {
-    return null; // malformed YAML → no portal section rather than a crash
+    return null;
   }
   const companies = Array.isArray(cfg.tracked_companies) ? cfg.tracked_companies : [];
   const boards = Array.isArray(cfg.job_boards) ? cfg.job_boards : [];
@@ -335,8 +217,6 @@ export function computePortalStats(portalsYmlContent, scanStats, producingCompan
     const lastProbed = new Map();
     let newestProbe = 0;
     for (const r of healthRecords) {
-      // Mirrors scan.mjs computeConsecutiveFailures: healthy statuses reset,
-      // every other status (slug_gone/network/auth/server/unknown) counts.
       if (r.status === 'reachable' || r.status === 'empty') {
         streaks.set(r.company, 0);
       } else {
@@ -347,18 +227,6 @@ export function computePortalStats(portalsYmlContent, scanStats, producingCompan
         if (r.ts > newestProbe) newestProbe = r.ts;
       }
     }
-    // A failure streak is evidence of a dead portal only while the entry is
-    // still being PROBED. An entry that stops resolving to a provider writes
-    // no further health rows — scan.mjs skips it at resolveEntries(), before
-    // the fetch loop that records health — so its final streak would stand as
-    // a permanent 🚨 that no fix can clear. That is how switching a broken
-    // board to scan_method: websearch (the documented remedy) leaves the
-    // warning lit forever, and a warning that cannot clear trains the reader
-    // to ignore the whole line.
-    //
-    // Staleness is measured against the newest row in this file rather than
-    // the wall clock, so a checkout whose scanner has been idle for months
-    // still reports its last known state instead of silently going green.
     const staleMs = (cfg.portal_health_stale_days || 14) * 86400000;
     const threshold = cfg.portal_health_threshold || 3;
     for (const [company, streak] of streaks.entries()) {
@@ -380,12 +248,6 @@ export function computePortalStats(portalsYmlContent, scanStats, producingCompan
   };
 }
 
-// ── Follow-up compliance ────────────────────────────────────────────
-
-/** Read-only suggestions based on observed history, never config creation time.
- * Company identity deliberately uses the same exact-lowercase contract as
- * computePortalStats. Missing evidence never proves a board is dead.
- */
 export function computePortalRecommendations(portalsContent, scanContent, healthContent, now = Date.now()) {
   let cfg;
   try { cfg = yaml.load(String(portalsContent ?? '')) || {}; } catch { return null; }
@@ -428,7 +290,6 @@ export function computePortalRecommendations(portalsContent, scanContent, health
     if (seen.has(key)) continue;
     seen.add(key);
     const h = health.get(key);
-    // Old health from a board no longer probed is not current evidence.
     if (!h || Date.parse(h.lastObserved) < cutoff) continue;
     const lastProduced = lastMatch.get(key) || null;
     const row = { company: company.name, ...h, lastProduced };
@@ -443,15 +304,6 @@ export function computePortalRecommendations(portalsContent, scanContent, health
   return { quietDays: days, failureThreshold: threshold, ...buckets };
 }
 
-/**
- * Follow-up compliance from follow-ups.md (same table shape followup-cadence
- * parses: | num | appNum | date | company | role | channel | contact | notes |).
- * appliedWithoutFollowup counts tracker rows currently in Applied with zero
- * logged follow-ups — the rows the followup mode would flag as aging silently.
- *
- * @param {string} followupsContent - Raw follow-ups.md text.
- * @param {Map<number,string>} trackerByNum - From trackerStatusByNum().
- */
 export function computeFollowupStats(followupsContent, trackerByNum) {
   const byApp = new Map();
   let totalFollowups = 0;
@@ -461,7 +313,7 @@ export function computeFollowupStats(followupsContent, trackerByNum) {
     if (parts.length < 8) continue;
     const num = parseInt(parts[1], 10);
     const appNum = parseInt(parts[2], 10);
-    if (Number.isNaN(num) || Number.isNaN(appNum)) continue; // header/separator
+    if (Number.isNaN(num) || Number.isNaN(appNum)) continue;
     totalFollowups++;
     byApp.set(appNum, (byApp.get(appNum) || 0) + 1);
   }
@@ -477,33 +329,10 @@ export function computeFollowupStats(followupsContent, trackerByNum) {
   };
 }
 
-/**
- * Schema check for follow-ups.md, so a malformed table is distinguishable from
- * an empty one (#2971).
- *
- * computeFollowupStats() above and followup-cadence.mjs's parseTrackerContent()
- * both read this table POSITIONALLY, in the shape modes/followup.md documents:
- * `| num | appNum | date | company | role | channel | contact | notes |`. Both
- * skip any row where parts[1] or parts[2] fails parseInt. A table written with a
- * different column order is therefore dropped row by row and reports as ZERO
- * follow-ups in both tools — indistinguishable from a file where nothing has
- * been logged yet, with no error and no warning. This returns the counts needed
- * to tell those two cases apart; verify-pipeline.mjs turns them into output.
- *
- * Reports rather than throws: it is a diagnostic, and the consumers must keep
- * degrading gracefully on a bad file rather than crashing a stats run.
- *
- * @param {string|null} followupsContent - Raw follow-ups.md text, or null when absent.
- * @returns {{present: boolean, sawSeparator: boolean, pipeLines: number,
- *   dataRows: number, parsed: number, unparsedLines: number[]}}
- *   `unparsedLines` holds 1-based line numbers of data rows the consumers will skip.
- */
 export function checkFollowupsSchema(followupsContent) {
   const empty = { present: false, sawSeparator: false, pipeLines: 0, dataRows: 0, parsed: 0, unparsedLines: [] };
   if (followupsContent == null) return empty;
   const lines = String(followupsContent).replace(/\r/g, '').split('\n');
-  // A Markdown table's delimiter row is the boundary: everything before it is
-  // the header (whose cells never parse as ints), everything after is data.
   const SEPARATOR_RE = /^\|[\s|:-]+\|?\s*$/;
   let sawSeparator = false;
   let pipeLines = 0;
@@ -512,14 +341,12 @@ export function checkFollowupsSchema(followupsContent) {
   const unparsedLines = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!line.startsWith('|')) continue; // followup-seed.mjs's "- next #N" pins live outside the table
+    if (!line.startsWith('|')) continue;
     pipeLines++;
     if (SEPARATOR_RE.test(line)) { sawSeparator = true; continue; }
-    if (!sawSeparator) continue; // header row, or a table missing its delimiter entirely
+    if (!sawSeparator) continue;
     dataRows++;
     const parts = line.split('|').map((s) => s.trim());
-    // Mirrors both consumers' guard exactly; if it diverges, this check stops
-    // predicting what they will actually do with the file.
     const readable = parts.length >= 8
       && !Number.isNaN(parseInt(parts[1], 10))
       && !Number.isNaN(parseInt(parts[2], 10));
@@ -529,40 +356,19 @@ export function checkFollowupsSchema(followupsContent) {
   return { present: true, sawSeparator, pipeLines, dataRows, parsed, unparsedLines };
 }
 
-// ── Scan-run trends ─────────────────────────────────────────────────
-
-/**
- * Aggregate data/scan-runs.tsv (written by scan.mjs, one row per non-dry run).
- *
- * Header-name parsing, NEVER positional: columns may be appended in later
- * schema versions and a positional slice would silently miscount from then on.
- * Torn rows (crash mid-append) and rows with a bad timestamp are skipped;
- * failed runs count in totalRuns/failedRuns but are excluded from averages so
- * an aborted run doesn't drag the trend down.
- *
- * @param {string} content - Raw scan-runs.tsv text.
- * @returns {object|null} null for empty/unknown-schema files.
- */
 export function computeRunStats(content) {
   const lines = String(content ?? '').replace(/\r/g, '').split('\n').filter((l) => l.trim());
   if (lines.length < 2) return null;
   const header = lines[0].split('\t');
   const idx = Object.fromEntries(header.map((h, i) => [h, i]));
-  if (idx.timestamp == null || idx.found == null) return null; // unknown schema
+  if (idx.timestamp == null || idx.found == null) return null;
   const filterCols = header.filter((h) => h.startsWith('filtered_'));
   const rows = [];
-  // A row WIDER than the header is the dangerous case, and only the narrow one was guarded.
-  // SCAN_RUNS_HEADER is written by appendScanRunSummary only when the file does not yet exist, so
-  // when a release appends or inserts a counter the on-disk header silently stops describing the
-  // rows beneath it. Every name-based lookup then reads a neighbouring column, and the result is a
-  // confident, precise, wrong number rather than an obvious break. Count these and exclude them:
-  // the averages must describe the rows the header can still describe, and the caller has to be
-  // able to see when that is a minority of the file.
   let driftedRows = 0;
   for (const line of lines.slice(1)) {
     const cols = line.split('\t');
-    if (cols.length > header.length) { driftedRows++; continue; } // header no longer describes this row
-    if (cols.length < header.length) continue; // torn row
+    if (cols.length > header.length) { driftedRows++; continue; }
+    if (cols.length < header.length) continue;
     if (!/^\d{4}-\d{2}-\d{2}/.test(cols[idx.timestamp] || '')) continue;
     const num = (name) => { const v = Number(cols[idx[name]]); return Number.isNaN(v) ? 0 : v; };
     rows.push({
@@ -573,25 +379,11 @@ export function computeRunStats(content) {
       newAdded: num('new_added'),
     });
   }
-  // Distinguish "no runs recorded" from "every run was excluded as drifted". Returning null for
-  // the second case hides the reason: the caller would report an absent scan section on a file
-  // that is full of rows the header can no longer describe.
   if (rows.length === 0) {
     return driftedRows > 0
       ? { totalRuns: 0, driftedRows, failedRuns: 0, lastRunDate: null, avgFoundPerRun: 0, avgNewPerRun: 0, filterRemovalPct: 0 }
       : null;
   }
-  // Inclusion by 'completed', not exclusion by known failure names: any
-  // status a future scan.mjs writes is excluded from trend averages until
-  // this aggregator learns what it means. Rows from pre-status files default
-  // to 'completed' above, so old data keeps counting.
-  //
-  // No-op on today's data: scan.mjs only ever writes 'completed' or 'failed',
-  // and both predicates ('!== failed' vs '=== completed') agree on those two.
-  // The switch is a guard for a future third status (e.g. 'aborted'), not a
-  // behavior change now. One edge is reachable only by hand-editing the TSV:
-  // an explicitly empty status flips from counted to failedRuns, since
-  // appendScanRunSummary always writes a non-empty status.
   const completed = rows.filter((r) => r.status === 'completed');
   const sum = (arr, k) => arr.reduce((a, r) => a + r[k], 0);
   return {
@@ -605,12 +397,6 @@ export function computeRunStats(content) {
   };
 }
 
-// ── Assembler + CLI ─────────────────────────────────────────────────
-
-/**
- * Assemble the full stats contract. Every section is null when its source
- * file is missing; metadata.sources records what was found.
- */
 export function computeAllStats({
   appsFile = APPS_FILE,
   scanHistoryFile = SCAN_HISTORY_FILE,
@@ -632,13 +418,6 @@ export function computeAllStats({
   const trackerBase = apps ? computeTrackerStats(apps) : null;
   const scan = scanHist ? computeScanStats(scanHist) : null;
 
-  // Cold-classification wiring (#2123): activeApps is purely status-based and
-  // stays untouched for backward compatibility. activeAppsLive subtracts rows
-  // followup-cadence.mjs's own cadence math independently classifies 'cold'
-  // (Applied, zero response after applied_max_followups follow-ups) — the more
-  // honest "still worth expecting a reply from" figure. No follow-up data
-  // (`fups` null) means no cold rows can be identified, so activeAppsLive
-  // simply equals activeApps.
   let tracker = trackerBase;
   if (trackerBase) {
     const coldNums = computeColdAppNums(apps, fups);
@@ -670,8 +449,6 @@ export function computeAllStats({
       },
     },
     tracker,
-    // Prefer the ledger-aware funnel once a transition log exists (#1428); fall
-    // back to the pure status snapshot when it does not, so nothing regresses.
     funnel: !tracker
       ? null
       : statusLog
@@ -685,7 +462,6 @@ export function computeAllStats({
   };
 }
 
-/** Human-readable table. pdfPct/reportPct are JSON-only by design — no job-search decision follows from them. */
 function printSummary(stats) {
   const line = '━'.repeat(45);
   console.log(`\n${line}`);
@@ -696,9 +472,6 @@ function printSummary(stats) {
     const fit = t.avgScore != null
       ? ` | avg fit ${t.avgScore}/5${t.avgScoreApplied != null ? ` (pursued roles ${t.avgScoreApplied}/5)` : ''} | top ${t.topScore}`
       : '';
-    // Only break out live/cold when there's a cold row to report — with no
-    // follow-up data (or genuinely zero cold rows) the plain count is exactly
-    // as accurate and the parenthetical would be noise.
     const liveInfo = t.activeAppsCold > 0 ? ` (${t.activeAppsLive} live, ${t.activeAppsCold} cold)` : '';
     console.log(`Tracker:    ${t.total} total | ${t.activeApps} active${liveInfo}${fit}`);
     const statusLine = Object.entries(t.byStatus).filter(([, c]) => c > 0).map(([s, c]) => `${s} ${c}`).join(' · ');
@@ -734,17 +507,12 @@ function printSummary(stats) {
   }
   const r = stats.runs;
   if (r && r.totalRuns === 0 && r.driftedRows > 0) {
-    // Every row was excluded, so there is no last run to name and no average worth printing.
-    // Rendering the normal line here would read `0 recorded (last null) | avg 0 found`, which
-    // looks like an empty file rather than an unreadable one.
     console.log(`Runs:       none readable — all ${r.driftedRows} row(s) in scan-runs.tsv are wider than its header, so their columns cannot be read by name.`);
     console.log('            Recover by moving scan-runs.tsv aside; the next scan writes a fresh file with a current header.');
   } else if (r) {
     const failed = r.failedRuns > 0 ? ` | ${r.failedRuns} failed` : '';
     console.log(`Runs:       ${r.totalRuns} recorded (last ${r.lastRunDate})${failed} | avg ${r.avgFoundPerRun} found / ${r.avgNewPerRun} new per run | filters remove ${r.filterRemovalPct}%`);
     if (r.driftedRows > 0) {
-      // Say it rather than quietly averaging whichever rows still line up: those may be a small
-      // and unrepresentative tail of the file.
       console.log(`            ${r.driftedRows} row(s) excluded — wider than scan-runs.tsv's header, so their columns cannot be read by name. Move the file aside to start a fresh one.`);
     }
   } else {
@@ -761,8 +529,6 @@ function printSummary(stats) {
     console.log('No suggestion means insufficient evidence or no current concern, not verified health.');
   }
 }
-
-// ── CLI flags + help ────────────────────────────────────────────────
 
 const KNOWN_FLAGS = ['--summary', '--prune', '--help', '-h'];
 

@@ -5,9 +5,6 @@ import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Orchestrates the core's own cold-start check (doctor.mjs --json) — the SAME
-// source of truth the CLI uses to decide onboarding. We never reimplement the
-// prerequisite list; we read the core's verdict.
 export async function GET() {
   const root = careerOpsRoot();
   const doctor = rootScript("doctor");

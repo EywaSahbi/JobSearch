@@ -14,9 +14,6 @@ function freshness(postedAt: string): string {
   return days === 0 ? "today" : days === 1 ? "1d ago" : `${days}d ago`;
 }
 
-// Real company logo (favicon) via the localhost proxy, cached on disk FOREVER per
-// company — so once it resolves it's instant for this card AND every other card,
-// this search or any future one. Falls back to a monogram on miss.
 function Logo({ company }: { company: string }) {
   const [failed, setFailed] = useState(false);
   const letter = (company || "?").trim().charAt(0).toUpperCase();
@@ -35,15 +32,12 @@ function Logo({ company }: { company: string }) {
   );
 }
 
-// What a running worker is doing on this exact posting → the live CTA label.
 const WORKER_LABEL: Record<string, string> = { evaluate: "Evaluating…", pdf: "Preparing CV…", research: "Researching…", apply: "Filling…" };
 
 export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: DiscoveredOffer; inPipeline: boolean; evaluatedN?: string }) {
   const { added, adding, addToPipeline } = useExplore();
   const { jobs, startJob } = useJobs();
 
-  // GLOBAL worker awareness: any worker acting on this URL drives the CTA, here
-  // and on every other surface that renders this offer (the jobs store is global).
   const job = useMemo(
     () => jobs.filter((j) => j.input === offer.url).sort((a, b) => b.startedAt - a.startedAt)[0],
     [jobs, offer.url],
@@ -58,7 +52,7 @@ export function DiscoveryCard({ offer, inPipeline, evaluatedN }: { offer: Discov
   const fresh = freshness(offer.postedAt) || offer.postedHint || "";
 
   const evaluate = () => {
-    addToPipeline([offer]); // evaluating implies it's in the pipeline — record it
+    addToPipeline([offer]);
     startJob({ title: `Evaluate · ${offer.company}`, subtitle: offer.title, kind: "evaluate", input: offer.url, page: "/explore" });
   };
 

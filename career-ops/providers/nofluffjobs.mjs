@@ -1,10 +1,3 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// NoFluffJobs provider — hits the public search posting API.
-// It intentionally returns only the core scanner job fields; richer skill and
-// salary metadata can be added later if the provider contract is expanded.
-
 const ALLOWED_HOSTS = new Set(['nofluffjobs.com']);
 const API_URL = 'https://nofluffjobs.com/api/search/posting';
 const JOB_BASE = 'https://nofluffjobs.com/pl/job/';
@@ -126,7 +119,6 @@ export function parseNoFluffJobsResponse(json) {
     .filter(Boolean);
 }
 
-/** @type {Provider} */
 export default {
   id: 'nofluffjobs',
 

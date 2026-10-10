@@ -5,8 +5,6 @@ import { Loader2, X } from "lucide-react";
 import { CHANNELS, localISODate, type CadenceEntry, type Channel } from "@/lib/followups";
 import { cn } from "@/lib/cn";
 
-// "Log" — the full-fidelity FollowUp entry (date, channel enum, contact,
-// notes). Appends one table row via /api/followups/log.
 export function LogDialog({
   entry,
   onClose,
@@ -16,8 +14,6 @@ export function LogDialog({
   onClose: () => void;
   onLogged: () => void;
 }) {
-  // Local day, not UTC — east of UTC toISOString() defaults to "yesterday"
-  // and its max would block picking the user's actual today.
   const [date, setDate] = useState(() => localISODate());
   const [channel, setChannel] = useState<Channel>("Email");
   const [contact, setContact] = useState(entry.contacts[0]?.email ?? "");
@@ -33,10 +29,6 @@ export function LogDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Keep free text single-line and pipe-free BEFORE it leaves the client
-  // (the API's cell() normalizes again server-side — defense in depth): the
-  // log is a pipe-delimited markdown table, so `|` and newlines would break
-  // the row format.
   const tableSafe = (s: string) => s.replace(/[\r\n]+/g, " ").replace(/\|/g, "/").trim();
 
   const submit = async (e: React.FormEvent) => {

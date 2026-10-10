@@ -43,11 +43,6 @@ function normalizeState(state) {
 }
 
 function normalizeDate(date) {
-  // The LOCAL calendar day when the caller supplies none. This date is written
-  // into the report's Application Answers section as the day the user answered
-  // the form, and it sits beside tracker rows dated with localToday() by
-  // set-status.mjs -- a UTC day put an evening answer a day ahead of the
-  // application it belongs to.
   return inline(date || localToday());
 }
 
@@ -144,22 +139,6 @@ export function formatApplicationAnswersSection(snapshot = {}) {
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
 }
 
-// ---------------------------------------------------------------------------
-// Reader. The formatter above has been write-only since it shipped: nothing in
-// the tree could read a rendered section back, so `modes/apply.md` recovers
-// previous answers by grepping reports for a company name. This closes that
-// asymmetry so answers become addressable data, the way `contacts.mjs` and
-// `assessment-log.mjs` already own both directions of their own formats.
-//
-// One property is deliberately NOT claimed: byte-equality with the input
-// snapshot. The formatter is lossy by design -- `inline()` collapses
-// whitespace in labels, `valueText()` joins arrays with ', ', `pick()` discards
-// which of the four accepted key spellings was used, and empty values become
-// the sentinels 'Not recorded' / '> Not recorded.'. What IS guaranteed, and
-// what the tests pin, is that rendering is a fixed point after one pass:
-//   parse(format(x)) === parse(format(parse(format(x))))
-// ---------------------------------------------------------------------------
-
 const FREE_TEXT_HEADING = '### Free-text answers';
 const SELECTIONS_HEADING = '### Selections made';
 const FIELD_VALUES_HEADING = '### Other field values';
@@ -169,7 +148,6 @@ const NONE_CAPTURED = '- None captured.';
 const NOT_RECORDED_BLOCK = 'Not recorded.';
 const NOT_RECORDED_INLINE = 'Not recorded';
 
-/** Split a rendered section body into its four `###` groups. */
 function sliceGroups(body) {
   const order = [
     ['freeText', FREE_TEXT_HEADING],
@@ -196,7 +174,6 @@ function sliceGroups(body) {
   return groups;
 }
 
-/** `1. **Label**` followed by a `>` quote block. */
 function parseQaEntries(block, labelKey, valueKey, onSkip) {
   if (!block || block === NONE_CAPTURED) return [];
   const lines = block.split('\n');
@@ -226,17 +203,12 @@ function parseQaEntries(block, labelKey, valueKey, onSkip) {
       quoted.push(line.replace(/^>\s?/, ''));
       continue;
     }
-    // Anything else is unreadable: a heading that lost its numbering, or a
-    // quote line with no heading to own it. The second case is the dangerous
-    // one — those lines are either dropped (no current entry) or absorbed into
-    // the PREVIOUS answer, which corrupts an answer the user really did give.
     if (line.trim()) onSkip?.(line);
   }
   flush();
   return entries;
 }
 
-/** `1. **Label:** value` on one line. */
 function parseCompactEntries(block, labelKey, valueKey, onSkip) {
   if (!block || block === NONE_CAPTURED) return [];
   const entries = [];
@@ -252,7 +224,6 @@ function parseCompactEntries(block, labelKey, valueKey, onSkip) {
   return entries;
 }
 
-/** `1. **Label:** path` or `1. **Label:** path (version)`. */
 function parseFileEntries(block, onSkip) {
   if (!block || block === NONE_CAPTURED) return [];
   const entries = [];
@@ -272,20 +243,6 @@ function parseFileEntries(block, onSkip) {
   return entries;
 }
 
-/**
- * Read a rendered `## Application Answers` section back into a snapshot.
- *
- * Returns the same shape `normalizeApplicationAnswersSnapshot` produces, so the
- * result can be handed straight back to `formatApplicationAnswersSection` or
- * merged with a fresh snapshot. Entry keys are the primary spelling accepted by
- * the formatter (`question`/`answer`, `question`/`selection`, `field`/`path`),
- * which is what makes re-rendering a fixed point.
- *
- * @param {string} reportText Full report markdown.
- * @returns {{date: string, state: string, freeText: object[], selections: object[],
- *            fieldValues: object[], files: object[]} | null}
- *          `null` when the report has no Application Answers section.
- */
 export function parseApplicationAnswersSection(reportText, { strict = false } = {}) {
   const skipped = [];
   const onSkip = strict ? (line) => skipped.push(line.trim()) : undefined;
@@ -322,56 +279,12 @@ export function parseApplicationAnswersSection(reportText, { strict = false } = 
   return snapshot;
 }
 
-/**
- * The `(draft)` authoring marker, and the discriminator that replaced
- * `/^##\s+H\)\s*Draft Application Answers\s*$/m`.
- *
- * NEITHER the letter NOR the name identifies this block. Both move with the
- * locale: of the 19 evaluation modes, 3 write the English name under `H)`
- * (canonical, `ar`, `ja`), 5 write a translated name under `H)`
- * (`es ru tr zh zh-TW`), and 11 write a translated name under `G)`
- * (`da de fr hi id it ko nl pl pt ua`). Matching one exact heading found the
- * block in 3 of 19, so in sixteen languages `modes/apply.md` silently
- * regenerated every answer the evaluation had already drafted and paid for.
- *
- * A trailing parenthetical marker is the signal instead, which is the
- * convention `web/src/lib/report-sections.mjs` already established for the
- * verdict callout: `(lead)` / `(verdict)` are stripped for display precisely
- * because they are deliberate authoring signals that read the same in every
- * language. `(draft)` is the same shape for the same reason; the evaluation
- * modes write it on this block (#4272).
- *
- * The English name is still accepted on its own, under any letter, for the
- * reports users already have on disk: those were written before any mode
- * emitted the marker, and they are the corpus `apply` reads from today.
- * A translated heading in an OLD report stays unreadable: no discriminator
- * can recover it without guessing, and guessing here re-submits a mispaired
- * answer to an employer. New evaluations in every language carry the marker.
- */
 const DRAFT_ANSWERS_MARKER_RE = /\(draft\)\s*$/i;
 const DRAFT_ANSWERS_NAME_RE = /^draft application answers$/i;
-// Same grammar as report-sections.mjs' HEADING_PREFIX: a bare letter needs a
-// real delimiter, or ordinary prose loses its first word.
 const HEADING_PREFIX_RE = /^\s*(?:Block\s+([A-Z])(?:[).:]\s*|\s+(?:[—–-]+\s*)?)|([A-Z])[).:]\s*)/i;
-// The draft-answers block's own marker. Deliberately tighter than
-// HEADING_PREFIX_RE, which also accepts `H:` and `Block H`: every mode that
-// defines this block writes `## H)`, so the wider grammar would only let an
-// unrelated `H:` section be read as draft answers (#4400 review).
 const DRAFT_ANSWERS_LETTER_RE = /^H\)\s*(.*)$/i;
 
-/**
- * Locate the draft-answers heading: the first `## ` heading carrying the
- * `(draft)` marker, or failing that the first one whose name, with the author
- * letter and any marker stripped, is the canonical English one.
- * @param {string} report Report markdown, newlines already normalized.
- * @returns {{index:number, 0:string} | null} A match-like object, or null.
- */
 function findDraftAnswersHeading(report) {
-  /** @type {RegExpMatchArray[]} */
-  // Horizontal whitespace only. `\s+` also matches the newline, so a bare `##`
-  // line consumed it and captured the NEXT line as the heading text. With the
-  // letter rule below, `##` followed by `H) Internal Notes` then read that
-  // section's bold text as draft answers (#4400 review).
   const headings = [...report.matchAll(/^##[ \t]+(.+?)\s*$/gm)];
   const marked = headings.find(h => DRAFT_ANSWERS_MARKER_RE.test(h[1]));
   if (marked) return marked;
@@ -379,67 +292,21 @@ function findDraftAnswersHeading(report) {
     h[1].replace(DRAFT_ANSWERS_MARKER_RE, '').replace(HEADING_PREFIX_RE, '').trim(),
   ));
   if (named) return named;
-  // Last resort, and the only path that reads a TRANSLATED heading (#4400).
-  // Neither rule above fires on one today: no mode emits the `(draft)` marker
-  // (`git grep '(draft)' -- 'modes/*'` is empty), and the name rule is the
-  // English words, which five shipped modes translate — modes/es, modes/ru,
-  // modes/tr, modes/zh and modes/zh-TW. For those the block silently returned
-  // null, which is indistinguishable from a report that has no Block H.
-  //
-  // The letter is the structural part every mode keeps: `modes/oferta.md`
-  // defines `H)` as the draft-answers block and each translation renders the
-  // title only. It is deliberately LAST so the marker and the English name stay
-  // authoritative where they apply, and it requires a non-empty title so a bare
-  // `## H)` does not qualify.
   return headings.find(h => Boolean(DRAFT_ANSWERS_LETTER_RE.exec(h[1])?.[1]?.trim())) ?? null;
 }
 
-/**
- * Read the evaluation mode's `## H) Draft Application Answers (draft)` block.
- *
- * A DIFFERENT producer and a different format from the section above.
- * `parseApplicationAnswersSection` reads a format this module also writes, so
- * the two halves are pinned to each other. Nothing writes Block H from code:
- * `modes/oferta.md:622` specifies its heading and nothing about its body, so
- * the bold-question-then-paragraph shape below is a CONVENTION the evaluation
- * happens to emit, not a contract. This reads the convention and degrades to an
- * empty list when it does not hold, rather than guessing: a mispaired
- * question/answer here would be re-submitted to an employer later.
- *
- * Worth reading despite that, because `modes/apply.md` already treats Block H
- * as a legitimate base for a real application ("If there is a Section H or
- * `## Application Answers` -> load previous answers as a base"), and until now
- * nothing in the tree could load it. An evaluated report is the one case where
- * answers exist before any form has been seen.
- *
- * Returns the primary key spelling (`question`/`answer`) and omits the keys
- * Block H cannot carry, so the result is a partial snapshot that
- * `normalizeApplicationAnswersSnapshot` accepts as-is.
- *
- * @param {string} reportText Full report markdown.
- * The heading's title may be in any language; only the `## H)` marker is
- * required. A heading with a marker and no title is not Block H.
- *
- * @returns {{freeText: object[]} | null} `null` when the report has no Block H.
- */
 export function parseDraftAnswersBlockH(reportText) {
   const report = String(reportText ?? '').replace(/\r\n/g, '\n');
   const heading = findDraftAnswersHeading(report);
   if (!heading) return null;
 
   const afterHeading = heading.index + heading[0].length;
-  // Same grammar as the opener above. That one accepts `##` plus a tab, so a
-  // terminator matching only `## ` let a later `##\tI) ...` section stay inside
-  // Block H and its bold text come back as draft answers (#4400 review).
   const nextHeading = /^##[ \t]+.+$/m.exec(report.slice(afterHeading));
   const body = report.slice(
     afterHeading,
     nextHeading ? afterHeading + nextHeading.index : report.length,
   );
 
-  // A question is a line that is ENTIRELY bold. Bold used mid-sentence inside an
-  // answer therefore cannot be mistaken for the start of the next question, and
-  // the italic parenthetical the mode emits under the heading is not a question.
   const questionLine = /^\*\*(.+?)\*\*\s*$/gm;
   const marks = [...body.matchAll(questionLine)];
   const freeText = [];
@@ -450,7 +317,6 @@ export function parseDraftAnswersBlockH(reportText) {
     if (!question) continue;
     const answer = body
       .slice(from, to)
-      // A trailing horizontal rule closes the report block, it is not an answer.
       .replace(/^\s*-{3,}\s*$/gm, '')
       .trim();
     freeText.push({ question, answer });
@@ -548,9 +414,6 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    // No strict counterpart on purpose. Block H's body is a convention, not a
-    // format this module writes, so "I could not read a line" is an expected
-    // outcome rather than a corrupted report worth refusing over.
     const reportText = readFileSync(resolve(args.report), 'utf-8');
     console.log(JSON.stringify(parseDraftAnswersBlockH(reportText), null, 2));
     return;
@@ -566,9 +429,6 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    // strict throws with a message naming every unreadable line; main().catch
-    // prints it to stderr and sets a non-zero exit code, which is the contract
-    // modes/apply.md keys on. A report without the section prints null.
     const reportText = readFileSync(resolve(args.report), 'utf-8');
     const snapshot = parseApplicationAnswersSection(reportText, { strict: args.strict === true });
     console.log(JSON.stringify(snapshot, null, 2));

@@ -1,8 +1,5 @@
 import { cn } from "@/lib/cn";
 
-// Score / status pill. No brand tone — orange is reserved for "active/selected"
-// (active tab, nav, focus ring), never for a score. Grades route through the
-// good/warn/bad scale so the table stays legible.
 export function Badge({
   className,
   tone = "muted",

@@ -1,16 +1,7 @@
-# Career-Ops Profile -- Dual-Track Example (Engineer + Instructor)
-#
-# Fictional persona. Demonstrates how to configure a profile when you are
-# optimizing for TWO archetypes at the same time -- e.g. Senior AI Engineer
-# AND Senior Technical Instructor. See README.md in this folder for the
-# rationale and the interview-objection playbook.
-#
-# Copy this file to config/profile.yml and edit before using.
-
 candidate:
   full_name: "Sam Rivera"
   email: "sam@example.com"
-  phone: "+00-000-0000000"          # placeholder, replace with your real number
+  phone: "+00-000-0000000"
   location: "Berlin, Germany"
   linkedin: "linkedin.com/in/sam-rivera-example"
   portfolio_url: "https://sam-rivera.example.dev"
@@ -18,14 +9,11 @@ candidate:
   twitter: "https://x.com/sam_rivera_example"
 
 target_roles:
-  # North Star -- TWO primary tracks, not one.
   primary:
     - "Senior AI Engineer"
     - "Staff AI Engineer"
     - "Senior Technical Instructor (AI/ML)"
     - "Lead Curriculum Engineer"
-  # Archetypes -- note: TWO entries with fit: primary.
-  # The evaluator should pick whichever is closer to the JD at scoring time.
   archetypes:
     - name: "Senior AI Engineer"
       level: "Senior/Staff"
@@ -54,18 +42,14 @@ target_roles:
       sell_when: "JD wants client-facing technical work, fast prototyping, customer enablement -- teaching skills become a differentiator here"
 
 narrative:
-  # One-line headline. Names BOTH tracks. The "rare combination" is the value.
   headline: "Senior AI engineer who also runs the curriculum -- 60K LOC in production, 5,200+ teaching hours, 80+ careers launched"
-  # Exit story bridges both tracks into one coherent reason for the move.
   exit_story: "Spent 4 years running an AI subsystem at a knowledge-graph SaaS in parallel with leading the AI Engineering track at a Berlin bootcamp. Both missions are complete -- now optimizing for a single role that uses both sides, or for one side at full intensity if the team is right."
-  # Superpowers -- mix of engineering AND teaching to reflect the dual track.
   superpowers:
     - "Ship production AI systems end-to-end (LangChain, LangGraph, Neo4j, Redis)"
     - "Design curriculum that produces hireable engineers (92% completion, 80+ placed)"
     - "Explain hard technical material in plain language -- in two languages"
     - "Run incident reviews and code reviews at scale without burning out the team"
     - "Bridge engineering and education -- internal docs that people actually read"
-  # Proof points -- mix engineering AND teaching wins, marked by track.
   proof_points:
     - name: "Knowledge-Graph SaaS AI subsystem"
       url: "https://sam-rivera.example.dev/case-study-knowledge-graph"
@@ -83,20 +67,13 @@ narrative:
       url: "https://github.com/sam-rivera-example/pplx-embed-local-runner"
       hero_metric: "610 stars, used in 3 lab exercises"
       track: "hybrid"
-  # Optional dashboard / live demo
-  # dashboard:
-  #   url: "https://sam-rivera.example.dev/demo"
-  #   password: "demo-2026"
 
 compensation:
-  # Default range = engineering range (typically higher).
   target_range: "EUR 95K-130K"
   currency: "EUR"
   minimum: "EUR 80K"
   location_flexibility: "Remote within EU; up to 1 week/month on-site in Berlin or any EU city"
 
-  # alternate_ranges -- non-standard but the dual-track pattern needs it.
-  # The evaluator should pick the range matching the detected archetype track.
   alternate_ranges:
     - track: "teaching"
       target_range: "EUR 70K-95K"

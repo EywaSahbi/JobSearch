@@ -74,7 +74,6 @@ export function CreateJobModal({
         <form onSubmit={handleSubmit} className="mt-5 space-y-5">
           {error && <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-500">{error}</div>}
 
-          {/* ─── Name + Engine + Cadence ─── */}
           <div>
             <label className="mb-1 block text-[13px] font-medium text-foreground">Scan Name</label>
             <input
@@ -133,12 +132,10 @@ export function CreateJobModal({
             </div>
           </div>
 
-          {/* ─── Reuse FilterBuilder from Explore ─── */}
           <div className="rounded-xl border border-border bg-surface/30 p-4">
             <FilterBuilder filters={filters} onChange={setFilters} />
           </div>
 
-          {/* ─── Actions ─── */}
           <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
             <button
               type="button"

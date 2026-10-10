@@ -1,7 +1,3 @@
-/** Validate untrusted JSON before the profile route reads or writes user files.
- * @param {unknown} value
- * @returns {string | null} An actionable error, or null for a valid partial patch.
- */
 export function profilePatchError(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return "profile update must be an object";
@@ -14,8 +10,6 @@ export function profilePatchError(value) {
   if ("roles" in value && (!Array.isArray(value.roles) || value.roles.some((role) => typeof role !== "string"))) {
     return "roles must be an array of strings";
   }
-  // The action can send a lone bound. The writer ignores it while saving
-  // other fields, so do not require a pair here.
   for (const field of ["compMin", "compMax"]) {
     if (field in value && (typeof value[field] !== "number" || !Number.isFinite(value[field]) || value[field] <= 0)) {
       return `${field} must be a positive finite number`;

@@ -20,9 +20,6 @@ function agoLabel(age: number | null): string | null {
   return `${Math.floor(age / 30)}mo ago`;
 }
 
-// One raw posting in the triage list. Shows ONLY cheap, free signals + an honest
-// "not scored" (CRUDA) — never a fake match%. Once its shortlist eval finishes it
-// flips to EVALUADA (a real A–F badge). Save→shortlist / Skip→hidden are free + undoable.
 export function TriageRow({
   job,
   source,
@@ -55,7 +52,6 @@ export function TriageRow({
         evaluated && "opacity-95",
       )}
     >
-      {/* multi-select — power-user batch to shortlist */}
       <input
         type="checkbox"
         checked={selected}
@@ -75,12 +71,10 @@ export function TriageRow({
           {job.location && <span className="truncate">{job.location}</span>}
           {source && <span className="rounded bg-surface-hover px-1 py-px font-medium text-muted">{ATS_LABEL[source]}</span>}
           {ago && <span>{ago}</span>}
-          {/* 🔴 CRUDA: honest "not scored" — no fabricated match%. */}
           {!evaluated && <span className="italic text-muted">not scored</span>}
         </p>
       </div>
 
-      {/* EVALUADA state (right-aligned, visually distinct from raw rows) */}
       {evaluated ? (
         <Link href={`/jobs/${scored!.jobId}`} className="flex shrink-0 items-center gap-1.5 text-xs">
           {scored!.running ? (

@@ -7,11 +7,8 @@ import { useJobs } from "@/components/jobs/job-store";
 import { WorkerCard, pillTone, TONE } from "@/components/jobs/worker-card";
 import { cn } from "@/lib/cn";
 
-// Back-compat re-exports (app/jobs/page.tsx imports pillTone from here).
 export { pillTone, TONE };
 
-// Collapsed "worker" pills in the sidebar — each the shared <WorkerCard> wrapped
-// in a Link to its detail. Same component the assistant chat renders inline.
 export function WorkerPills() {
   const { jobs, removeJob, clearFinished } = useJobs();
   const pathname = usePathname();

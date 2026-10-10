@@ -5,18 +5,6 @@ import { Clock3, Copy, Check } from "lucide-react";
 import { quietModel, checkRan } from "@/lib/quiet-companies.mjs";
 import type { QuietModel, QuietCompany } from "@/lib/quiet-companies.mjs";
 
-// Companies still in Interview whose silence has passed the courtesy threshold,
-// from the core's rejection-latency.mjs via /api/quiet-companies.
-//
-// On Follow-ups because that is the page about chasing, and this is the far end
-// of it: the point where chasing stops being worth it. It sits BELOW the due
-// list, since a follow-up you can still send outranks a company that has
-// already stopped replying.
-//
-// The copy stays on the observation. The core measures elapsed time and ships
-// the sentence bounding the claim; a heading like "companies that ghosted you"
-// would turn a day count into an accusation about a named third party, in a tool
-// whose output people paste into messages.
 export function QuietCompanies() {
   const [model, setModel] = useState<QuietModel | null>(null);
 
@@ -35,11 +23,6 @@ export function QuietCompanies() {
     return <div className="mt-8 h-24 w-full animate-pulse rounded-2xl bg-muted/25" aria-hidden />;
   }
 
-  // A failed check is SHOWN, not hidden. Returning null here made the panel
-  // disappear after the loading state, which on a page about chasing reads as
-  // "nobody has gone quiet" — the reassuring answer, given for the one reason
-  // that cannot support it. The whole point of this panel is that silence and
-  // not-knowing look different.
   if (!checkRan(model)) {
     return (
       <section className="mt-8 rounded-2xl border border-dashed border-border bg-surface/30 px-5 py-4">
@@ -58,10 +41,6 @@ export function QuietCompanies() {
         <p className="mt-2 text-sm text-muted">
           Nothing has gone quiet past the threshold{model.checked > 0 ? ` across ${model.checked} compan${model.checked === 1 ? "y" : "ies"}` : ""}.
         </p>
-        {/* The caveats belong here MORE than on the populated panel, not less: an
-            "all clear" drawn from a partial check is the reading most likely to
-            be believed, and the core's warnings are what say the check was
-            partial. */}
         <Caveats warnings={model.warnings} disclaimer={model.disclaimer} />
       </section>
     );
@@ -82,10 +61,6 @@ export function QuietCompanies() {
   );
 }
 
-/**
- * The core's warnings and its disclaimer, shared by the populated and empty
- * panels so neither can quietly drop them.
- */
 function Caveats({ warnings, disclaimer }: { warnings: string[]; disclaimer: string | null }) {
   return (
     <>
@@ -95,8 +70,6 @@ function Caveats({ warnings, disclaimer }: { warnings: string[]; disclaimer: str
         </p>
       ))}
       {disclaimer && (
-        // Straight from the payload. Not styled as fine print: it is the
-        // sentence that keeps a day count from reading as a verdict.
         <p className="mt-4 border-t border-border pt-3 text-xs text-faint">{disclaimer}</p>
       )}
     </>
@@ -115,10 +88,6 @@ function Header({ courtesyDays }: { courtesyDays: number | null }) {
 
 function Row({ c }: { c: QuietCompany }) {
   const [copied, setCopied] = useState(false);
-  // Shown when the clipboard is unavailable — a denied permission, a
-  // non-secure origin, an older browser. The row is the whole point of the
-  // button, so failing silently leaves the user with no way to get it; this
-  // puts it on screen as selectable text instead.
   const [fallback, setFallback] = useState<string | null>(null);
 
   const copy = async () => {
@@ -146,9 +115,6 @@ function Row({ c }: { c: QuietCompany }) {
         </p>
       </div>
       {c.blacklistRow && (
-        // Copy, never apply. data/blacklist.md is opt-in and never
-        // auto-populated (AGENTS.md); putting a company on it stays a decision
-        // the user makes in their own file.
         <button
           type="button"
           onClick={copy}

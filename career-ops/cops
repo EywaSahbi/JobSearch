@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-# cops — thin wrapper: run any career-ops command inside the docker container.
-#
-# Examples:
-#   ./cops doctor
-#   ./cops verify
-#   ./cops pdf cv.html output/cv.pdf
-#   ./cops scan
-#   ./cops node generate-pdf.mjs cv.html output/cv.pdf
-#   ./cops shell                     # interactive bash
-#   ./cops up | down | rebuild | logs
-#
-# Anything not matching a known subcommand is forwarded to npm run <subcommand>
-# when package.json defines it, otherwise executed verbatim inside the container.
 
 set -euo pipefail
 
@@ -58,7 +45,6 @@ case "${1:-}" in
     ;;
 esac
 
-# Map known npm scripts → `npm run <name>`. Anything else is forwarded raw.
 cmd="$1"; shift || true
 
 case "$cmd" in

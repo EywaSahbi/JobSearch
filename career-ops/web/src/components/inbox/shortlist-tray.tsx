@@ -10,9 +10,6 @@ import { formatRunCostEstimate } from "@/lib/run-cost-estimate.mjs";
 
 export type ShortItem = { url: string; company: string; role: string };
 
-// The persistent shortlist tray — bottom-sheet on mobile (thumb-zone), floating card
-// on desktop. "Score shortlist" is the ONLY token spend in the whole inbox: cost is
-// shown BEFORE the click and gated behind an explicit confirm (never spend by surprise).
 export function ShortlistTray({
   items,
   estimate,
@@ -39,7 +36,6 @@ export function ShortlistTray({
     <div className="fixed inset-x-0 bottom-0 z-30 sm:bottom-4">
       <div className="mx-auto max-w-3xl sm:px-6">
         <div className="border-t border-border bg-surface shadow-lg shadow-black/10 sm:rounded-2xl sm:border">
-          {/* expandable saved-items list */}
           {open && (
             <ul className="max-h-64 divide-y divide-border overflow-y-auto px-3 py-1">
               {items.map((it) => (
@@ -61,7 +57,6 @@ export function ShortlistTray({
             </ul>
           )}
 
-          {/* the persistent bar */}
           <div className="flex items-center gap-3 px-3 py-2.5 sm:px-4">
             <button
               type="button"
@@ -95,7 +90,6 @@ export function ShortlistTray({
             </div>
           </div>
 
-          {/* cost line — always visible on mobile (where it doesn't fit in the button) */}
           <div className="flex items-center gap-2 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted sm:hidden">
             <CostBadge kind="spend" size="xs" />
             <span>{costText} — the only step that spends</span>

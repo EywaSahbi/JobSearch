@@ -1,40 +1,11 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// TKMS (thyssenkrupp Marine Systems) provider — the careers app at
-// jobs.tkmsgroup.com. Single-employer, but the backend is a shared job-board
-// platform keyed by a `subclient` param, so the provider takes the subclient
-// (and locale) from a config block for reuse if another tenant on the same
-// platform ever needs it.
-//
-//   POST {origin}/api/filter/query
-//   Content-Type: application/json
-//   {"searchQuery":"","filter":{},"subclient":"tkms","locale":"en","page":0}
-//   → {"jobs":[{"_geoloc":[…],"data":{id,title,city,country,state,company,
-//        postingDate:"2026-07-02T22:00:00",locations:[{city,cityState,…}],…}}],
-//      "page":0,"jobsPerPage":20,"nextPage":1,"totalHits":330}
-//
-// `page` is 0-based; `nextPage` is null on the last page. The public job page is
-// {origin}/{locale}/job/{slug}/{id} — the slug is cosmetic (a stub resolves the
-// same posting, verified), so we slugify the title.
-//
-// Detection: jobs.tkmsgroup.com is the only known host, and it carries no
-// generic platform token, so detect() claims that host explicitly.
-
-// Titles arrive HTML-escaped, so the tag strip below is not enough on its own:
-// an undecoded "R&amp;D Engineer" fails the user's own title_filter positive
-// "r&d" and is silently dropped, and a negative like "sales & marketing" never
-// vetoes "Sales &amp; Marketing Lead". Shared decoder, same as softgarden and
-// radancy (#2487, #2921).
 import { decodeEntities } from './_html-entities.mjs';
 import { safeEncodeURIComponent } from './_safe-url.mjs';
 import { sleep } from './_http.mjs';
 
-const MAX_PAGES = 60; // safety cap on request count (60*20 = 1200 postings)
-const MAX_JOBS = 1000; // cap total postings pulled
-const PAGE_DELAY_MS = 150; // polite pacing between page requests
+const MAX_PAGES = 60;
+const MAX_JOBS = 1000;
+const PAGE_DELAY_MS = 150;
 
-/** @param {import('./_types.js').PortalEntry} entry */
 export function resolveConfig(entry) {
   const raw = entry.api || entry.careers_url || '';
   let u;
@@ -56,10 +27,6 @@ export function resolveConfig(entry) {
   };
 }
 
-// Slugify a title for the cosmetic job-page slug (TKMS uses `_` for the
-// gender marker and `-` between words; a stub slug also resolves, so exactness
-// doesn't matter — we just produce a clean, hyphenated string).
-/** @param {string} title */
 export function slugify(title) {
   return String(title)
     .normalize('NFKD')
@@ -68,23 +35,17 @@ export function slugify(title) {
     .replace(/^-+|-+$/g, '') || 'job';
 }
 
-// postingDate is a naive ISO local timestamp ("2026-07-02T22:00:00"); prefer
-// the epoch-seconds `postingDate_timestamp` when present.
-/** @param {any} data @returns {number | undefined} */
 export function parseTkmsDate(data) {
   const ts = data?.postingDate_timestamp;
   if (typeof ts === 'number' && Number.isFinite(ts)) return ts * 1000;
   const raw = data?.postingDate;
   if (typeof raw === 'string' && raw.trim()) {
-    const ms = Date.parse(raw.trim() + 'Z'); // treat naive stamp as UTC for determinism
+    const ms = Date.parse(raw.trim() + 'Z');
     if (Number.isFinite(ms)) return ms;
   }
   return undefined;
 }
 
-// Location: prefer the `locations` array (cityState per site), else the flat
-// city/country fields. Joined with " / ", deduped.
-/** @param {any} data @returns {string} */
 export function tkmsLocation(data) {
   const locs = Array.isArray(data?.locations) ? data.locations : [];
   const out = [];
@@ -97,23 +58,11 @@ export function tkmsLocation(data) {
   return [...new Set(flat)].join(', ');
 }
 
-/**
- * Map one query response to {total, nextPage, rows}. A record without an id or
- * title is skipped.
- * @param {any} json @param {{origin:string, locale:string}} cfg
- */
 export function parseQuery(json, cfg) {
   const total = typeof json?.totalHits === 'number' ? json.totalHits : null;
   const nextPage = typeof json?.nextPage === 'number' ? json.nextPage : null;
   const list = Array.isArray(json?.jobs) ? json.jobs : [];
   const rows = [];
-  // cfg.locale is a trusted config segment (portals.yml `tkms.locale`, the only
-  // attested value being the default "en"). encodeURIComponent here, not
-  // safeEncodeURIComponent + drop: a structural char (`/`, `?`, `#`) is escaped
-  // so the URL stays well-formed, and a lone surrogate — a genuine config error
-  // — throws out of parseQuery loudly rather than silently dropping every
-  // posting one at a time. Hoisted out of the row loop so that throw lands
-  // before any row work. Same call as garena's config-derived path.
   const localeSeg = encodeURIComponent(cfg.locale);
   for (const item of list) {
     const d = item?.data;
@@ -121,8 +70,6 @@ export function parseQuery(json, cfg) {
     const id = d.id != null ? String(d.id) : '';
     const title = decodeEntities(String(d.title || '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
     if (!id || !title) continue;
-    // A lone surrogate in id throws URIError out of encodeURIComponent and
-    // aborts this loop; id is also the dedup key. Drop this row on a null.
     const encodedId = safeEncodeURIComponent(id);
     if (encodedId === null) continue;
     rows.push({
@@ -136,14 +83,12 @@ export function parseQuery(json, cfg) {
   return { total, nextPage, rows };
 }
 
-/** Resolve the page cap: positive integer `max_pages`, else default. */
 function resolveMaxPages(entry) {
   const v = entry?.max_pages;
   if (Number.isInteger(v) && v > 0) return Math.min(v, MAX_PAGES);
   return MAX_PAGES;
 }
 
-/** @type {Provider} */
 export default {
   id: 'tkms',
 
@@ -182,9 +127,9 @@ export default {
         jobs.push(job);
         if (jobs.length >= MAX_JOBS) break;
       }
-      if (fresh === 0) break; // server looped / ignored page
+      if (fresh === 0) break;
       if (jobs.length >= MAX_JOBS) break;
-      if (nextPage === null) break; // last page
+      if (nextPage === null) break;
     }
     return jobs;
   },

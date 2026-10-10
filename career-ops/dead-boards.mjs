@@ -1,7 +1,3 @@
-// Persistent board-existence memory for reverse ATS sweeps (#2840).
-// Only a real HTTP 404 may advance a miss counter. Throttles, transport
-// failures and DNS errors mean "unknown", never "dead".
-
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 

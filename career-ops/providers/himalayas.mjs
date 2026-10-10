@@ -1,17 +1,6 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// Himalayas provider - board-wide remote jobs API
-// (https://himalayas.app/jobs/api?limit=50). Returns { jobs: [...] }. The
-// full feed is fetched so scan.mjs's title_filter / location_filter can do
-// the local gating consistently with other zero-token board providers.
-//
-// Wire in via a `job_boards:` entry with `provider: himalayas`.
-
 const FEED_URL = 'https://himalayas.app/jobs/api?limit=50';
 const TRUSTED_HOST = 'himalayas.app';
 
-/** @param {string} url */
 function assertHimalayasUrl(url) {
   let parsed;
   try {
@@ -51,8 +40,6 @@ function locationText(value) {
     .join(', ');
 }
 
-// Himalayas pubDate is currently epoch seconds. Accept milliseconds and
-// parseable date strings too so the parser survives small API shape changes.
 function toEpochMs(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value < 1_000_000_000_000 ? value * 1000 : value;
@@ -66,7 +53,6 @@ function toEpochMs(value) {
   return undefined;
 }
 
-/** @type {Provider} */
 export default {
   id: 'himalayas',
 
@@ -74,16 +60,8 @@ export default {
     return entry?.provider === 'himalayas' ? { url: FEED_URL } : null;
   },
 
-  /**
-   * Fetches and normalizes postings from the Himalayas public feed.
-   * @param {{ provider?: string }} entry - The job_boards entry being processed.
-   * @param {{ fetchJson: (url: string, opts?: { redirect?: 'error'|'follow'|'manual' }) => Promise<any> }} ctx - HTTP context.
-   * @returns {Promise<Array<{title: string, url: string, company: string, location: string, postedAt?: number}>>}
-   */
   async fetch(entry, ctx) {
     const feedUrl = assertHimalayasUrl(FEED_URL);
-    // redirect:'error' prevents SSRF via server-side redirects; combined with
-    // assertHimalayasUrl above it keeps the request pinned to himalayas.app.
     const json = await ctx.fetchJson(feedUrl, { redirect: 'error' });
     if (!json || !Array.isArray(json.jobs)) {
       throw new Error(`himalayas: unexpected API response - expected { jobs: [...] }, got keys: [${json ? Object.keys(json).join(', ') : 'null'}]`);
@@ -92,17 +70,6 @@ export default {
   },
 };
 
-/**
- * Parse Himalayas' public jobs API response. Exported for unit tests.
- *
- * Shape: `{ jobs: [...] }`, where each job currently carries `title`,
- * `companyName`, `locationRestrictions`, `applicationLink`, `guid`,
- * `pubDate`, and `companySlug`. `applicationLink` is preferred over `guid`
- * and used as the dedup key after HTTPS + host validation.
- *
- * @param {unknown} json - raw parsed API response
- * @returns {Array<{title: string, url: string, company: string, location: string, postedAt?: number}>}
- */
 export function parseHimalayasResponse(json) {
   if (!json || typeof json !== 'object' || !Array.isArray(json.jobs)) return [];
 

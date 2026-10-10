@@ -8,40 +8,13 @@ version: 1.0.0
 <meta charset="UTF-8">
 <title>{{NAME}} — CV</title>
 <style>
-  /* ── Jake ─────────────────────────────────────────────────────────────────
-     An HTML port of "Jake's Resume", the most widely used LaTeX resume template
-     among software engineers. Faithful to the original's design decisions:
-
-       - centred name with a plain contact line beneath it
-       - small-caps section headings, each followed by a full-width rule
-       - a TWO-ROW job header: company + dates on row one (left/right), role +
-         location on row two (left/right)
-       - small bullets, tight vertical rhythm, no colour and no graphics
-
-     Deliberately monochrome. The original's credibility comes from looking
-     conventional, so nothing decorative is added here.
-
-     ATS discipline is identical to templates/cv-template.html and is NOT
-     negotiable: a static system font stack (never the bundled variable woff2
-     fonts, whose glyph advances make PDF extractors inject spaces inside words)
-     and ligatures disabled (headless Chromium otherwise emits U+FB01/FB02 and a
-     literal keyword search for "verification" misses "veriﬁcation"). */
 
   :root {
     --accent-color: #000000;
-    /* The original compiles in a Computer Modern / Times-class serif. */
     --font-family: "Liberation Serif", 'Times New Roman', Georgia, 'DejaVu Serif', serif;
     --font-size: 10.5px;
-    /* Must match generate-pdf.mjs's PDF_PAGE_MARGIN — the real @page margin is
-       appended later by injectPrintPageCss reading this same variable. */
     --page-margin: 0.5in;
-    /* #3242: unchanged default — see templates/cv-template.html. */
     --job-break-inside: auto;
-    /* Whether a Projects entry may split across a page break. Unchanged
-       default — a project may still split, keeping the CV compact. Override via
-       config/profile.yml `style.project_break_inside: avoid` for "a project is
-       one unit, never split", which removes the one-word widow a description
-       can leave above its tech line, at the cost of a bottom gap. */
     --project-break-inside: auto;
   }
   @page { margin: var(--page-margin); }
@@ -75,9 +48,6 @@ version: 1.0.0
     background: #ffffff;
   }
 
-  /* === PHOTO (opt-in, #264) ===
-     The original has no photo. Kept minimal for parity with the other
-     templates; leave candidate.photo empty to omit it entirely. */
   .cv-photo {
     float: right;
     width: 70px;
@@ -89,7 +59,6 @@ version: 1.0.0
   .cv-photo.circle  { border-radius: 50%; }
   .cv-photo.square  { border-radius: 0; }
 
-  /* === HEADER === */
   .header {
     text-align: center;
     margin-bottom: 9px;
@@ -122,23 +91,11 @@ version: 1.0.0
     text-decoration: underline;
   }
 
-  /* Generated on the item BEFORE it, so a wrap cannot start a line with the
-     separator. See cv-template.html for the full rationale. */
   .contact-row > *:not(:last-child)::after {
-    /* Replaces the markup whitespace that sat before the old separator element;
-       without it every item after the first shifts left.
-       NO-BREAK space (U+00A0), not a plain one: a plain space here is a break
-       opportunity and Chromium takes it, leaving the bar alone at the start of
-       the next line -- the artifact this rule exists to prevent. Measured: with
-       a plain space, tests/cv-visual/contact-row-wrap.spec.mjs fails on
-       compact, executive, jake and modern in LTR. */
     content: "\00a0|";
     margin-inline: 4px;
   }
 
-  /* === SECTIONS ===
-     Uppercase + a rule directly beneath, matching \titlerule in the original.
-     Synthetic small caps split words into differently sized PDF text runs. */
   .section { margin-bottom: 8px; }
 
   .section-title {
@@ -153,9 +110,6 @@ version: 1.0.0
 
   .summary-text { margin-top: 2px; }
 
-  /* === COMPETENCIES ===
-     The original has no tag/pill concept — competencies render as a plain
-     comma-free inline run so they stay one text flow for extraction. */
   .competencies-grid { line-height: 1.5; }
 
   .competency-tag {
@@ -165,12 +119,6 @@ version: 1.0.0
   .competency-tag::after { content: "  \2022  "; }
   .competency-tag:last-child::after { content: ""; }
 
-  /* === WORK EXPERIENCE ===
-     Two-row header. Row 1: company (left) / dates (right). Row 2: role (left) /
-     location (right). The builder emits .job-role and .job-location as separate
-     block divs, so the role is floated left and the location's shortened line
-     box is right-aligned beside it — this reproduces the original's tabular
-     look without needing a wrapper element. */
   .job { margin-bottom: 7px; }
   .job:last-child { margin-bottom: 0; }
 
@@ -203,8 +151,6 @@ version: 1.0.0
     text-align: right;
   }
 
-  /* Cleared onto its own line under the floated role; floated full-width so
-     the location after it in the DOM still sits beside the role. */
   .job-context {
     clear: both;
     float: left;
@@ -217,7 +163,7 @@ version: 1.0.0
   }
 
   .job ul {
-    clear: both;   /* required: ends the .job-role float before the bullets */
+    clear: both;
     margin-top: 2px;
     padding-left: 15px;
   }
@@ -227,7 +173,6 @@ version: 1.0.0
     padding-left: 1px;
   }
 
-  /* === PROJECTS === */
   .project { margin-bottom: 5px; }
 
   .project-title {
@@ -250,7 +195,6 @@ version: 1.0.0
     margin-top: 1px;
   }
 
-  /* === EDUCATION === */
   .edu-item { margin-bottom: 4px; }
 
   .edu-header {
@@ -270,7 +214,6 @@ version: 1.0.0
 
   .edu-desc { margin-top: 1px; }
 
-  /* === CERTIFICATIONS === */
   .cert-table,
   .award-table { display: block; }
 
@@ -286,18 +229,12 @@ version: 1.0.0
   .cert-org { flex: 1; font-style: italic; }
   .cert-year { white-space: nowrap; }
 
-  /* === SKILLS === */
   .skills-grid { display: block; }
 
   .skill-item { margin-bottom: 1.5px; }
 
   .skill-category { font-weight: 700; }
 
-  /* === GDPR / RODO CONSENT (footer) === */
-  /* Opt-in footer slot filled from payload.consent. Empty by default — the
-     :empty rule hides the div (and its border-top) when no consent text is
-     set, so existing CVs render byte-identical to a pre-consent layout.
-     Mirrors the {{PHOTO}} opt-in slot pattern (#264). */
   .cv-consent {
     margin-top: 14px;
     padding-top: 8px;
@@ -309,7 +246,6 @@ version: 1.0.0
   }
   .cv-consent:empty { display: none; }
 
-  /* === PAGE BREAK CONTROL === */
   .header,
   .edu-item,
   .cert-item,
@@ -319,13 +255,11 @@ version: 1.0.0
     page-break-inside: avoid;
   }
 
-  /* #3242: opt-in — see the --job-break-inside default above. */
   .job {
     page-break-inside: var(--job-break-inside, auto);
     break-inside: var(--job-break-inside, auto);
   }
 
-  /* Opt-in — see the --project-break-inside default above. */
   .project {
     page-break-inside: var(--project-break-inside, auto);
     break-inside: var(--project-break-inside, auto);
@@ -342,14 +276,11 @@ version: 1.0.0
     page-break-after: avoid;
   }
 
-  /* Keep a project's tech line attached to the description above it, so a bare
-     "Python | github.com/..." line is never stranded atop the next page. */
   .project-tech {
     break-before: avoid;
     page-break-before: avoid;
   }
 
-  /* === RTL (Arabic) support === */
   html[lang="ar"] body {
     direction: rtl;
     text-align: right;
@@ -361,7 +292,6 @@ version: 1.0.0
   html[lang="ar"] .cv-photo { float: left; margin: 0 12px 6px 0; }
   html[lang="ar"] .cert-year { text-align: left; }
 
-  /* === CJK fallback === */
   html[lang="ja"] body {
     font-family: "Liberation Serif", 'Times New Roman', 'Hiragino Mincho ProN',
       'Yu Mincho', 'Noto Serif CJK JP', 'MS PMincho', serif;
@@ -445,7 +375,6 @@ version: 1.0.0
 
   <!-- END -->
 
-  <!-- GDPR / RODO consent -->
   <div class="cv-consent">{{CONSENT}}</div>
 
 </div>

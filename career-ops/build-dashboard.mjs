@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-// build-dashboard.mjs — cross-platform build for the Go TUI dashboard.
-//
-// `go build -o career-dashboard .` writes an extension-less binary on Windows
-// (Go only auto-appends .exe when -o is omitted), which breaks bare-name/PATH
-// lookup there. This wrapper picks the platform-correct output name instead:
-// dashboard/career-dashboard on Unix, dashboard/career-dashboard.exe on Windows.
 
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';

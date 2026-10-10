@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-/**
- * openai-tailor.mjs — OpenAI-compatible CV Tailoring for career-ops
- *
- * Tailor your CV (HTML) with ANY OpenAI-compatible chat endpoint instead of Claude.
- * This is the headless companion to openai-eval.mjs. It takes an evaluation report
- * and the job description, applies anti-fabrication rules, and outputs a filled
- * cv-template.html ready to be turned into a PDF.
- *
- * Usage:
- *   node openai-tailor.mjs --jd ./jds/my-job.txt --report reports/001-company-2026.md
- *
- * Requires (for hosted endpoints):
- *   OPENAI_API_KEY (or --key)   — your provider key
- *   OPENAI_BASE_URL (or --url)  — the provider's OpenAI-compatible base
- *   OPENAI_MODEL (or --model)   — the model id
- */
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
@@ -25,14 +9,11 @@ import * as yaml from 'js-yaml';
 try {
   const { config } = await import('dotenv');
   config();
-} catch { /* dotenv optional */ }
+} catch { }
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
 
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 const PATHS = {
   shared:   join(ROOT, 'modes', '_shared.md'),
   writing:  join(ROOT, 'modes', '_writing.md'),
@@ -43,9 +24,6 @@ const PATHS = {
   output:   join(DATA_ROOT, 'output'),
 };
 
-// ---------------------------------------------------------------------------
-// CLI argument parsing
-// ---------------------------------------------------------------------------
 const args = process.argv.slice(2);
 
 if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
@@ -78,10 +56,9 @@ if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
   process.exit(0);
 }
 
-// Parse flags
 let jdPath     = '';
 let reportPath = '';
-let modelName  = process.env.OPENAI_MODEL || 'gpt-4o'; // Tailoring needs a smarter model default than eval
+let modelName  = process.env.OPENAI_MODEL || 'gpt-4o';
 let baseUrl    = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 let apiKey     = process.env.OPENAI_API_KEY || '';
 
@@ -116,12 +93,10 @@ if (!existsSync(reportPath)) {
 const jdText = readFileSync(jdPath, 'utf-8').trim();
 const reportText = readFileSync(reportPath, 'utf-8').trim();
 
-// Attempt to parse company slug and candidate name
 const reportFilename = basename(reportPath);
 const match = reportFilename.match(/^\d+-([a-z0-9-]+)-\d{4}-\d{2}-\d{2}\.md$/);
 const companySlug = match ? match[1] : 'unknown-company';
 
-// Extract role from report header (e.g., "# Evaluation: Company - Role Title")
 let roleSlug = 'role';
 const roleMatch = reportText.match(/^#\s+Evaluation:\s+[^-]+\s+-\s+(.+?)$/m);
 if (roleMatch && roleMatch[1]) {
@@ -129,9 +104,6 @@ if (roleMatch && roleMatch[1]) {
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
-// ---------------------------------------------------------------------------
-// Endpoint + security guard.
-// ---------------------------------------------------------------------------
 let endpointHost;
 {
   let parsed;
@@ -164,9 +136,6 @@ let endpointHost;
 
 const endpoint = `${baseUrl}/chat/completions`;
 
-// ---------------------------------------------------------------------------
-// File helpers
-// ---------------------------------------------------------------------------
 function readFile(path, label, required = false) {
   if (!existsSync(path)) {
     if (required) {
@@ -179,24 +148,15 @@ function readFile(path, label, required = false) {
   return readFileSync(path, 'utf-8').trim();
 }
 
-// ---------------------------------------------------------------------------
-// Load context files
-// ---------------------------------------------------------------------------
 console.log('\\n📂  Loading context files...');
 
 const sharedContext  = readFile(PATHS.shared, 'modes/_shared.md', false);
-// Writing guardrails (Voice DNA / Writing Style / Professional Writing) live in
-// _writing.md since #1710 — a CV-tailoring script needs them, unlike the eval
-// engines that read the eval-core _shared.md alone.
 const writingContext = readFile(PATHS.writing, 'modes/_writing.md', false);
 const pdfModeLogic   = readFile(PATHS.pdfMode, 'modes/pdf.md', false);
 const cvContent      = readFile(PATHS.cv, 'cv.md', true);
 const profileContent = readFile(PATHS.profile, 'config/profile.yml', true);
 const templateHtml   = readFile(PATHS.template, 'templates/cv-template.html', true);
 
-// ---------------------------------------------------------------------------
-// Build system prompt
-// ---------------------------------------------------------------------------
 const systemPrompt = `You are career-ops, an AI-powered CV tailoring engine.
 You read a candidate's base CV, profile, an evaluation report, and a Job Description.
 Your job is to apply strict anti-fabrication tailoring rules to fill in an HTML template.
@@ -240,17 +200,6 @@ IMPORTANT OPERATING RULES FOR THIS SESSION
 5. Your final output MUST be the complete, raw, tailored HTML document.
 6. Do NOT include markdown formatting like \`\`\`html or conversational filler. Output the raw HTML starting with <!DOCTYPE html> and ending with </html>.`;
 
-// ---------------------------------------------------------------------------
-// Prompt caching (#1709, closing the gap in #2432) — same shape as
-// openai-eval.mjs. This system prompt (shared + writing + pdf mode + HTML
-// template + cv + profile, ~15K+ tokens) is byte-identical across every
-// offer, yet was re-sent and re-billed each call.
-//
-// Host-gated on purpose: OpenAI-compatible gateways (OpenRouter, DeepSeek, …)
-// honor an ephemeral `cache_control` breakpoint on the prefix and reuse it
-// across back-to-back calls within the cache TTL. api.openai.com instead caches
-// long prefixes automatically and may reject the non-standard field, so it gets
-// a plain-string system message. Either way the prompt TEXT is unchanged.
 export function buildSystemMessage(prompt, host) {
   if (host === 'api.openai.com') return { role: 'system', content: prompt };
   return {
@@ -259,9 +208,6 @@ export function buildSystemMessage(prompt, host) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Call the OpenAI-compatible endpoint
-// ---------------------------------------------------------------------------
 const timeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '300000', 10);
 if (Number.isNaN(timeoutMs) || timeoutMs <= 0) {
   console.error(`❌  Invalid OPENAI_TIMEOUT_MS: "${process.env.OPENAI_TIMEOUT_MS}" — must be a positive integer (milliseconds).`);
@@ -309,12 +255,8 @@ try {
   process.exit(1);
 }
 
-// Clean up markdown block wrapping if the LLM adds it despite instructions
 tailoredHtml = tailoredHtml.replace(/^\s*```(html)?\s*/i, '').replace(/\s*```\s*$/, '');
 
-// ---------------------------------------------------------------------------
-// Save tailored HTML
-// ---------------------------------------------------------------------------
 try {
   if (!existsSync(PATHS.output)) {
     mkdirSync(PATHS.output, { recursive: true });
@@ -338,7 +280,6 @@ try {
   writeFileSync(htmlPath, tailoredHtml, 'utf-8');
   console.log(`\n✅  Tailored HTML saved: ${htmlPath}`);
 
-  // Print next steps
   const pdfFilename = `cv-${candidateName}-${companySlug}-${roleSlug}-${new Date().toISOString().split('T')[0]}.pdf`;
   const reportNumMatch = reportFilename.match(/^(\d+)-/);
   const reportNum = reportNumMatch ? reportNumMatch[1] : '001';

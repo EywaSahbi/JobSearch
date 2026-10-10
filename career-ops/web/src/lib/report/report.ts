@@ -2,9 +2,6 @@ import { recentLogs } from "./logbuf";
 
 const REPO = "career-ops-hq/career-ops";
 
-/** Strip PII / secrets that could ride in error text, paths or logs BEFORE anything
- *  leaves the machine. Defence-in-depth — the user also reviews the full payload
- *  (preview-then-confirm) before the issue opens. */
 export function scrub(s: string): string {
   return (s || "")
     .replace(/\/Users\/[^/\s"']+/g, "~")
@@ -12,7 +9,6 @@ export function scrub(s: string): string {
     .replace(/(sk|key|token|secret|bearer|api[-_]?key)([-_=:\s"']+)[A-Za-z0-9._-]{8,}/gi, "$1$2[redacted]");
 }
 
-/** Structural fingerprint from /api/report/shape — shapes/counts, never contents. */
 export type Shape = {
   runtime?: { node?: string; platform?: string; arch?: string };
   setup?: { phase?: string; missing?: string[]; hasCv?: boolean; hasData?: boolean };
@@ -37,12 +33,9 @@ export type Diag = {
   viewport: string;
   logs: string[];
   shape: Shape | null;
-  /** Whether the core follow-up cadence engine answered — false = engine degraded. */
   followupsAvailable: boolean | null;
 };
 
-/** Gather a STRUCTURAL diagnostic snapshot. Deliberately excludes anything personal:
- *  no cv.md, no profile, no application answers, no job URLs, no report content. */
 export async function collect(): Promise<Diag> {
   let version = "";
   let coreVersion = "";
@@ -55,25 +48,21 @@ export async function collect(): Promise<Diag> {
     channel = d.channel || "stable";
     sha = d.sha || "";
   } catch {
-    /* keep defaults */
   }
   let shape: Shape | null = null;
   try {
     shape = (await (await fetch("/api/report/shape")).json()) as Shape;
   } catch {
-    /* structural snapshot is best-effort */
   }
   let followupsAvailable: boolean | null = null;
   try {
     followupsAvailable = Boolean((await (await fetch("/api/followups")).json()).available);
   } catch {
-    /* best-effort */
   }
   let cli = "";
   try {
     cli = JSON.parse(localStorage.getItem("career-ops:config") || "{}").cliId || "";
   } catch {
-    /* none */
   }
   return {
     version,
@@ -90,9 +79,6 @@ export async function collect(): Promise<Diag> {
   };
 }
 
-/** Stable error CLASS from a ring entry: strip the volatile bits (urls, ids,
- *  numbers, quoted values) so the same underlying bug yields the same class
- *  across sessions and machines. */
 function errorClass(log: string): string {
   return (log || "")
     .replace(/https?:\/\/\S+/g, "<url>")
@@ -103,10 +89,6 @@ function errorClass(log: string): string {
     .slice(0, 120);
 }
 
-/** Deterministic short fingerprint (djb2 → base36) of route + newest error
- *  class + structural degradation flags. Same bug → same fingerprint, across
- *  sessions and users — the dedupe key for issue search, the glow, and the
- *  maintainer's triage Action. Contract: web/src/lib/report/FORMAT.md (v1). */
 export function fingerprint(d: Diag): string {
   const route = d.route.split("?")[0];
   const err = errorClass(d.logs[d.logs.length - 1] || "");
@@ -123,7 +105,6 @@ export function fingerprint(d: Diag): string {
   return `co-web-${h.toString(36)}`;
 }
 
-/** The EXACT markdown body the user reviews and that becomes the GitHub issue. */
 export function issueBody(d: Diag, description: string): string {
   const s = d.shape;
   const fmt = (n?: number) => (typeof n === "number" ? String(n) : "?");

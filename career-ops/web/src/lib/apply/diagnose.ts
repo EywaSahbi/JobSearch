@@ -4,16 +4,6 @@ import type { ApplyIssue } from "./issue";
 
 export type { ApplyIssue };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Robust block/obstacle detection for the local Playwright form-interpreter.
-// Through-line guard (from the robustness taxonomy): only ever ABORT when there
-// is NO fillable form after settle — a captcha/cookie badge over a populated form
-// is NOT a block. Abort-level categories require ≥2 independent signal classes.
-// We never auto-solve a challenge; we hand the human a clear, actionable message.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Cheapest + first check: the navigation Response status/headers. Returns a hard
- *  block for auth/forbidden/geo/rate-limit/server/not-found — before any DOM work. */
 export function statusBlock(status: number | null | undefined, headers: Record<string, string>): ApplyIssue | null {
   if (!status) return null;
   const cf = headers["cf-ray"] || headers["cf-mitigated"] || headers["cf-request-id"];
@@ -37,8 +27,6 @@ const CONSENT_BUTTONS = [
   "#truste-consent-button",
 ];
 
-/** Auto-dismiss a cookie/consent overlay that covers the form (it only HIDES the
- *  form, it's never a hard block). Tries vendor buttons, then a generic accept. */
 export async function dismissConsent(page: Page): Promise<ApplyIssue[]> {
   try {
     const root = page.locator(CONSENT_ROOTS).first();
@@ -57,41 +45,29 @@ export async function dismissConsent(page: Page): Promise<ApplyIssue[]> {
       return [{ level: "info", code: "consent-dismissed", message: "Dismissed a cookie banner to reach the form." }];
     }
   } catch {
-    /* never let consent handling break the open */
   }
   return [];
 }
 
-/** Force same-tab navigation: many "Apply" links are <a target="_blank"> (e.g.
- *  openai.com → jobs.ashbyhq.com/…/application). Without this, clicking Apply
- *  opens a NEW tab we don't follow and the loop never reaches the form. We strip
- *  target=_blank in every frame so any click/navigation stays in OUR page. */
 export async function dropNewTabs(page: Page): Promise<void> {
   for (const fr of page.frames()) {
     await fr
       .evaluate(() => {
         document.querySelectorAll('a[target="_blank"], a[target="_new"], form[target]').forEach((el) => el.removeAttribute("target"));
-        // also neutralise window.open so JS "apply" handlers navigate in-tab
         try {
           (window as unknown as { open: (u?: string) => Window | null }).open = (u?: string) => {
             if (u) location.href = u;
             return null;
           };
         } catch {
-          /* ignore */
         }
       })
       .catch(() => {});
   }
 }
 
-/** SPA / apply-behind-a-button: if no form yet, click the first visible Apply CTA
- *  (NEVER a submit) to reveal the form. If it's an <a> with an application href,
- *  NAVIGATE there directly (robust vs popups). Returns true if it acted. */
 export async function tryApplyTrigger(page: Page): Promise<boolean> {
   try {
-    // 1) Most reliable: an <a> linking straight to a known ATS application (e.g.
-    //    openai.com → jobs.ashbyhq.com/…/application). Navigate there in-tab.
     const atsLink = page.locator('a[href*="ashbyhq"], a[href*="greenhouse"], a[href*="lever.co"], a[href*="smartrecruiters"], a[href*="workable"], a[href*="recruitee"], a[href*="bamboohr"], a[href*="jobvite"], a[href*="teamtailor"], a[href*="myworkdayjobs"], a[href*="/apply"], a[href*="/application"]').first();
     if (await atsLink.count().catch(() => 0)) {
       const href = await atsLink.getAttribute("href").catch(() => null);
@@ -100,8 +76,6 @@ export async function tryApplyTrigger(page: Page): Promise<boolean> {
         return true;
       }
     }
-    // 2) Otherwise click a visible Apply CTA (never a submit). dropNewTabs() has
-    //    already neutralised target=_blank / window.open so it stays in-tab.
     const t = page
       .getByRole("button", { name: /apply|start application|begin application/i })
       .or(page.getByRole("link", { name: /apply/i }))
@@ -113,13 +87,10 @@ export async function tryApplyTrigger(page: Page): Promise<boolean> {
       return true;
     }
   } catch {
-    /* ignore */
   }
   return false;
 }
 
-/** When extraction yields 0 fields, classify WHY so we abort with the RIGHT
- *  message (bot-challenge vs login wall vs closed posting vs unsupported). */
 export async function classifyEmpty(page: Page, url: string): Promise<ApplyIssue> {
   const host = (() => {
     try {
@@ -162,10 +133,6 @@ export async function classifyEmpty(page: Page, url: string): Promise<ApplyIssue
   return { level: "block", code: "no-form", message: "Couldn't find a fillable form on this page. If it's a job description, open its “Apply” form and paste that URL." };
 }
 
-/** An INTERACTIVE captcha (a checkbox/widget the user must click) present on the
- *  form → warn. We deliberately IGNORE invisible reCAPTCHA v3 (the .grecaptcha-
- *  badge that's on nearly every ATS form and needs NO user action) so the warning
- *  isn't constant noise. */
 export async function captchaWarning(page: Page): Promise<ApplyIssue | null> {
   const interactive = await page
     .evaluate(() => {
@@ -175,8 +142,6 @@ export async function captchaWarning(page: Page): Promise<ApplyIssue | null> {
         return (el as HTMLElement).offsetParent !== null && r.width > 40 && r.height > 20;
       };
       const some = (sel: string) => Array.from(document.querySelectorAll(sel)).some(vis);
-      // v2 checkbox (anchor iframe / visible widget), hCaptcha checkbox, Turnstile widget.
-      // NOT .grecaptcha-badge (invisible v3) and NOT the bare bframe.
       return (
         some('iframe[src*="recaptcha/api2/anchor"]') ||
         some('.g-recaptcha[data-size="normal"]') ||
@@ -188,9 +153,6 @@ export async function captchaWarning(page: Page): Promise<ApplyIssue | null> {
   return interactive ? { level: "warn", code: "captcha-present", message: "This form has a captcha you'll need to tick — do it yourself on the real form at the end." } : null;
 }
 
-/** Conservatively detect a multi-STEP form (we only read/fill page 1) so we can
- *  set the user's expectation that they'll continue on the real form. Fires only
- *  on a "Step 1 of N" indicator, or a visible Next/Continue with NO Submit. */
 export async function multiStepInfo(page: Page): Promise<ApplyIssue | null> {
   const ms = await page
     .evaluate(() => {
@@ -207,9 +169,6 @@ export async function multiStepInfo(page: Page): Promise<ApplyIssue | null> {
   return ms ? { level: "info", code: "multi-step", message: "This form has more than one step — after this page, you'll continue on the real form." } : null;
 }
 
-/** READ THE REAL FORM BACK after filling: did every answer land? required fields
- *  still empty? any validation error visible? — the self-verification a blind
- *  selector script can't do. Returns warnings to show BEFORE the human submits. */
 export async function verifyFill(frame: Frame, fields: ApplyField[], answers: Record<string, string>): Promise<ApplyIssue[]> {
   const meta = fields.map((f) => ({ id: f.id, label: f.label || "this field", type: f.type, required: !!f.required, combobox: !!f.combobox }));
   type R = { mismatches: string[]; requiredEmpty: string[]; valErrors: string[] };
@@ -224,8 +183,6 @@ export async function verifyFill(frame: Frame, fields: ApplyField[], answers: Re
           const el = document.querySelector(`[data-co-field="${f.id}"]`) as HTMLElement | null;
           if (!el) continue;
           if (f.type === "file") {
-            // confirm a file actually landed on the input (the CV attach can fail
-            // silently on a custom dropzone). Only warn if the field is required.
             const filesEl = el as HTMLInputElement;
             const has = !!(filesEl.files && filesEl.files.length > 0);
             if (f.required && !has) requiredEmpty.push(f.label);
@@ -238,17 +195,13 @@ export async function verifyFill(frame: Frame, fields: ApplyField[], answers: Re
             const grp = Array.from(document.querySelectorAll(`[data-co-field="${f.id}"]`)) as HTMLInputElement[];
             actual = grp.some((r) => r.checked) ? "checked" : "";
           } else if (f.combobox) {
-            // react-select keeps the chosen value in a sibling .select__single-value
-            // (the tagged input stays empty). Read leniently: only conclude "empty"
-            // when a placeholder is visibly shown — otherwise assume OK (never a
-            // false "didn't land" warning).
             const shell = el.closest('[class*="select-shell" i], [class*="select__container" i], [class*="select__control" i], [class*="value-container" i]') || el.parentElement?.parentElement || el.parentElement;
             const sv = shell?.querySelector('.select__single-value, [class*="single-value" i], [class*="singleValue" i], [class*="multi-value" i]');
             const ph = shell?.querySelector('.select__placeholder, [class*="placeholder" i]');
             const svText = (sv?.textContent || "").trim();
-            if (svText) actual = svText; // a value is shown
-            else if (ph && (ph as HTMLElement).offsetParent !== null) actual = ""; // placeholder visible → empty
-            else actual = intended || "ok"; // can't read reliably → don't flag
+            if (svText) actual = svText;
+            else if (ph && (ph as HTMLElement).offsetParent !== null) actual = "";
+            else actual = intended || "ok";
           } else {
             actual = (el as HTMLInputElement).value || "";
           }

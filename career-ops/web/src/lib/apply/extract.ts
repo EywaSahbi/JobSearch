@@ -1,37 +1,29 @@
 import type { Page, Frame } from "playwright-core";
 
 export type ApplyField = {
-  id: string; // our stable handle, also set as data-co-field on the live element
+  id: string;
   type: "text" | "email" | "tel" | "url" | "number" | "date" | "textarea" | "select" | "checkbox" | "radio" | "file";
   label: string;
   required: boolean;
   options?: string[];
   maxLength?: number;
   value?: string;
-  combobox?: boolean; // react-select-style widget → fill via click+type+Enter, not selectOption
-  nativeId?: string; // the live element's id/name — used to match ATS API schemas (Greenhouse)
+  combobox?: boolean;
+  nativeId?: string;
   nativeName?: string;
 };
 
 export type ExtractedForm = { title: string; url: string; fields: ApplyField[] };
 
-// Extract the application form's STRUCTURE (not pixels) and TAG each control with
-// a stable `data-co-field` id on the LIVE page (which the session keeps open), so
-// the later fill phase can locate each field deterministically. Generic DOM/a11y
-// introspection — clean ATS (Ashby/Lever/Greenhouse) work well; Workday best-effort.
 export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
   const data = await ctx.evaluate(() => {
     const clean = (s: string | null | undefined) => (s || "").replace(/\s+/g, " ").trim().slice(0, 160);
     const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
-    // generic placeholders that masquerade as labels (Ashby/react-select)
     const isGenericPh = (s: string) => /^(start typing|select\b|choose|search\b|type\b|--|please select|e\.?g\.?)/i.test(s.trim());
-    // a usable label: not empty, not a UUID, not a generic placeholder
     const ok = (s: string | null | undefined) => {
       const t = (s || "").trim();
       return t && !isUuid(t) && !isGenericPh(t) ? t : "";
     };
-    // Pure label text: a wrapping <label>Gender<select>…</select></label> would
-    // otherwise swallow all option text (Lever). Strip controls/options first.
     const pure = (node: Element | null): string => {
       if (!node) return "";
       const c = node.cloneNode(true) as Element;
@@ -39,10 +31,6 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
       return clean(c.textContent);
     };
 
-    // The field WRAPPER (Ashby `ashby-application-form-field-entry`, Greenhouse
-    // `select__container`/`field`, generic `form-group`/`fieldset`) — deliberately
-    // NOT a bare `div` (that matches the immediate parent and misses the real label
-    // which lives one wrapper up).
     function fieldGroup(el: Element): Element | null {
       return el.closest(
         '[class*="field-entry" i], [class*="fieldEntry" i], [class*="form-group" i], [class*="question" i], [class*="field__" i], [class*="__field" i], fieldset, [class*="field" i]',
@@ -64,8 +52,6 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
       }
       const parentLabel = el.closest("label");
       if (parentLabel && ok(pure(parentLabel))) return pure(parentLabel);
-      // the question title inside the field wrapper (handles Ashby's
-      // `ashby-application-form-question-title`, Greenhouse `select__label`, etc.)
       const grp = fieldGroup(el);
       if (grp) {
         const lab = grp.querySelector(
@@ -73,7 +59,6 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
         );
         if (lab && ok(pure(lab))) return pure(lab);
       }
-      // walk up a few ancestors for a nearby label/heading
       let c: Element | null = el.parentElement;
       for (let i = 0; i < 4 && c; i++, c = c.parentElement) {
         const lab = c.querySelector('label, legend, [class*="label" i], [class*="title" i], h3, h4, h5');
@@ -82,12 +67,9 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
       const ph = (el as HTMLInputElement).placeholder;
       if (ok(ph)) return ph;
       const name = (el as HTMLInputElement).name;
-      return ok(name); // never a UUID/placeholder; "" → caller shows "Untitled"
+      return ok(name);
     }
 
-    // The QUESTION of a radio group — NOT the first option's label. Look for a
-    // radiogroup/fieldset aria-label/legend, else the first label/heading in the
-    // group's container that isn't one of the options.
     function groupLabel(firstRadio: Element, options: string[]): string {
       const rg = firstRadio.closest("[role=radiogroup], fieldset");
       if (rg) {
@@ -125,13 +107,8 @@ export async function extractForm(ctx: Page | Frame): Promise<ExtractedForm> {
       const itype = ((el as HTMLInputElement).type || "").toLowerCase();
       if (tag === "input" && ["hidden", "submit", "button", "image", "reset"].includes(itype)) continue;
       if ((el as HTMLElement).offsetParent === null && itype !== "radio" && itype !== "checkbox") continue;
-      // skip ATS "autofill from resume / parse my CV" helper widgets (Ashby) — these
-      // are convenience uploaders, not real application fields.
       if ((el as Element).closest('[class*="autofill" i]')) continue;
 
-      // react-select widgets render an extra internal/autosize <input> next to the
-      // real role=combobox input. Keep ONLY the combobox; drop the dummy (it's the
-      // "Untitled field" noise). The combobox carries the question's aria label.
       const inReactSelect = (el as Element).closest('[class*="select__"], .select-shell');
       const isCombobox = el.getAttribute("role") === "combobox";
       if (inReactSelect && tag === "input" && !isCombobox) continue;

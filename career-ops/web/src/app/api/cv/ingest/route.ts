@@ -8,23 +8,12 @@ import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
 
-// Deny list DERIVED, never hand-written: every one of the six advisor argvs
-// that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
-// then auto-approves (#2185, #2507).
 const ADVISOR_SCOPE = scopeFrom("Read,Glob,Grep");
 
-// Parse a CV (pasted text or an uploaded PDF) into clean cv.md markdown by running
-// the USER'S OWN CLI headless — the web never ships a heavyweight parser, and the
-// real CV NEVER leaves the machine (local-first, PII-safe). This route is a
-// PROPOSER: it produces candidate markdown only; the actual write to cv.md happens
-// via the existing POST /api/cv after the user confirms (propose-then-confirm).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Prefer the CANONICAL core mode (single source of truth — CLI + web parse CVs
-// identically); fall back to the inline prompt until modes/cv-ingest.md lands
-// (exactly how the explore route handles a missing discover.md).
 function readCanonicalMode(): string | null {
   try {
     return fs.readFileSync(path.join(careerOpsRoot(), "modes", "cv-ingest.md"), "utf8");
@@ -38,8 +27,6 @@ function ingestPrompt(source: string): string {
   if (mode) {
     return `${mode}\n\n--- HEADLESS OUTPUT CONTRACT (the career-ops WEB is parsing your stream) ---\nFollow the mode above exactly. You are a PROPOSER running headless: emit ONLY the markdown between <<cv:start>> and <<cv:end>> (own lines, never in a code fence), then one <<cv:seed>>{...} line; or <<cv:error>>{"reason":"unreadable"} if you can't read it. Narrate one short line before <<cv:start>>.\n\n${source}`;
   }
-  // Fallback mirrors the canonical examples/cv-example.md format (the SSOT the
-  // project ships) so a web-parsed CV is the same shape as a hand-written one.
   return `You convert a person's CV into clean cv.md markdown that EXACTLY mirrors career-ops's reference format.
 
 FORMAT (match exactly; omit a section if the source lacks it; INVENT NOTHING):
@@ -84,21 +71,15 @@ export async function POST(req: Request) {
       cliId = String(form.get("cliId") || "");
       const file = form.get("file");
       if (!(file instanceof File)) return Response.json({ error: "no file" }, { status: 400 });
-      // Resolve first: if no CLI can run, that is the error to show, not the PDF
-      // one below, which would wrongly say Claude is missing (#4607).
       resolved = resolveCliOrFallback(cliId);
       if (!resolved) return Response.json(cliUnavailableError(cliId), { status: 404 });
-      // Reading a PDF/DOCX from a path needs the CLI's file tool, which only Claude
-      // is granted here. Tell non-Claude users plainly instead of failing opaquely.
-      // Judged on the CLI that will actually run: a stale saved id falls back to
-      // the sole installed CLI, and that may well be Claude.
       if (resolved.spec.id !== "claude" && /\.(pdf|docx)$/i.test(file.name)) {
         return Response.json({ error: "PDF upload needs Claude Code — paste your CV text instead." }, { status: 400 });
       }
       const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || ".pdf").toLowerCase();
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "career-ops-cv-"));
-      tempFile = path.join(dir, `cv${ext}`); // outside the repo, basename-only
-      fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 }); // PII → owner-only
+      tempFile = path.join(dir, `cv${ext}`);
+      fs.writeFileSync(tempFile, Buffer.from(await file.arrayBuffer()), { mode: 0o600 });
       promptSource = FILE_SRC(tempFile);
     } else {
       return Response.json({ error: "unsupported content-type" }, { status: 400 });
@@ -113,7 +94,6 @@ export async function POST(req: Request) {
     return Response.json(cliUnavailableError(cliId), { status: 404 });
   }
   const { spec, binPath } = resolved;
-  // The CLI actually running: fencing and argv below are keyed on it.
   cliId = spec.id;
   const substitution = cliSubstitutionNotice(resolved);
   const prompt = ingestPrompt(promptSource);
@@ -128,7 +108,6 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
-        // Required for a non-writing worker — see cli-fencing.mjs (#2507).
         "--strict-mcp-config",
         "--allowedTools",
         ADVISOR_SCOPE.allowed,
@@ -139,9 +118,6 @@ export async function POST(req: Request) {
 
   let child;
   try {
-    // Reads the temp PDF and proposes; cannot write, and does not fetch — the
-    // Claude branch denies WebFetch/WebSearch outright, so this is the strictest
-    // record and Codex gets a true read-only sandbox.
     child = spawnHeadlessCli(
       binPath,
       args,
@@ -149,16 +125,11 @@ export async function POST(req: Request) {
       { cliId, capabilities: CAPS.localReadOnly },
     );
   } catch (e) {
-    if (tempFile) cleanupTemp(tempFile); // never leak the CV temp if spawn throws sync
+    if (tempFile) cleanupTemp(tempFile);
     return Response.json({ error: e instanceof Error ? e.message : "failed to start the CLI" }, { status: 500 });
   }
 
   const encoder = new TextEncoder();
-  // The `closed` flag + kill timer live in the OUTER scope so the ReadableStream
-  // `cancel()` callback (fired on client disconnect / response teardown) can flip
-  // `closed` BEFORE the child's late close/error/stderr handlers run — otherwise
-  // they enqueue onto an already-closed controller and throw an UNCAUGHT
-  // "Invalid state: Controller is already closed" that crashes the server (#1155).
   let closed = false;
   let killer: ReturnType<typeof setTimeout> | undefined;
   const stream = new ReadableStream<Uint8Array>({
@@ -169,7 +140,6 @@ export async function POST(req: Request) {
         try {
           child.kill("SIGTERM");
         } catch {
-          /* ignore */
         }
       }, 240_000);
       const safeClose = () => {
@@ -180,31 +150,22 @@ export async function POST(req: Request) {
           try {
             controller.close();
           } catch {
-            /* already closed */
           }
         }
       };
-      // Every write goes through here: guarded on `closed` AND try/catch'd, so a
-      // lost race with cancel()/close can never throw out of an EventEmitter cb.
       const safeEnqueue = (s: string): boolean => {
         if (closed || !s) return false;
         try {
           controller.enqueue(encoder.encode(s));
           return true;
         } catch {
-          closed = true; // controller already closed underneath us — stop, never crash
+          closed = true;
           return false;
         }
       };
       const emit = (s: string) => {
         if (safeEnqueue(s)) emitted = true;
       };
-      // Same honesty as the other CLI-spawning routes: a runtime with no verified
-      // fencing mechanism runs with its default access, and that must be visible
-      // rather than inferred from which CLI happens to be selected (#2507). This
-      // stream is plain text, so the notice is a leading line rather than an event.
-      // It lands in the client's `trace`, which renders only its latest line — a
-      // pre-existing limit of this view, not something to work around here.
       const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.localReadOnly });
       if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}\n\n`);
       if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
@@ -228,7 +189,6 @@ export async function POST(req: Request) {
               if (typeof text === "string") emit(text);
             }
           } catch {
-            /* partial / non-json line */
           }
         }
       });
@@ -246,12 +206,11 @@ export async function POST(req: Request) {
       });
     },
     cancel() {
-      closed = true; // a consumer teardown must stop the child handlers from enqueuing
+      closed = true;
       if (killer) clearTimeout(killer);
       try {
         child.kill("SIGTERM");
       } catch {
-        /* ignore */
       }
       if (tempFile) cleanupTemp(tempFile);
     },
@@ -266,6 +225,5 @@ function cleanupTemp(file: string) {
   try {
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 }

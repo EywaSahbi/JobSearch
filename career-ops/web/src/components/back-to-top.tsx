@@ -5,20 +5,12 @@ import { ArrowUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { shouldShowBackToTop, scrollBehaviorFor } from "@/lib/scroll-to-top.mjs";
 
-// Floating control that returns the window to the top of long pages. Rendered
-// once from the app shell. The window is the scroll container here (main has no
-// own overflow-y), so it listens on window scroll and calls window.scrollTo.
-//
-// It sits one row above the assistant launcher, which owns bottom-5 right-5, so
-// the two never overlap; a lower z-index lets an open assistant panel cover it
-// cleanly. When hidden it's also removed from the tab order and hidden from
-// assistive tech, so there's nothing to land on until it's actually usable.
 export function BackToTop() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setVisible(shouldShowBackToTop(window.scrollY));
-    onScroll(); // sync once in case we mount already scrolled (restored position)
+    onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);

@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# career-ops batch runner — standalone orchestrator for headless agent workers
-# Reads batch-input.tsv, delegates each offer to a worker, tracks state in
-# batch-state.tsv for resumability.
-#
-# Supported CLIs (--cli flag):
-#   claude    — claude -p with --dangerously-skip-permissions (default)
-#   opencode  — opencode run (falls back to ollama launch opencode if not in PATH)
-#   gemini    — gemini -p
-#   qwen      — qwen -p
-#
-# Only claude supports --strict-mcp-config, the rate-limit/session retry loop,
-# and --parallel > 1; other CLIs run sequentially with a single attempt.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BATCH_DIR="$SCRIPT_DIR"
@@ -33,7 +20,6 @@ STATE_LOCK_PID_FILE="$STATE_LOCK_DIR/pid"
 STATE_LOCK_TIMEOUT_SECONDS=30
 MAIN_PID="${BASHPID:-$$}"
 
-# Defaults
 PARALLEL=1
 DRY_RUN=false
 RETRY_FAILED=false
@@ -42,7 +28,7 @@ START_FROM=0
 MAX_RETRIES=2
 MIN_SCORE=0
 SKIP_PDF=false
-MODEL=""  # explicit override; otherwise resolved from config/profile.yml spend_tier
+MODEL=""
 RESOLVED_MODEL=""
 RESOLVED_SPEND_TIER=""
 CLI=claude
@@ -50,9 +36,8 @@ RATE_LIMIT_SLEEP=300
 BATCH_PAUSED=false
 STATUS_ONLY=false
 WATCH_MODE=false
-LIMIT=0  # internal sentinel only; explicit --limit must be positive
+LIMIT=0
 
-# Return success for non-negative integer or decimal strings.
 is_decimal_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
@@ -111,7 +96,6 @@ Examples:
 USAGE
 }
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cli) CLI="$2"; shift 2 ;;
@@ -125,9 +109,7 @@ while [[ $# -gt 0 ]]; do
         echo "ERROR: --limit must be a positive integer; omit --limit for no limit."
         exit 1
       fi
-      # Remove leading zeroes before Bash arithmetic (which otherwise reads octal).
       LIMIT="${2#"${2%%[!0]*}"}"
-      # Compare decimal strings before arithmetic can wrap an oversized integer.
       if [[ ${#LIMIT} -gt 19 ]] || { [[ ${#LIMIT} -eq 19 ]] && [[ "$LIMIT" > 9223372036854775807 ]]; }; then
         echo "ERROR: --limit must be at most 9223372036854775807; omit --limit for no limit."
         exit 1
@@ -154,8 +136,6 @@ if ! [[ "$RATE_LIMIT_SLEEP" =~ ^[0-9]+$ ]]; then
   echo "ERROR: --rate-limit-sleep must be a non-negative integer (seconds)."
   exit 1
 fi
-# Normalize decimal input before shell arithmetic (08 must not mean octal),
-# and bound it before conversion so oversized input cannot wrap around.
 RATE_LIMIT_SLEEP=$(printf '%s' "$RATE_LIMIT_SLEEP" | sed 's/^0*//')
 RATE_LIMIT_SLEEP=${RATE_LIMIT_SLEEP:-0}
 if [[ ${#RATE_LIMIT_SLEEP} -gt 10 ]] || { [[ ${#RATE_LIMIT_SLEEP} -eq 10 ]] && [[ "$RATE_LIMIT_SLEEP" > 2147483647 ]]; }; then
@@ -168,7 +148,6 @@ if ! is_decimal_number "$MIN_SCORE"; then
   exit 1
 fi
 
-# Lock file to prevent double execution
 acquire_lock() {
   if [[ -f "$LOCK_FILE" ]]; then
     local old_pid
@@ -194,7 +173,6 @@ release_lock() {
 
 trap release_lock EXIT
 
-# Validate prerequisites
 check_prerequisites() {
   if [[ ! -f "$INPUT_FILE" ]]; then
     echo "ERROR: $INPUT_FILE not found. Add offers first."
@@ -206,8 +184,6 @@ check_prerequisites() {
     exit 1
   fi
 
-  # Resolve the binary the configured CLI actually needs. opencode can run
-  # natively or fall back to ollama, so check for either.
   local cli_cmd
   case "$CLI" in
     claude)   cli_cmd="claude" ;;
@@ -225,8 +201,6 @@ check_prerequisites() {
     exit 1
   fi
 
-  # Parallelism, the rate-limit retry loop, and --strict-mcp-config are
-  # claude-only; local models run one at a time.
   if [[ "$CLI" != "claude" && "$PARALLEL" -gt 1 ]]; then
     echo "WARN: --parallel >1 is not supported for --cli $CLI (local models run sequentially). Resetting to 1."
     PARALLEL=1
@@ -235,7 +209,6 @@ check_prerequisites() {
   mkdir -p "$LOGS_DIR" "$TRACKER_DIR" "$REPORTS_DIR"
 }
 
-# Status/watch mode only needs prior batch state, not worker prerequisites.
 check_status_prerequisites() {
   if [[ ! -f "$STATE_FILE" ]]; then
     echo "No state file found at $STATE_FILE"
@@ -243,18 +216,12 @@ check_status_prerequisites() {
   fi
 }
 
-# Initialize state file if it doesn't exist
 init_state() {
   if [[ ! -f "$STATE_FILE" ]]; then
     printf 'id\turl\tstatus\tstarted_at\tcompleted_at\treport_num\tscore\terror\tretries\n' > "$STATE_FILE"
   fi
 }
 
-# A lock held longer than this is assumed abandoned, independent of the
-# PID-liveness check below. This exists because `kill -0 $pid` is unreliable
-# on Git Bash/Windows (MSYS PIDs from $!/$BASHPID don't reliably map to real
-# Windows process IDs), so a genuinely-dead lock holder can otherwise never
-# be recovered there and every other worker times out waiting for it.
 STATE_LOCK_STALE_AGE_SECONDS=15
 
 acquire_state_lock() {
@@ -295,21 +262,6 @@ acquire_state_lock() {
       local stale=false
       local stale_reason=""
 
-      # SAFETY INVARIANT: never treat the lock as stale while kill -0
-      # positively confirms the recorded PID is still running — a
-      # confirmed-alive owner may still write update_state_unlocked's
-      # rewrite of STATE_FILE, and reclaiming under it would let two
-      # processes rewrite $STATE_FILE.tmp concurrently (real data loss).
-      # The age-based fallback below only ever fires when the PID check
-      # could NOT confirm liveness (empty/missing PID, or kill -0 itself
-      # reported not-running) — it narrows, but does not replace, the PID
-      # check. This intentionally leaves one Windows/Git-Bash edge case
-      # unhandled: a `kill -0` FALSE POSITIVE (reports alive for a PID
-      # that Windows has actually reused for an unrelated process). That
-      # gap is accepted because the alternative — reclaiming while any
-      # chance remains the owner is genuinely alive — risks silent
-      # concurrent-write corruption, which is worse than this lock
-      # occasionally timing out (recoverable via retry) in that rare case.
       local pid_confirmed_alive=false
       if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
         pid_confirmed_alive=true
@@ -373,7 +325,6 @@ run_with_state_lock() {
   return "$status"
 }
 
-# Get status of an offer from state file
 get_status() {
   local id="$1"
   if [[ ! -f "$STATE_FILE" ]]; then
@@ -385,7 +336,6 @@ get_status() {
   echo "${status:-none}"
 }
 
-# Get retry count for an offer
 get_retries() {
   local id="$1"
   if [[ ! -f "$STATE_FILE" ]]; then
@@ -397,8 +347,6 @@ get_retries() {
   echo "${retries:-0}"
 }
 
-# Read spend_tier from config/profile.yml. Defaults to "standard" if the key
-# is absent or invalid.
 read_spend_tier() {
   local raw=""
 
@@ -437,7 +385,6 @@ read_spend_tier() {
   esac
 }
 
-# Tier -> model mapping. Keep in sync with the table in modes/_shared.md.
 spend_tier_to_model() {
   case "$1" in
     economy) echo "claude-haiku-4-5" ;;
@@ -446,9 +393,6 @@ spend_tier_to_model() {
   esac
 }
 
-# Resolve the model to pass to the worker CLI. --model always wins.
-# spend_tier maps to Claude model names, so it only applies to --cli claude;
-# other CLIs use --model verbatim, or their own default when it is unset.
 resolve_worker_model() {
   if [[ -n "$MODEL" ]]; then
     RESOLVED_MODEL="$MODEL"
@@ -466,9 +410,6 @@ resolve_worker_model() {
   RESOLVED_MODEL="$(spend_tier_to_model "$RESOLVED_SPEND_TIER")"
 }
 
-# Append a one-line, auditable record of a pre-screen-gate discard to
-# batch/logs/discard.log (see modes/batch.md — Pre-screen gate). Format:
-# {ISO8601 timestamp}\t{job id}\t{url}\t{reason}
 log_discard() {
   local id="$1" url="$2" reason="$3"
   mkdir -p "$LOGS_DIR"
@@ -478,17 +419,9 @@ log_discard() {
 }
 
 
-# Update or insert state for an offer.
-# Caller must hold STATE_LOCK_DIR while this runs.
 update_state_unlocked() {
   local id="$1" url="$2" status="$3" started="$4" completed="$5" report_num="$6" score="$7" error="$8" retries="$9"
 
-  # batch-state.tsv is tab-separated with one row per line -- a literal tab,
-  # newline, or carriage return inside $error (e.g. from a worker's raw error
-  # text, or JSON.parse unescaping \n/\r/\t in a caller upstream) would split
-  # into extra columns or extra rows and corrupt every row after it. Collapse
-  # them to spaces centrally here so every caller is protected, not just the
-  # one that happened to trigger this.
   error=${error//$'\r'/ }
   error=${error//$'\n'/ }
   error=${error//$'\t'/ }
@@ -500,12 +433,10 @@ update_state_unlocked() {
   local tmp="$STATE_FILE.tmp"
   local found=false
 
-  # Write header
   head -1 "$STATE_FILE" > "$tmp"
 
-  # Process existing lines
   while IFS=$'\t' read -r sid surl sstatus sstarted scompleted sreport sscore serror sretries; do
-    [[ "$sid" == "id" ]] && continue  # skip header
+    [[ "$sid" == "id" ]] && continue
     if [[ "$sid" == "$id" ]]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$id" "$url" "$status" "$started" "$completed" "$report_num" "$score" "$error" "$retries" >> "$tmp"
@@ -528,34 +459,13 @@ update_state() {
   run_with_state_lock update_state_unlocked "$@"
 }
 
-# Durable last-resort records of state transitions that could NOT be written
-# into $STATE_FILE (state-lock exhausted its retries). ONE FILE PER RECORD:
-# each failed transition gets its own uniquely-named file via mktemp
-# (O_CREAT|O_EXCL — atomic creation, guaranteed-unique name), so no two
-# workers ever write to the same file and no shared-file truncate/append
-# race can exist on any platform. That matters here because recovery writes
-# are CORRELATED, not independent: they fire exactly when the state lock is
-# jammed, which makes all parallel workers fail (and try to record) at the
-# same moment — a shared recovery file is racing precisely when it is
-# needed most (PR #2417 review). This mechanism must also never depend on
-# the state lock that just failed, and it doesn't: creation is the only
-# synchronization. reconcile_recovery_records() (start of the next run,
-# single-threaded, before any worker spawns) merges each record into
-# $STATE_FILE and deletes its file only on success — there is no
-# rewrite-and-rename step, so nothing here needs cross-filesystem atomicity.
 RECOVERY_DIR="$BATCH_DIR/batch-state-recovery.d"
 
 append_recovery_record() {
   local id="$1" url="$2" status="$3" started="$4" completed="$5" report_num="$6" score="$7" error="$8" retries="$9"
-  # Same rationale as update_state_unlocked: a literal tab/newline/CR in
-  # $error would split this single-line record into extra fields or rows,
-  # corrupting the record and the state row it later reconciles into.
   error=${error//$'\r'/ }
   error=${error//$'\n'/ }
   error=${error//$'\t'/ }
-  # \x1f is used as the in-memory delimiter when this record is read back
-  # (see reconcile_recovery_records); strip it here too so a stray unit
-  # separator in $error can't inject a field boundary on the read side.
   error=${error//$'\x1f'/ }
   mkdir -p "$RECOVERY_DIR" || return 1
   local rec
@@ -564,33 +474,11 @@ append_recovery_record() {
     "$id" "$url" "$status" "$started" "$completed" "$report_num" "$score" "$error" "$retries" > "$rec"
 }
 
-# A recovery record is ALWAYS older than whatever $STATE_FILE holds for the
-# same id: the record is only written when the lock was unreachable, so any
-# row present for that id now was written afterwards by a path that did reach
-# the lock. Merging it blindly therefore rolls a finished offer backwards --
-# the score and completed_at are overwritten, and since rate_limited and
-# failed are NOT terminal, the offer re-enters pending selection in main()
-# and gets evaluated a second time. Cost: one lost evaluation plus one
-# duplicate run, on a path that by construction only fires when something
-# already went wrong.
-#
-# Completed and human-held states must not be rolled back by stale records.
-# Keep these protected states in sync with the pending-selection guard.
 recovery_record_is_superseded() {
   local current="$1"
   [[ "$current" == "completed" || "$current" == "skipped" || "$current" == "needs_confirmation" ]]
 }
 
-# Merge one recovery record, but only into a row that has not already reached
-# a completed or human-held state. The status read happens INSIDE the lock: a
-# check-then-write gap would let a worker finish between the two and
-# reintroduce the same rollback. get_status is a lock-free reader (plain awk
-# over $STATE_FILE), so calling it here does not re-enter the non-reentrant
-# mkdir lock.
-#
-# Exit codes: 0 merged · 3 superseded (record is stale, caller should drop
-# it) · anything else is a real failure. 3 avoids colliding with the 1 that
-# acquire_state_lock returns when the lock itself is unreachable.
 reconcile_one_unlocked() {
   local id="$1"
   local current
@@ -606,12 +494,6 @@ reconcile_one() {
   run_with_state_lock reconcile_one_unlocked "$@"
 }
 
-# Merge any recovery records left by a prior run into $STATE_FILE. Runs
-# single-threaded at the very start of main(), before any worker is spawned,
-# so there is no lock contention here — this is the one place these records
-# are guaranteed a clean shot at the lock. Each record file is deleted only
-# after its transition lands in $STATE_FILE (or is found to be superseded);
-# genuine failures leave the file in place for the run after that.
 reconcile_recovery_records() {
   [[ -d "$RECOVERY_DIR" ]] || return 0
 
@@ -633,12 +515,6 @@ reconcile_recovery_records() {
   local rc
   for f in "${rec_files[@]}"; do
     rline=""
-    # Don't split with `IFS=$'\t' read`: tab is IFS *whitespace*, so a run of
-    # tabs around an empty interior field (e.g. an empty completed_at on a
-    # non-terminal record) collapses to one delimiter and every later field
-    # shifts left, corrupting the merge. Read the line raw, then split on \x1f
-    # (a non-whitespace unit separator that preserves empty fields) after
-    # translating the on-disk tabs to it. Same rationale as process_offer.
     IFS= read -r rline < "$f" || true
     IFS=$'\x1f' read -r rid rurl rstatus rstarted rcompleted rreport rscore rerror rretries <<< "${rline//$'\t'/$'\x1f'}"
     if [[ -z "$rid" ]]; then
@@ -652,9 +528,6 @@ reconcile_recovery_records() {
       rm -f "$f"
       merged=$((merged + 1))
     elif (( rc == 3 )); then
-      # Stale by definition, not a failure — the row it targets already
-      # finished. Dropping the file is correct; keeping it would retry the
-      # same rollback on every subsequent run.
       rm -f "$f"
       superseded=$((superseded + 1))
     else
@@ -670,17 +543,6 @@ reconcile_recovery_records() {
   fi
 }
 
-# Retry wrapper around update_state. Bare `update_state ...` calls under
-# `set -e` will silently kill the entire background worker subshell if a
-# single lock-timeout failure propagates — this wrapper retries a few times
-# and, if it still fails, falls back to append_recovery_record so the
-# transition is never actually lost (only delayed until the next run's
-# reconcile step), then logs a clear warning and returns non-zero so the
-# CALLER can still decide whether to skip side effects that assumed success.
-# Return 1 means the transition is durable in recovery; 2 means neither write
-# succeeded, so a human gate must stop and surface the persistence failure
-# (found under --parallel 5 on Git Bash/Windows: ~47 of 50 jobs silently
-# dropped in one run from exactly this before the retry+recovery-log fix).
 update_state_retrying() {
   local attempt=0
   local max_attempts=3
@@ -713,9 +575,6 @@ is_session_limit_log() {
   grep -Eiq '(session limit|resets [0-9:]+[ap]m|usage limit|limit[[:space:]]+reached)' "$log_file"
 }
 
-# Print a delay or "pause". Only standalone delta-seconds headers are trusted;
-# never feed worker text into shell arithmetic. awk compares before formatting,
-# so even an arbitrarily long integer header safely requests a pause.
 rate_limit_delay() {
   local log_file="$1" retry="$2" base delay hint step
   if (( RATE_LIMIT_SLEEP == 0 )); then
@@ -724,8 +583,6 @@ rate_limit_delay() {
   fi
   base=30
   (( base <= RATE_LIMIT_SLEEP )) || base=$RATE_LIMIT_SLEEP
-  # A log that exists and is empty has no header to find, and awk would print
-  # nothing for it: skip the two processes. A missing log still reaches awk.
   hint=""
   [[ -e "$log_file" && ! -s "$log_file" ]] || hint=$(LC_ALL=C awk -v cap="$RATE_LIMIT_SLEEP" '
     tolower($0) ~ /^[[:space:]]*retry-after:[[:space:]]*[0-9]+[[:space:]]*$/ {
@@ -748,7 +605,6 @@ rate_limit_delay() {
   if [[ -n "$hint" ]]; then
     (( hint <= delay )) || delay=$hint
   else
-    # Saturate before doubling, avoiding exponentiation/overflow even on resume.
     for (( step=0; step<retry && delay<RATE_LIMIT_SLEEP; step++ )); do
       if (( delay > RATE_LIMIT_SLEEP / 2 )); then
         delay=$RATE_LIMIT_SLEEP
@@ -757,7 +613,6 @@ rate_limit_delay() {
       fi
     done
   fi
-  # Upward-only jitter never undercuts Retry-After or the base delay.
   delay=$((delay + delay * (RANDOM % 21) / 100))
   (( delay <= RATE_LIMIT_SLEEP )) || delay=$RATE_LIMIT_SLEEP
   echo "$delay"
@@ -777,16 +632,6 @@ mark_paused_rate_limit() {
 reserve_report_num_unlocked() {
   local id="$1" url="$2" started="$3" retries="$4"
 
-  # Use the shared, cross-process-atomic reservation system (O_CREAT|O_EXCL
-  # sentinel files in reserve-report-num.mjs) instead of the old bash-native
-  # max(existing report files, batch-state.tsv numbers)+1 scan. The bash-native
-  # version had zero visibility into reservations made by any OTHER process
-  # calling `node reserve-report-num.mjs` directly -- e.g. an interactively
-  # dispatched Agent evaluating one offer with a browser tool while a batch
-  # run is in flight. Both could independently compute the same "next" number
-  # and collide on disk. Found 2026-07-30: two separate collisions (report
-  # 049, report 051) in one batch run for exactly this reason -- routing every
-  # caller through the same node script means they all share one real lock.
   local report_num=""
   report_num=$(node "$PROJECT_DIR/reserve-report-num.mjs" 2>/dev/null | tr -d '[:space:]')
   if [[ -n "$report_num" ]]; then
@@ -796,9 +641,6 @@ reserve_report_num_unlocked() {
   printf '%s\n' "$report_num"
 }
 
-# Release a report-number reservation via the shared atomic system. Safe to
-# call even if the number was never actually reserved this way (e.g. a
-# resumed/paused offer) -- the underlying script no-ops on a missing sentinel.
 release_report_num() {
   local report_num="$1"
   [[ -n "$report_num" && "$report_num" != "-" ]] || return 0
@@ -809,9 +651,6 @@ reserve_report_num() {
   run_with_state_lock reserve_report_num_unlocked "$@"
 }
 
-# Retry wrapper — same rationale as update_state_retrying above. A bare
-# `x=$(reserve_report_num ...)` under `set -e` kills the worker subshell
-# silently on a single lock-timeout; this retries and logs instead.
 reserve_report_num_retrying() {
   local attempt=0
   local max_attempts=3
@@ -831,7 +670,6 @@ reserve_report_num_retrying() {
   return 1
 }
 
-# Process a single offer
 process_offer() {
   local id="$1" url="$2" source="$3" notes="$4"
 
@@ -845,47 +683,17 @@ process_offer() {
   fi
   local date
   date=$(date +%Y-%m-%d)
-  # Use mktemp instead of a predictable path: a fixed name like
-  # /tmp/batch-jd-${id}.txt is guessable, so an attacker on a shared machine
-  # could pre-create it as a symlink and redirect or clobber the write.
-  # Always project-local, never ${TMPDIR}: the worker CLI has to be able to read
-  # this file, and CLIs that auto-reject external_directory (/tmp/*) — opencode
-  # does — cannot read anything outside the project. Honouring TMPDIR here would
-  # re-open that hole whenever TMPDIR is the usual /tmp. mktemp still randomizes
-  # the name, so the symlink-guessability property above is unchanged.
   local jd_tmp_dir="$PROJECT_DIR/batch/tmp"
   mkdir -p "$jd_tmp_dir"
   local jd_file
   jd_file="$(mktemp "$jd_tmp_dir/batch-jd-${id}.XXXXXX")"
-  # The worker is a native process. Under Git Bash / MSYS the path above is a
-  # POSIX one (/tmp/... or /c/...) that a Windows binary cannot open, so every
-  # worker read "JD source unavailable" even when curl had filled the file.
-  # cygpath -m yields C:/... which both bash and the worker resolve.
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) command -v cygpath >/dev/null 2>&1 && jd_file="$(cygpath -m "$jd_file")" ;;
   esac
 
-  # Pre-populate $jd_file with a static curl fetch so the worker reads HTML
-  # directly instead of always falling through to WebFetch (#2492). WebFetch is
-  # unreliable on JS-rendered boards (Phenom, Workday, iCIMS) because it hits
-  # the rendered JS shell rather than the actual JD text. curl returns the raw
-  # HTML in a single round-trip; for static boards that is exactly the JD.
-  # For JS-rendered boards the file will be thin (JS shell only), which the
-  # sufficiency check below detects — the file is then truncated to 0 bytes so
-  # the worker's Step-1 WebFetch fallback fires exactly as designed.
-  # If curl is absent or fails, $jd_file stays empty and WebFetch fires too.
-  # Minimum visible word count to treat a fetched page as a real JD rather than
-  # a JS shell. A JS app shell (Workday, Phenom, iCIMS) has near-zero visible
-  # words after HTML stripping; a real JD has hundreds. 80 is a conservative
-  # lower bound — any genuine posting has at least a title, summary, and a few
-  # requirements, which together exceed 80 stripped words.
   local prefetch_min_words=80
   local jd_prefetch_words=0
   if command -v curl >/dev/null 2>&1; then
-    # Reject loopback, link-local, and private-network destinations before curl
-    # connects. --proto/--proto-redir restrict schemes but not destination IPs,
-    # so a malicious offer URL could reach cloud metadata (169.254.169.254) or
-    # internal services without this guard.
     local _url_safe
     local current_url="$url"
     local redirect_count=0
@@ -912,10 +720,6 @@ process_offer() {
         : > "$jd_file"
         break
       else
-        # Headers are read by curl/bash only — never by the worker — so this one
-        # stays on ${TMPDIR:-/tmp} and the expression stays self-contained (the
-        # prefetch block is extracted and run in isolation by
-        # tests/batch-runner-jd-prefetch.test.mjs, where $jd_tmp_dir is not set).
         redirect_headers="$(mktemp "${TMPDIR:-/tmp}/batch-jd-headers.XXXXXX")"
         curl_status=0
         curl --silent --show-error --location --max-redirs 0 \
@@ -955,8 +759,6 @@ process_offer() {
         break
       fi
     done
-      # Strip HTML tags and count visible words to distinguish a real JD (hundreds
-      # of words) from a JS shell (near zero visible text).
       jd_prefetch_words=$(node -e "
         const fs = require('fs');
         try {
@@ -971,9 +773,6 @@ process_offer() {
           process.stdout.write(String(text.split(' ').filter(Boolean).length));
         } catch (e) { process.stdout.write('0'); }
       " "$jd_file" 2>/dev/null) || jd_prefetch_words=0
-      # Ensure jd_prefetch_words is always a non-negative integer. A non-integer
-      # (e.g. empty string, "NaN") would cause bash arithmetic to fail or
-      # miscompare. Strip everything that is not a digit and default to 0.
       jd_prefetch_words="${jd_prefetch_words//[^0-9]/}"
       jd_prefetch_words="${jd_prefetch_words:-0}"
       if [[ "$jd_prefetch_words" -lt "$prefetch_min_words" ]]; then
@@ -986,7 +785,6 @@ process_offer() {
 
   echo "--- Processing offer #$id: $url (report $report_num, attempt $((retries + 1)))"
 
-  # Build the prompt with placeholders replaced
   local prompt
   if [[ "$SKIP_PDF" == "true" ]]; then
     prompt="Process this job offer. Run the pipeline: A-G evaluation + report .md + tracker line. Do not generate PDF; write ❌ in the tracker PDF column and set \"pdf\": null in the final JSON."
@@ -1002,15 +800,7 @@ process_offer() {
 
   local log_file="$LOGS_DIR/${report_num}-${id}.log"
 
-  # Prepare system prompt with placeholders resolved
   local resolved_prompt="$BATCH_DIR/.resolved-prompt-${id}.md"
-  # Resolve placeholders to STABLE labels, not per-offer values: the concrete
-  # URL / JD file / report number / date / batch ID travel in the per-job user
-  # prompt built above. Keeping the system prompt byte-identical across offers
-  # lets prompt caching reuse the whole prefix instead of breaking at the first
-  # substituted value (~4 KB into a ~41 KB prompt). This also means the URL
-  # never enters a sed replacement, so it needs no delimiter/metacharacter
-  # escaping (no more esc_url/esc_jd_file/&-in-query-string concerns).
   sed \
     -e "s|{{URL}}|<URL from the job message>|g" \
     -e "s|{{JD_FILE}}|<JD file from the job message>|g" \
@@ -1019,9 +809,6 @@ process_offer() {
     -e "s|{{ID}}|<batch ID from the job message>|g" \
     "$PROMPT_FILE" > "$resolved_prompt"
 
-  # Inject user-layer personalization into the temporary worker prompt.
-  # The resolved prompt is gitignored runtime state, so user profile data stays
-  # out of the system layer while batch scoring matches interactive scoring.
   for context_file in "$PROJECT_DIR/modes/_profile.md" "$PROJECT_DIR/config/profile.yml" "$PROJECT_DIR/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
@@ -1033,25 +820,12 @@ process_offer() {
     fi
   done
 
-  # Build the launch command for the configured CLI.
-  # For claude the model is resolved once per run from spend_tier unless --model
-  # was passed; other CLIs take --model verbatim. Building claude's command in an
-  # array keeps quoting safe regardless.
-  # --strict-mcp-config (with no --mcp-config) starts workers with no MCP
-  # servers: they only evaluate offers and need none. Without it each parallel
-  # worker inherits the parent session's MCP (e.g. Playwright) and they deadlock
-  # fighting over the single shared browser when --parallel > 1 (issue #506).
   local -a claude_args=(-p --dangerously-skip-permissions --strict-mcp-config)
   if [[ -n "$RESOLVED_MODEL" ]]; then
     claude_args+=(--model "$RESOLVED_MODEL")
   fi
   claude_args+=(--append-system-prompt-file "$resolved_prompt" "$prompt")
 
-  # Non-claude CLIs lack --append-system-prompt-file, so concatenate the
-  # resolved system prompt and the per-job prompt into a single argument.
-  # model_args is expanded with the ${arr[@]+"${arr[@]}"} idiom below: under
-  # `set -u`, bash 3.2 (macOS /bin/bash) treats an empty array expansion as an
-  # unbound variable and would abort every worker launched without --model.
   local full_prompt=""
   local -a model_args=()
   if [[ "$CLI" != "claude" ]]; then
@@ -1059,8 +833,6 @@ process_offer() {
     [[ -n "$MODEL" ]] && model_args=(--model "$MODEL")
   fi
 
-  # Non-claude CLIs run a single attempt (explicit break after dispatch); the
-  # rate-limit/session retry loop only applies to claude.
   local exit_code=0
   local terminal_failure_recorded=false
   local shim_retries=0
@@ -1086,9 +858,6 @@ process_offer() {
         ;;
     esac
 
-    # Non-claude CLIs run a single attempt: the session-limit and rate-limit
-    # detection below greps generic phrases (429, quota, session limit) that
-    # another CLI's log could match by coincidence and pause or retry the batch.
     if [[ "$CLI" != "claude" ]]; then
       break
     fi
@@ -1097,7 +866,6 @@ process_offer() {
       break
     fi
 
-    # Check for Claude Code npm shim swap (exit code 127 + command not found)
     if [[ $exit_code -eq 127 ]] && grep -qE "(claude: command not found|claude:.*not found|cannot find.*claude)" "$log_file" && (( shim_retries < max_shim_retries )); then
       shim_retries=$((shim_retries + 1))
       echo "    ⏳ Claude command not found (shim swap detected). Retrying in 30s (attempt $shim_retries/$max_shim_retries)..."
@@ -1139,26 +907,12 @@ process_offer() {
     break
   done
 
-  # Cleanup resolved prompt and pre-fetched JD file
   rm -f "$resolved_prompt" "$jd_file"
 
   local completed_at
   completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
   if [[ $exit_code -eq 0 ]]; then
-    # A worker can exit 0 (no crash) but still self-report failure inside its
-    # own JSON summary — e.g. it correctly declines to fabricate an evaluation
-    # when the JD couldn't be extracted (Data Contract: never fabricate).
-    # Without this check such offers were silently marked "completed" with no
-    # report file on disk and score "-" (found 2026-07-29, offer id 6 / report
-    # 019 — Deepgram JD unextractable in headless mode). Only the downstream
-    # reconcile-pipeline.mjs safety net (which leaves an entry in Pending when
-    # its report file is missing) prevented the offer from being lost.
-    # Extract only the LAST ```json fenced block in the log -- that's the
-    # worker's one authoritative final result (batch-prompt.md Step 6), not
-    # arbitrary text anywhere else in stdout/stderr -- and parse it as real
-    # JSON so an unrelated line merely containing the substring
-    # `"status": "failed"` can never falsely flip a successful run.
     local worker_result_json
     worker_result_json=$(awk '
       /^```json[[:space:]]*$/ { in_block=1; block=""; next }
@@ -1167,15 +921,6 @@ process_offer() {
       END { printf "%s", last }
     ' "$log_file" 2>/dev/null || true)
 
-    # Parse status, error, AND score from the same authoritative JSON object
-    # in one pass -- score extraction used to be a separate sed regex over
-    # the whole log (`.*"score":...`), which grabbed the first match
-    # anywhere in the log rather than the one from this final result object,
-    # producing a spurious score "-" whenever an earlier line in the log
-    # (reasoning text, an intermediate example, Block D's "Comp score: 4/5"
-    # mention, etc.) matched first. Reading it from the same parsed object
-    # as status/error fixes both by construction -- there's only one place
-    # left to look.
     local worker_failed_match="" worker_error_match="" score="-"
     local parsed_status="" parsed_error="" parsed_score=""
     if [[ -n "$worker_result_json" ]]; then
@@ -1197,13 +942,6 @@ process_offer() {
         });
       ' 2>/dev/null || true)
       if [[ -n "$parsed" ]]; then
-        # \x1f (US), not \t: tab is IFS *whitespace*, so bash collapses runs of it
-        # and strips leading/trailing ones. On the common path -- a worker that
-        # succeeded, so `error` is empty -- the two tabs around that empty field
-        # collapse into one, `score` slides into parsed_error, and parsed_score
-        # comes back empty. The `elif` below then never fires and every
-        # successful offer records score "-". A non-whitespace delimiter gets
-        # one-field-per-unit splitting with empty fields preserved.
         IFS=$'\x1f' read -r parsed_status parsed_error parsed_score <<< "$parsed"
         if [[ "$parsed_status" == "failed" ]]; then
           worker_failed_match="failed"
@@ -1214,12 +952,8 @@ process_offer() {
       fi
     fi
 
-    # A human gate is not a failure or a successful evaluation (#4359).
-    # Keep it out of retries and release the unused report reservation.
     if [[ "$parsed_status" == "needs_confirmation" ]]; then
       local question="${parsed_error:-Which agency did this posting come through?}"
-      # A malformed/misattributed handoff stays held, never becomes retryable
-      # and never supplies an agency answer for a different posting.
       if ! node -e '
         const result = JSON.parse(process.argv[1]);
         process.exit(result.reason === "agency_confirmation" &&
@@ -1271,17 +1005,6 @@ process_offer() {
       return 0
     fi
 
-    # A worker can exit 0, self-report a non-"failed" status (or no parseable
-    # JSON at all), and STILL never actually write the report file it claims
-    # -- exit code and JSON status alone are not proof a report exists. Found
-    # 2026-07-30: offer id 6/report 049 was marked "completed" this way with
-    # no file on disk, silently freeing that number for a second, unrelated
-    # offer to claim (a real collision). Verify the file before trusting
-    # "completed" -- fail closed, not open.
-    # The reservation sentinel ({num}-RESERVED.md) must NOT count as the
-    # report: it is created before the worker runs, so an unfiltered glob
-    # matches it and the guard is defeated every single time (found 2026-09-22:
-    # 16 no-op workers recorded as "completed" with score "-").
     local report_files
     report_files=$(compgen -G "$REPORTS_DIR/${report_num}-*.md" 2>/dev/null | grep -vE -- '-RESERVED\.md$' || true)
     if [[ -z "$report_files" ]]; then
@@ -1294,10 +1017,7 @@ process_offer() {
       return 0
     fi
 
-    # Check min-score gate
     if is_decimal_number "$score" && LC_ALL=C awk -v min="$MIN_SCORE" 'BEGIN{exit !(min > 0)}'; then
-      # LC_ALL=C: under a non-English locale awk parses "4.5" as 4, so the
-      # MIN_SCORE comparison would silently run on truncated integers.
       if LC_ALL=C awk -v score="$score" -v min="$MIN_SCORE" 'BEGIN{exit !(score < min)}'; then
         update_state_retrying "$id" "$url" "skipped" "$started_at" "$completed_at" "$report_num" "$score" "below-min-score" "$retries" || true
         release_report_num "$report_num"
@@ -1321,7 +1041,6 @@ process_offer() {
   fi
 }
 
-# Merge tracker additions into applications.md
 merge_tracker() {
   echo ""
   echo "=== Merging tracker additions ==="
@@ -1334,7 +1053,6 @@ merge_tracker() {
   node "$PROJECT_DIR/verify-pipeline.mjs" || echo "⚠️  Verification found issues (see above)"
 }
 
-# Print summary
 print_summary() {
   echo ""
   echo "=== Batch Summary ==="
@@ -1368,8 +1086,6 @@ print_summary() {
 
   if (( score_count > 0 )); then
     local avg
-    # LC_ALL=C: under e.g. a German locale awk formats "%.1f" as "4,5"
-    # instead of "4.5", and a decimal comma breaks every downstream parser.
     avg=$(LC_ALL=C awk -v sum="$score_sum" -v count="$score_count" 'BEGIN{printf "%.1f", sum / count}' 2>/dev/null || echo "N/A")
     echo "Average score: $avg/5 ($score_count scored)"
   fi
@@ -1390,7 +1106,6 @@ print_status_table() {
   local total=0 completed=0 processing=0 failed=0 pending=0 skipped=0 rate_limited=0 paused_rate_limit=0 needs_confirmation=0
   local score_sum=0 score_count=0
 
-  # Read first line to skip header
   local header=true
   while IFS=$'\t' read -r sid surl sstatus sstarted scompleted sreport sscore serror sretries || [[ -n "$sid" ]]; do
     if [[ "$header" == "true" ]]; then
@@ -1425,15 +1140,11 @@ print_status_table() {
   echo "Total: $total | Completed: $completed | Processing: $processing | Failed: $failed | Pending: $pending | Skipped: $skipped | Rate Limited: $rate_limited | Paused: $paused_rate_limit | Needs confirmation: $needs_confirmation"
   if (( score_count > 0 )); then
     local avg
-    # LC_ALL=C: under e.g. a German locale awk formats "%.1f" as "4,5"
-    # instead of "4.5", and a decimal comma breaks every downstream parser.
     avg=$(LC_ALL=C awk -v sum="$score_sum" -v count="$score_count" 'BEGIN{printf "%.1f", sum / count}' 2>/dev/null || echo "N/A")
     echo "Average score: $avg/5 ($score_count scored)"
   fi
   echo ""
 
-  # Format the per-job table:
-  # Columns: ID, Status, Report, Score, Target (URL or explanation)
   printf "%-4s | %-17s | %-6s | %-5s | %-40s\n" "ID" "Status" "Report" "Score" "URL / Detail"
   printf "%-4s+%-19s+%-8s+%-7s+%-42s\n" "----" "-------------------" "--------" "-------" "------------------------------------------"
 
@@ -1454,7 +1165,6 @@ print_status_table() {
     elif [[ "$sstatus" == "failed" && -n "$serror" && "$serror" != "-" ]]; then
       target="Error: $serror"
     fi
-    # Trim target to fit nicely (e.g. 50 chars)
     if [[ "$sstatus" != "needs_confirmation" ]] && (( ${#target} > 50 )); then
       target="${target:0:47}..."
     fi
@@ -1485,7 +1195,6 @@ watch_status() {
   echo "Showing final status:"
   print_status_table
 
-  # Chain verify-pipeline.mjs
   if [[ -f "$PROJECT_DIR/verify-pipeline.mjs" ]]; then
     echo ""
     echo "=== Running pipeline verification ==="
@@ -1493,7 +1202,6 @@ watch_status() {
   fi
 }
 
-# Main
 main() {
   if [[ "$STATUS_ONLY" == "true" ]]; then
     check_status_prerequisites
@@ -1522,7 +1230,6 @@ main() {
     reconcile_recovery_records
   fi
 
-  # Count input offers (skip header, ignore blank lines)
   local total_input
   total_input=$(tail -n +2 "$INPUT_FILE" | grep -c '[^[:space:]]' 2>/dev/null || true)
   total_input="${total_input:-0}"
@@ -1548,20 +1255,17 @@ main() {
   echo "Input: $total_input offers"
   echo ""
 
-  # Build list of offers to process
   local -a pending_ids=()
   local -a pending_urls=()
   local -a pending_sources=()
   local -a pending_notes=()
 
   while IFS=$'\t' read -r id url source notes; do
-    [[ "$id" == "id" ]] && continue  # skip header
+    [[ "$id" == "id" ]] && continue
     [[ -z "$id" || -z "$url" ]] && continue
 
-    # Guard against non-numeric id values
     [[ "$id" =~ ^[0-9]+$ ]] || continue
 
-    # Skip if before start-from
     if (( id < START_FROM )); then
       continue
     fi
@@ -1569,7 +1273,6 @@ main() {
     local status
     status=$(get_status "$id")
 
-    # No command-line retry flag constitutes a user's agency answer.
     if [[ "$status" == "needs_confirmation" ]]; then
       echo "HOLD #$id: needs confirmation in the parent session ($url)"
       continue
@@ -1580,11 +1283,9 @@ main() {
         continue
       fi
     elif [[ "$RETRY_FAILED" == "true" ]]; then
-      # Only process failed offers
       if [[ "$status" != "failed" ]]; then
         continue
       fi
-      # Check retry limit
       local retries
       retries=$(get_retries "$id")
       if (( retries >= MAX_RETRIES )); then
@@ -1592,15 +1293,12 @@ main() {
         continue
       fi
     else
-      # Skip terminal offers
       if [[ "$status" == "completed" || "$status" == "skipped" ]]; then
         continue
       fi
-      # Paused rate-limit offers resume explicitly with --resume-paused.
       if [[ "$status" == "paused_rate_limit" ]]; then
         continue
       fi
-      # Skip failed offers that hit retry limit (unless --retry-failed)
       if [[ "$status" == "failed" ]]; then
         local retries
         retries=$(get_retries "$id")
@@ -1632,7 +1330,6 @@ main() {
   echo "Pending: $pending_count offers"
   echo ""
 
-  # Dry run: just list
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "=== DRY RUN (no processing) ==="
     for i in "${!pending_ids[@]}"; do
@@ -1645,9 +1342,7 @@ main() {
     exit 0
   fi
 
-  # Process offers
   if (( PARALLEL <= 1 )); then
-    # Sequential processing
     for i in "${!pending_ids[@]}"; do
       process_offer "${pending_ids[$i]}" "${pending_urls[$i]}" "${pending_sources[$i]}" "${pending_notes[$i]}"
       if [[ "$BATCH_PAUSED" == "true" || -f "$PAUSE_FILE" ]]; then
@@ -1656,7 +1351,6 @@ main() {
       fi
     done
   else
-    # Parallel processing with job control
     local running=0
     local parallel_rc=0 worker_rc=0
     local -a pids=()
@@ -1668,9 +1362,7 @@ main() {
         break
       fi
 
-      # Wait if we're at parallel limit
       while (( running >= PARALLEL )); do
-        # Wait for any child to finish
         for j in "${!pids[@]}"; do
           if ! kill -0 "${pids[$j]}" 2>/dev/null; then
             worker_rc=0
@@ -1683,7 +1375,6 @@ main() {
             running=$((running - 1))
           fi
         done
-        # Compact arrays
         pids=(${pids[@]+"${pids[@]}"})
         pid_ids=(${pid_ids[@]+"${pid_ids[@]}"})
         if (( parallel_rc != 0 )); then
@@ -1700,14 +1391,12 @@ main() {
         break
       fi
 
-      # Launch worker in background
       process_offer "${pending_ids[$i]}" "${pending_urls[$i]}" "${pending_sources[$i]}" "${pending_notes[$i]}" &
       pids+=($!)
       pid_ids+=("${pending_ids[$i]}")
       running=$((running + 1))
     done
 
-    # Wait for remaining workers
     for pid in ${pids[@]+"${pids[@]}"}; do
       worker_rc=0
       wait "$pid" 2>/dev/null || worker_rc=$?
@@ -1721,10 +1410,8 @@ main() {
     fi
   fi
 
-  # Merge tracker additions
   merge_tracker
 
-  # Print summary
   print_summary
 
   exit 0

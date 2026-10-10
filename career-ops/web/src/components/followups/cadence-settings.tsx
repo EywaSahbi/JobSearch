@@ -5,10 +5,6 @@ import { Check, Loader2 } from "lucide-react";
 import { PROFILE_CADENCE_KEYS, type ProfileCadenceKey } from "@/lib/followups";
 import { cn } from "@/lib/cn";
 
-// Follow-up cadence knobs → config/profile.yml (followup_cadence). Server-
-// persisted (unlike the localStorage engine prefs above) because the core
-// followup-cadence.mjs reads the same keys — the CLI and the web must agree.
-
 const FIELDS: { key: ProfileCadenceKey; label: string; hint: string }[] = [
   { key: "applied_first_days", label: "First follow-up", hint: "days after applying before the 1st nudge is due" },
   { key: "applied_subsequent_days", label: "Between follow-ups", hint: "days between nudges while Applied" },
@@ -25,9 +21,6 @@ export function CadenceSettings() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // On a failed load, do NOT fall back to defaults: the user would see 7/7/2/…
-  // with no warning and a Save would overwrite their real profile.yml
-  // overrides. Show an error + Retry instead.
   const load = useCallback(() => {
     setLoadError(false);
     fetch("/api/followups/cadence")
@@ -36,10 +29,6 @@ export function CadenceSettings() {
         return r.json();
       })
       .then((d) => {
-        // `effective` is already defaults+overrides, computed server-side from
-        // the CORE's cadenceDefaults (#2369) — no local defaults table to merge
-        // in. A key the core didn't supply renders empty rather than as an
-        // invented number.
         const eff = (d?.effective ?? {}) as Partial<Record<ProfileCadenceKey, number>>;
         setValues(Object.fromEntries(
           PROFILE_CADENCE_KEYS.map((k) => [k, eff[k] === undefined ? "" : String(eff[k])]),
@@ -53,7 +42,6 @@ export function CadenceSettings() {
     if (!values) return;
     const payload: Partial<Record<ProfileCadenceKey, number>> = {};
     for (const k of PROFILE_CADENCE_KEYS) {
-      // Number(), not parseInt(): "3.5" and "7abc" must be rejected, not truncated.
       const raw = values[k].trim();
       const n = raw === "" ? Number.NaN : Number(raw);
       if (!Number.isInteger(n) || n < 0) {

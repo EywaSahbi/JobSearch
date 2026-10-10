@@ -1,13 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * company-funded.mjs - discover recently funded companies for manual review.
- *
- * V1 is intentionally narrow: it reads structured public feeds/APIs, writes a
- * report/JSON candidate list, and never probes arbitrary company websites or
- * edits portals.yml.
- */
-
 import { mkdirSync, writeFileSync } from 'fs';
 import { isIP } from 'net';
 import { dirname, join } from 'path';
@@ -283,7 +275,6 @@ async function releaseResponseBody(res) {
     if (res?.bodyUsed) return;
     await res?.arrayBuffer?.();
   } catch {
-    // Best-effort cleanup for rejected responses.
   }
 }
 
@@ -580,31 +571,8 @@ function hasFundingLanguage(text) {
 function isExcludedFundingItem(item) {
   const text = `${item.title || ''} ${item.text || ''} ${item.categories?.join(' ') || ''}`;
   const exclusions = [
-    // (?<!\w)/(?!\w), not \b: the `cuts N%` alternative ends in "%", and a
-    // trailing \b can never match after a non-word character — so that
-    // alternative was dead and layoff headlines that also mention a raise
-    // ("Acme raises $40M Series A, then cuts 30% of staff") were surfaced as
-    // funding leads. Same symbol-edge class as the fix in #2227. For every
-    // other alternative (all of which end in a word character) \b and the
-    // lookarounds are equivalent, so their behaviour is unchanged.
     /(?<!\w)(acquires?|acquired|acquisition|merger|spac|ipo|bankruptcy|layoffs?|earnings|quarterly results)(?!\w)/i,
-    // A layoff announced in the same headline as a raise is the case #2404
-    // fixed, but it only covered one spelling — "cuts N%". These reach the
-    // same reader with the same harm, the tool recommending a company that
-    // just announced job losses:
-    //   "raises $40M …, then cuts 30 % of staff"    (a space before the percent)
-    //   "raises $40M …, then cuts 1,200 jobs"       (a count, no percent)
-    //   "raises $40M … and lays off 300 employees"  (a different verb)
-    //
-    // EVERY form requires a workforce noun, percent included. The percent
-    // alternative used to sit in the group above with no such requirement, so
-    // "cuts 30% of cloud costs" — a cost story at a company that may well
-    // still be hiring — was excluded as if it were a layoff. Scoping it here
-    // fixes that and makes the two numeric forms consistent, which splitting
-    // them did not (CodeRabbit review). The optional "of its/the/their"
-    // carries the spellings the corpus uses ("cuts 15% of its workforce").
     /(?<!\w)(cuts?|axes|slashes|eliminates|sheds)\s+\d[\d,.]*\s*(?:%\s*)?(?:of\s+)?(?:its\s+|the\s+|their\s+)?(jobs|roles|positions|staff|employees|workers|workforce|headcount)(?!\w)/i,
-    // Plural too: "amid workforce reductions" bypassed the singular-only form.
     /\b(lays?\s+off|laying\s+off|laid\s+off|job\s+cuts|workforce\s+reductions?|headcount\s+reductions?|staff\s+reductions?)\b/i,
     /\b(public offering|registered direct offering|private placement|atm offering|offering of common stock)\b/i,
     /\braises?\s+\$[\d,.]+(?:\.\d+)?\s*(?:billion|million|bn|m|b|k)?\s+fund\b/i,
@@ -791,9 +759,6 @@ async function fetchHnDiscovery({ months = DEFAULT_MONTHS, diagnostics = [] } = 
     for (const hit of hits) {
       const title = compact(hit.title || hit.story_title || '');
       if (!title) continue;
-      // A lone surrogate in objectID would throw URIError out of
-      // encodeURIComponent and abort the loop over the remaining hits; fall back
-      // to no synthetic URL (hit.url is tried first anyway).
       const encodedId = safeEncodeURIComponent(hit.objectID || '');
       const fallbackUrl = encodedId === null ? '' : `https://news.ycombinator.com/item?id=${encodedId}`;
       const itemUrl = trustedEvidenceUrl(hit.url || '', '') || trustedEvidenceUrl(fallbackUrl, 'hacker_news');

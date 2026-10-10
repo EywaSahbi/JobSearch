@@ -17,7 +17,6 @@ import { PipelineTableRowsSkeleton } from "@/components/page-loading-skeletons";
 import { startRouteProgress } from "@/components/route-progress";
 import { sortRows } from "@/lib/core/pipeline-sort.mjs";
 
-// INBOX (the triage queue) is the default tab; the rest filter the tracker.
 const TABS = [
   "INBOX",
   "ALL",
@@ -48,15 +47,10 @@ export function PipelineView({
   const pathname = usePathname();
   const [isPending, startNavigation] = useTransition();
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
-  // Starts AFTER the POST succeeds. React replays the confirmed save over
-  // intervening snapshots and discards it when the refresh transition settles.
   const [visibleApplications, showSavedStatus] = useOptimistic(applications, applySavedStatus<Application>);
   const [announcement, setAnnouncement] = useState("");
   const activeTab = useRef<HTMLButtonElement>(null);
 
-  // The URL is the SINGLE source of truth for tab/min/sort/dir, so the home stat
-  // tiles' deep links AND the assistant's filterPipeline/navigate actions drive
-  // the table identically (no useState mirror → no desync).
   const pTab = (params.get("tab") ?? "").toUpperCase();
   const tab: Tab = (TABS as readonly string[]).includes(pTab) ? (pTab as Tab) : "INBOX";
   const visibleTab = isPending && pendingTab ? pendingTab : tab;
@@ -66,8 +60,6 @@ export function PipelineView({
   const sortKey: SortKey = (SORT_KEYS as readonly string[]).includes(pSort) ? (pSort as SortKey) : "score";
   const sort = { key: sortKey, dir: (params.get("dir") === "1" ? 1 : -1) as 1 | -1 };
 
-  // Search stays LOCAL for snappy typing; seeded from the URL and re-synced only
-  // when the URL's q changes (i.e. the assistant set it) — never per keystroke.
   const [q, setQ] = useState(params.get("q") ?? "");
   const lastUrlQ = useRef(params.get("q") ?? "");
   useEffect(() => {
@@ -103,8 +95,6 @@ export function PipelineView({
     if (!isPending) setPendingTab(null);
   }, [isPending]);
 
-  // Pending + deduped by URL (pipeline.md can list the same posting twice) so the
-  // header count, the tab count and the triage list all agree on one number.
   const pendingInbox = useMemo(() => {
     const seen = new Set<string>();
     const out: InboxJob[] = [];
@@ -130,8 +120,6 @@ export function PipelineView({
       const needle = q.toLowerCase();
       rows = rows.filter((r) => companySearchText(r).toLowerCase().includes(needle));
     }
-    // scoreNum is the real score parser (it handles the tracker's "4.2/5"
-    // cells); sortRows takes it rather than keeping a second copy (#4333).
     return sortRows(
       rows,
       sort,
@@ -150,7 +138,6 @@ export function PipelineView({
             <span className="tabular-nums">{visibleApplications.length}</span> tracked
           </p>
         </div>
-        {/* the tracker has its own search; the inbox brings its own facet filters */}
         {visibleTab !== "INBOX" && (
           <div className="relative w-64 max-w-[40vw]">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
@@ -164,7 +151,6 @@ export function PipelineView({
         )}
       </div>
 
-      {/* tabs */}
       <div className="mt-6 flex flex-wrap gap-1 border-b border-border">
         {TABS.map((t) => {
           const count =
@@ -179,8 +165,6 @@ export function PipelineView({
               ref={tab === t ? activeTab : undefined}
               onClick={() => setParams({ tab: t === "INBOX" ? null : t })}
               className={cn(
-                // gap-1, not a whitespace text node: flex containers drop
-                // whitespace-only anonymous items, which rendered "INBOX0".
                 "-mb-px inline-flex items-center justify-center gap-1 border-b-2 px-3 py-2 text-xs font-medium transition-colors max-sm:min-h-[44px]",
                 visibleTab === t
                   ? "border-brand text-foreground"
@@ -211,18 +195,12 @@ export function PipelineView({
       )}
 
       {visibleTab === "INBOX" ? (
-        /* ── Inbox: the triage surface (Abundance → Triage → Shortlist → Score) ── */
         pendingInbox.length > 0 ? (
           <InboxTriage inbox={pendingInbox} />
         ) : (
           <InboxEmpty count={0} filtered={false} />
         )
       ) : isPending || filtered.length > 0 ? (
-        /* ── Tracker table ──
-           overflow-x-auto, not overflow-hidden: the rounded corners still clip,
-           but a table too wide for the viewport can now be scrolled to instead
-           of being silently cut off. min-w keeps the columns readable rather
-           than letting w-full crush them on a phone. */
         <div className="mt-4 overflow-x-auto rounded-2xl border border-border">
           <table className="w-full min-w-[44rem] text-sm">
             <thead className="bg-surface/60 text-left text-xs uppercase tracking-wide text-faint">
@@ -248,8 +226,6 @@ export function PipelineView({
                 ))}
               </tr>
             </thead>
-            {/* Keep editors mounted while query navigation is pending: sorting
-                must not discard an open editor or an in-flight status save. */}
             <tbody className="divide-y divide-border" hidden={isPending} aria-busy={false}>
               {filtered.map((r) => {
                 const company = companyPresentation(r);
@@ -280,8 +256,6 @@ export function PipelineView({
                       inline
                       applicationLabel={`${company.label} — ${r.role} (#${r.n})`}
                       onSaved={(status, restoreFocus) => {
-                        // If this focused row leaves its tab, preserve a useful
-                        // focus target. Do not interrupt someone using search.
                         const focusedRow = document.activeElement?.closest("tr");
                         if (tab !== "ALL" && !canonStatus(status).includes(tab) && (restoreFocus || focusedRow?.dataset.applicationKey === key)) {
                           activeTab.current?.focus();
@@ -316,8 +290,6 @@ export function PipelineView({
   );
 }
 
-// Empty inbox. Self-sufficient for the mainstream user (a primary in-web action),
-// honest for devs (the CLI/file path stays, demoted to progressive transparency).
 function InboxEmpty({ count, filtered }: { count: number; filtered: boolean }) {
   if (filtered) {
     return (

@@ -12,15 +12,15 @@ export type Job = {
   id: string;
   title: string;
   subtitle?: string;
-  page?: string; // route the job was launched from / refers to
-  input?: string; // the URL/posting it processed (links inbox rows to their worker)
+  page?: string;
+  input?: string;
   kind?: string;
-  batchId?: string; // groups jobs fired together (e.g. "evaluate all Anthropic")
+  batchId?: string;
   status: "running" | "done" | "error";
   steps: JobStep[];
   text: string;
   result?: JobResult;
-  cost?: { tokens: number; usd?: number }; // per-run token cost (Claude result event) — local only
+  cost?: { tokens: number; usd?: number };
   startedAt: number;
   endedAt?: number;
 };
@@ -62,28 +62,23 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
   const seq = useRef(0);
   const loaded = useRef(false);
 
-  // restore history
   useEffect(() => {
     try {
       const raw = localStorage.getItem(JOBS_KEY);
       const arr = raw ? JSON.parse(raw) : null;
       if (Array.isArray(arr)) {
-        // anything left "running" from a previous session is stale → mark interrupted
         setJobs(arr.map((j: Job) => (j.status === "running" ? { ...j, status: "error", steps: [...(j.steps || []), { kind: "status", label: "Interrupted (page reloaded)", ts: Date.now() }] } : j)));
       }
     } catch {
-      /* ignore */
     }
     loaded.current = true;
   }, []);
 
-  // persist
   useEffect(() => {
     if (!loaded.current) return;
     try {
       localStorage.setItem(JOBS_KEY, JSON.stringify(jobs.slice(0, 40)));
     } catch {
-      /* quota */
     }
   }, [jobs]);
 
@@ -109,16 +104,8 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
       };
       setJobs((js) => [job, ...js]);
 
-      // Declared before resolveCliId() so its stale-CLI notice lands in the log
-      // sent to /api/runs/save, not only in the live job.
       const steps: JobStep[] = [];
       (async () => {
-        // resolveCliId() validates the saved id against what is installed; a
-        // bare readSavedCliId() here would short-circuit that check and launch
-        // a run against an uninstalled CLI (#4012).
-        // A stale saved id is replaced silently otherwise — name the switch in
-        // the job log so a transient "not installed" can't rewrite the user's
-        // choice without a record.
         const cliId = await resolveCliId((stale, replacement) => {
           const label = replacement
             ? `Saved CLI '${stale}' is not installed — using '${replacement}'`
@@ -137,8 +124,8 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         let text = "";
-        let verdictLine = ""; // latched separately so the 8000-char tail can't drop it
-        let doneTokens = 0; // per-run token cost, forwarded on the done event (#6)
+        let verdictLine = "";
+        let doneTokens = 0;
         let doneCostUsd: number | null = null;
         const finish = (status: "done" | "error", lastLabel?: string) => {
           const result = status === "done" ? parseVerdict(verdictLine || text) : undefined;
@@ -151,15 +138,12 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
             endedAt: Date.now(),
             steps: lastLabel ? [...j.steps, { kind: "status", label: lastLabel, ts: Date.now() }] : j.steps,
           }));
-          // persist a readable log file so the CLI/assistant can read past runs
           if (status === "done") {
             fetch("/api/runs/save", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id, title: opts.title, subtitle: opts.subtitle, page: opts.page, input: opts.input, result, cost, steps, output: text }),
             }).catch(() => {});
-            // Tell server-snapshot surfaces (Today, pipeline) to refetch — the
-            // worker just wrote a real tracker row / report they don't yet see.
             if (typeof window !== "undefined" && (opts.kind === "evaluate" || opts.kind === "pdf")) {
               window.dispatchEvent(new CustomEvent("co-job-done", { detail: { kind: opts.kind, input: opts.input } }));
             }

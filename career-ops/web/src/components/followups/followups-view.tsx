@@ -25,11 +25,6 @@ import { cn } from "@/lib/cn";
 import { FollowupsTableRowsSkeleton } from "@/components/page-loading-skeletons";
 import { startRouteProgress } from "@/components/route-progress";
 
-// The /followups tracker: WHO needs a nudge today, HOW urgent, WHEN the next
-// touch is due, and the permanent history of every follow-up sent. The verdict
-// is the core's followup-cadence.mjs (via /api/followups?full=1) — this view
-// only filters, sorts, and records.
-
 const URGENCY_TABS = ["ALL", "OVERDUE", "URGENT", "WAITING", "COLD"] as const;
 type UrgencyTab = (typeof URGENCY_TABS)[number];
 
@@ -47,7 +42,6 @@ const COLUMNS = [
 type SortKey = (typeof COLUMNS)[number]["key"];
 const SORT_KEYS = COLUMNS.map((c) => c.key);
 
-/** Sortable value per column; null means "always last, either direction". */
 function sortVal(e: CadenceEntry, key: SortKey): string | number | null {
   switch (key) {
     case "company":
@@ -61,8 +55,6 @@ function sortVal(e: CadenceEntry, key: SortKey): string | number | null {
     case "status":
       return e.status;
     case "urgency":
-      // Severity, not alphabetical: negate rank so DESCENDING (▼, the first
-      // click) puts the most pressing first — matching how the ▼ glyph reads.
       return -urgencyRank(e.urgency);
     case "days":
       return e.daysSinceApplication;
@@ -101,9 +93,6 @@ export function FollowupsView() {
   }, []);
   useEffect(refetch, [refetch]);
 
-  // URL is the source of truth for tab/sort/dir (Pipeline convention); search
-  // stays local for snappy typing, seeded from the URL. No sort param → the
-  // engine's own order (most pressing first) and all headers show ⇅.
   const pTab = (params.get("urgency") ?? "").toUpperCase();
   const tab: UrgencyTab = (URGENCY_TABS as readonly string[]).includes(pTab) ? (pTab as UrgencyTab) : "ALL";
   const pSort = params.get("sort") ?? "";
@@ -148,12 +137,12 @@ export function FollowupsView() {
       const needle = q.toLowerCase();
       rows = rows.filter((e) => `${e.company} ${e.role}`.toLowerCase().includes(needle));
     }
-    if (!sortKey) return rows; // engine order: most pressing first
+    if (!sortKey) return rows;
     return [...rows].sort((a, b) => {
       const av = sortVal(a, sortKey);
       const bv = sortVal(b, sortKey);
       if (av == null && bv == null) return 0;
-      if (av == null) return 1; // nulls last, either direction
+      if (av == null) return 1;
       if (bv == null) return -1;
       if (typeof av === "string" && typeof bv === "string") return av.localeCompare(bv) * dir;
       return ((av as number) - (bv as number)) * dir;
@@ -220,7 +209,6 @@ export function FollowupsView() {
 
       {meta && !filtering && <NarrativeCard meta={meta} entries={entries} />}
 
-      {/* urgency filter */}
       <div className="mt-6 flex flex-wrap gap-1 border-b border-border">
         {URGENCY_TABS.map((t) => {
           const count = t === "ALL" ? entries.length : entries.filter((e) => e.urgency.toUpperCase() === t).length;
@@ -263,8 +251,6 @@ export function FollowupsView() {
                         type="button"
                         className="inline-flex cursor-pointer select-none items-center gap-1 uppercase tracking-wide hover:text-foreground"
                         onClick={() =>
-                          // First click on Urgency descends (most pressing first —
-                          // how ▼ reads); other columns start ascending.
                           setParams({ sort: c.key, dir: active ? dir * -1 : c.key === "urgency" ? -1 : 1 })
                         }
                       >
@@ -296,8 +282,6 @@ export function FollowupsView() {
         </div>
       )}
 
-      {/* Below the due list: a follow-up you can still send outranks a company
-          that has already stopped replying. */}
       <QuietCompanies />
 
       {dialogFor && <LogDialog entry={dialogFor} onClose={() => setDialogFor(null)} onLogged={refetch} />}
@@ -306,8 +290,6 @@ export function FollowupsView() {
   );
 }
 
-/** The one-sentence "what to do first" card — only when something is due and no
- *  filter narrows the view (spec: hidden while any filter/search is active). */
 function NarrativeCard({ meta, entries }: { meta: CadenceMetadata; entries: CadenceEntry[] }) {
   const due = meta.overdue + meta.urgent;
   if (due <= 0) return null;
@@ -452,8 +434,6 @@ function FollowupRow({
 }
 
 function HistoryPanel({ entry: e, onRemove }: { entry: CadenceEntry; onRemove: (num: number) => void }) {
-  // Tolerate an older core engine (CAREER_OPS_ROOT can point at a separate
-  // checkout whose followup-cadence.mjs predates the per-entry followups[]).
   const history = e.followups ?? [];
   return (
     <div className="space-y-2 pl-7 text-sm">
@@ -463,8 +443,6 @@ function HistoryPanel({ entry: e, onRemove }: { entry: CadenceEntry; onRemove: (
         <ul className="space-y-1.5">
           {history.map((f, i) => (
             <li key={`${f.num ?? "b"}-${f.date}-${i}`} className="group/item flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              {/* Fixed-width leading slot keeps every entry's text aligned,
-                  whether or not it is deletable (legacy bullets carry no num). */}
               <span className="inline-flex w-5 shrink-0 justify-center self-center">
                 {f.num != null && (
                   <button

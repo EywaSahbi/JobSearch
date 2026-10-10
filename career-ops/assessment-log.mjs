@@ -1,30 +1,4 @@
 #!/usr/bin/env node
-/**
- * assessment-log.mjs — Skills-assessment event logger (eSkill, HackerRank, Criteria, ...)
- *
- * "Received a skills assessment" is its own pipeline event — not Applied /
- * Interview / Rejected — so it gets logged structurally instead of buried in
- * free-text notes. Each event is an append-only observation, never mutated:
- *   { date, company, report#, platform, subject, threshold, score, stale_note }
- *
- * The staleness signal is candidate-observed and self-reported (e.g. "test
- * content references Adobe Acrobat 9, a 2008-era version") — an empty
- * stale_note means no staleness was observed, not that the bank is current.
- *
- * Log lives in data/assessments.tsv (user layer, append-only, created on first
- * `add`). Threshold/score are percentages; both optional — vendors often hide
- * the threshold, and some platforms never reveal the score.
- *
- * Future work (out of scope here): fold per-vendor staleness rates into
- * analyze-patterns.mjs the way ATS channel yield is analyzed today.
- *
- * Run: node assessment-log.mjs add --company <name> [--report <num>] \
- *        --platform <vendor> --subject <topic> [--threshold <pct>] \
- *        [--score <pct>] [--stale "<observed staleness note>"]
- *      node assessment-log.mjs             (JSON)
- *      node assessment-log.mjs --summary   (human-readable)
- *      node assessment-log.mjs --self-test
- */
 
 import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -51,8 +25,6 @@ const HEADER_COMMENT = [
   '# {YYYY-MM-DD}\\t{company}\\t{report#|-}\\t{platform}\\t{subject}\\t{threshold%|-}\\t{score%|-}\\t{stale_note}',
 ].join('\n');
 
-// --- Percent parsing ---
-// Tolerant: "70", "70%", "70.5 %" all parse; blank/-/? -> null (unknown, not zero).
 export function parsePct(raw) {
   const s = String(raw ?? '').trim().replace(/%\s*$/, '').trim();
   if (!s || s === '-' || s === '?' || /^(n\/?a|null)$/i.test(s)) return null;
@@ -60,10 +32,6 @@ export function parsePct(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
-// --- Log parsing (TSV) ---
-// line: {YYYY-MM-DD}\t{company}\t{report#|-}\t{platform}\t{subject}\t{threshold|-}\t{score|-}\t{stale_note}
-// Optional trailing cells may be absent entirely (hand-written rows) — parsing
-// stays tolerant; only date+company+platform+subject are structurally required.
 export function parseAssessments(content) {
   const rows = [];
   const malformed = [];
@@ -89,7 +57,6 @@ export function parseAssessments(content) {
   return { rows, malformed };
 }
 
-// --- Aggregation ---
 export function summarize(rows, malformed = []) {
   const byPlatform = {};
   let staleFlagged = 0;
@@ -98,8 +65,6 @@ export function summarize(rows, malformed = []) {
     const agg = byPlatform[r.platform];
     agg.count += 1;
     if (r.staleNote) { agg.staleFlagged += 1; staleFlagged += 1; }
-    // Pass/fail only when BOTH threshold and score are known — a lone score
-    // with a hidden threshold proves nothing either way.
     if (r.threshold !== null && r.score !== null) {
       if (r.score >= r.threshold) agg.passed += 1; else agg.failed += 1;
     } else {
@@ -119,7 +84,6 @@ export function summarize(rows, malformed = []) {
   };
 }
 
-// --- Append (`add` subcommand) ---
 export function buildRow(fields, today) {
   const req = (name) => {
     const v = String(fields[name] ?? '').trim();
@@ -150,9 +114,6 @@ function addEntry(args) {
     const m = args[i].match(/^--(company|report|platform|subject|threshold|score|stale)$/);
     if (m) { fields[m[1]] = args[i + 1] ?? ''; i++; }
   }
-  // LOCAL day: this is the date written into the appended assessments.tsv row,
-  // and the UTC day stamped a user record with a day that had not happened yet
-  // for anyone west of Greenwich (#3070).
   const today = localToday();
   let row;
   try {
@@ -162,7 +123,6 @@ function addEntry(args) {
     console.error(USAGE);
     process.exit(1);
   }
-  // Append-only: existing rows are never rewritten. Create with header comment on first use.
   mkdirSync(dirname(LOG_PATH), { recursive: true });
   let prefix;
   if (existsSync(LOG_PATH)) {
@@ -175,7 +135,6 @@ function addEntry(args) {
   console.log(JSON.stringify({ added: true, row: row.split('\t') }, null, 2));
 }
 
-// --- Self-test (in-memory fixtures, no file writes) ---
 const LOG_FIXTURE = [
   '# comment line',
   '2026-07-01\tAcme\t042\teSkill\tMS Office\t70\t92\treferences Adobe Acrobat 9 (2008-era)',
@@ -183,7 +142,7 @@ const LOG_FIXTURE = [
   '2026-07-03\tInitech\t013\tCriteria\tCognitive Aptitude\t65\t60\t',
   '2026-07-04\tHooli\t-\tPredictive Index\tBehavioral\t-\t-\t',
   '2026-07-05\tUmbrella\t017\teSkill\tOutlook\t70\t95\told Outlook web UI, nothing currently shipping',
-  '2026-07-06\tAcme', // malformed on purpose — too few cells
+  '2026-07-06\tAcme',
 ].join('\n');
 
 function selfTest() {
@@ -191,7 +150,6 @@ function selfTest() {
     if (!cond) { console.error(`SELF-TEST FAIL: ${msg}`); process.exit(1); }
   };
 
-  // parsePct
   assert(parsePct('70') === 70, '70 -> 70');
   assert(parsePct('70%') === 70, '70% -> 70');
   assert(parsePct('70.5 %') === 70.5, 'decimal with spaced % sign');
@@ -201,7 +159,6 @@ function selfTest() {
   assert(parsePct('n/a') === null, 'n/a -> null');
   assert(parsePct('high') === null, 'prose -> null');
 
-  // parseAssessments
   const { rows, malformed } = parseAssessments(LOG_FIXTURE);
   assert(rows.length === 5, `5 rows parsed, got ${rows.length}`);
   assert(malformed.length === 1, `1 malformed line reported, got ${malformed.length}`);
@@ -211,11 +168,9 @@ function selfTest() {
   assert(rows[1].reportNum === null && rows[1].threshold === null, 'optional cells -> null');
   assert(rows[3].score === null && rows[3].staleNote === null, 'no-score no-stale row tolerated');
   assert(parseAssessments('').rows.length === 0, 'empty log');
-  // trailing cells absent entirely (hand-written short row) must still parse
   const short = parseAssessments('2026-07-01\tAcme\t-\teSkill\tExcel').rows;
   assert(short.length === 1 && short[0].score === null && short[0].staleNote === null, 'short row (5 cells) tolerated');
 
-  // summarize
   const result = summarize(rows, malformed);
   assert(result.quality.total === 5, 'total 5');
   assert(result.quality.staleFlagged === 2, `2 stale-flagged, got ${result.quality.staleFlagged}`);
@@ -225,18 +180,15 @@ function selfTest() {
   assert(eskill.count === 2 && eskill.staleFlagged === 2 && eskill.passed === 2, 'eSkill: 2 events, both stale-flagged, both passed');
   const criteria = result.aggregates.byPlatform['Criteria'];
   assert(criteria.failed === 1 && criteria.passed === 0, 'Criteria: score below threshold -> failed');
-  // lone score with hidden threshold must NOT count as passed
   const hr = result.aggregates.byPlatform['HackerRank'];
   assert(hr.passed === 0 && hr.unknownOutcome === 1, 'hidden threshold -> unknown outcome, not a pass');
   const pi = result.aggregates.byPlatform['Predictive Index'];
   assert(pi.unknownOutcome === 1, 'no threshold + no score -> unknown outcome');
 
-  // buildRow
   const row = buildRow({ company: 'Acme', report: '042', platform: 'eSkill', subject: 'MS Office', threshold: '70', score: '92', stale: 'Acrobat 9' }, '2026-07-07');
   assert(row === '2026-07-07\tAcme\t042\teSkill\tMS Office\t70\t92\tAcrobat 9', 'full row built');
   const minimal = buildRow({ company: 'Acme', platform: 'eSkill', subject: 'Excel' }, '2026-07-07');
   assert(minimal === '2026-07-07\tAcme\t-\teSkill\tExcel\t-\t-\t', 'optional fields default to -/empty');
-  // round-trip: built rows must parse back losslessly
   const rt = parseAssessments(row + '\n' + minimal).rows;
   assert(rt.length === 2 && rt[0].score === 92 && rt[1].threshold === null, 'built rows round-trip through parser');
   const throws = (fields, frag) => {
@@ -249,7 +201,6 @@ function selfTest() {
   console.log('assessment-log self-test OK (pct parser + TSV parser + aggregation + row builder)');
 }
 
-// --- Output ---
 function printSummary(result) {
   const { aggregates, quality, assessments } = result;
   console.log('\nSKILLS ASSESSMENTS — per-application events\n');
@@ -295,9 +246,6 @@ function main() {
     process.exit(0);
   }
 
-  // Values passed to the add subcommand remain positional data even when they
-  // start with a dash (for example an explicitly unknown "-" percentage).
-  // Only a leading-dash argument outside those value slots is a CLI flag.
   const consumedValueIndices = new Set();
   if (args[0] === 'add') {
     args.forEach((arg, index) => {

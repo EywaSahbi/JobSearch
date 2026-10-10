@@ -7,10 +7,6 @@ import { claudeUsageTokens } from "@/lib/claude-usage.mjs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Reads Claude Code's per-message usage across ALL projects (~/.claude/projects/
-// **/*.jsonl) and sums tokens in the rolling 5h and 7d windows — the same scope
-// as the account's rate-limit windows. Cached 60s (the read is heavy).
-
 type Usage = { window5h: { tokens: number; messages: number }; window7d: { tokens: number; messages: number }; computedAt: number };
 let cache: { at: number; data: Usage } | null = null;
 

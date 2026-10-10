@@ -11,26 +11,16 @@ import (
 	"github.com/santifer/career-ops/dashboard/internal/model"
 )
 
-// PDFManifestEntry is one row of data/pdf-index.tsv, written by
-// generate-pdf.mjs each time a PDF is produced. ReportNumber may be empty
-// for PDFs generated without --report; those rows still help the glob
-// matcher via their recorded paths.
 type PDFManifestEntry struct {
 	ReportNumber string
-	PDFPath      string // relative to the career-ops root
-	HTMLPath     string // relative to the career-ops root, "" if unknown
-	Format       string // "letter" or "a4"
-	Date         string // YYYY-MM-DD generation date
+	PDFPath      string
+	HTMLPath     string
+	Format       string
+	Date         string
 }
 
-// PDFManifest indexes manifest entries by normalized report number (leading
-// zeros stripped, so "008" and "8" collide deliberately). Rows without a
-// report number are not indexed (the glob path covers them).
 type PDFManifest map[string]PDFManifestEntry
 
-// isSafeRepoRelativePath returns true iff p is a non-empty, non-absolute path
-// with no ".." traversal components. Used to reject crafted TSV rows before
-// they reach dashboard open/regenerate flows.
 func isSafeRepoRelativePath(p string) bool {
 	p = filepath.Clean(filepath.FromSlash(strings.TrimSpace(p)))
 	if p == "." || p == "" {
@@ -45,8 +35,6 @@ func isSafeRepoRelativePath(p string) bool {
 	return true
 }
 
-// normalizeReportKey strips leading zeros so the zero-padded report-link
-// form ("008") and the unpadded tracker-# form ("8") key identically.
 func normalizeReportKey(s string) string {
 	s = strings.TrimSpace(s)
 	trimmed := strings.TrimLeft(s, "0")
@@ -56,10 +44,6 @@ func normalizeReportKey(s string) string {
 	return trimmed
 }
 
-// Lookup finds the manifest entry for an application, trying the report-link
-// number first (the NNN in reports/NNN-….md) and falling back to the tracker
-// # column. The two usually agree but are scrambled in real trackers, and
-// callers passing --report may have used either — tolerate both.
 func (m PDFManifest) Lookup(app model.CareerApplication) (PDFManifestEntry, bool) {
 	if key := normalizeReportKey(app.ReportNumber); key != "" {
 		if entry, ok := m[key]; ok {
@@ -74,9 +58,6 @@ func (m PDFManifest) Lookup(app model.CareerApplication) (PDFManifestEntry, bool
 	return PDFManifestEntry{}, false
 }
 
-// LoadPDFEntriesByPath reads data/pdf-index.tsv and returns all entries indexed
-// by their relative PDF path. Unlike LoadPDFManifest, this includes rows that
-// were generated without a --report flag. Later rows in the file win.
 func LoadPDFEntriesByPath(careerOpsPath string) map[string]PDFManifestEntry {
 	byPath := make(map[string]PDFManifestEntry)
 	raw, err := os.ReadFile(filepath.Join(careerOpsPath, "data", "pdf-index.tsv"))
@@ -116,11 +97,6 @@ func LoadPDFEntriesByPath(careerOpsPath string) map[string]PDFManifestEntry {
 	return byPath
 }
 
-// LoadPDFManifest reads data/pdf-index.tsv under careerOpsPath. A missing
-// file is not an error — the manifest is optional and absent until the
-// first generate-pdf.mjs run that writes it. Later rows win over earlier
-// ones for the same report number, so regenerated PDFs supersede stale
-// entries without any compaction step.
 func LoadPDFManifest(careerOpsPath string) PDFManifest {
 	manifest := make(PDFManifest)
 	raw, err := os.ReadFile(filepath.Join(careerOpsPath, "data", "pdf-index.tsv"))
@@ -161,22 +137,8 @@ func LoadPDFManifest(careerOpsPath string) PDFManifest {
 	return manifest
 }
 
-// rePDFDate extracts the trailing YYYY-MM-DD stamp from generated CV
-// filenames (cv-{candidate}-{slug}-{date}.pdf).
 var rePDFDate = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})\.pdf$`)
 
-// ResolvePDFs returns candidate PDF paths (relative to careerOpsPath) for an
-// application, best match first.
-//
-// Precedence:
-//  1. Manifest entry for the application's report number, when the file
-//     still exists. This is exact — generate-pdf.mjs recorded the linkage.
-//  2. Filename match: output/cv-*.pdf whose name contains the kebab-cased
-//     company at hyphen boundaries. This covers every PDF generated before
-//     the manifest existed without matching a longer company's slug.
-//     Multiple matches are all returned (newest first) so the caller can
-//     offer a picker instead of guessing — one company can have several
-//     role-variant CVs from the same day.
 func ResolvePDFs(careerOpsPath string, app model.CareerApplication, manifest PDFManifest) []string {
 	if entry, ok := manifest.Lookup(app); ok {
 		if _, err := os.Stat(filepath.Join(careerOpsPath, filepath.FromSlash(entry.PDFPath))); err == nil {
@@ -208,18 +170,10 @@ func ResolvePDFs(careerOpsPath string, app model.CareerApplication, manifest PDF
 	return matches
 }
 
-// matchesCompanySlug reports whether a generated CV filename contains the
-// company as a complete hyphen-delimited segment. This still permits role
-// variants (cv-…-anthropic-staff-ui-….pdf matches "anthropic") without letting
-// a company prefix match a different company ("meta" must not match "metabase").
 func matchesCompanySlug(base, slug string) bool {
 	return strings.Contains(base, "-"+slug+"-")
 }
 
-// sortPDFsNewestFirst orders candidate paths by the date stamp embedded in
-// the filename (descending), falling back to file mtime when the stamp is
-// missing or equal. A regenerated CV from today therefore outranks last
-// week's, and same-day variants get a stable mtime ordering.
 func sortPDFsNewestFirst(careerOpsPath string, paths []string) {
 	dateOf := func(p string) string {
 		if m := rePDFDate.FindStringSubmatch(p); m != nil {
@@ -243,11 +197,9 @@ func sortPDFsNewestFirst(careerOpsPath string, paths []string) {
 	})
 }
 
-// kebabCase lowercases s and collapses every non-alphanumeric run into a
-// single hyphen: "Monarch Money" → "monarch-money".
 func kebabCase(s string) string {
 	var b strings.Builder
-	lastHyphen := true // suppress leading hyphen
+	lastHyphen := true
 	for _, r := range strings.ToLower(s) {
 		isAlnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 		if isAlnum {
@@ -261,10 +213,6 @@ func kebabCase(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// ResolveHTML returns the newest output/cv-*{companySlug}*.html for app and
-// a companion PDF path derived from it (same base, .pdf extension). Returns
-// ("","") when no matching HTML file is found. Used by the D handler to allow
-// PDF generation for entries that have a tailored CV HTML but no prior PDF.
 func ResolveHTML(careerOpsPath string, app model.CareerApplication) (htmlPath, pdfPath string) {
 	slug := kebabCase(app.Company)
 	if slug == "" {

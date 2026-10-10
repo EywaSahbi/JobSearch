@@ -1,37 +1,4 @@
 #!/usr/bin/env node
-// intake.mjs — deterministic half of the `intake` mode (#1723).
-//
-// Scans the documents/ intake folder (master CV, LinkedIn export, diplomas,
-// reference letters), extracts text from each source locally, and
-// fingerprints every source so re-runs surface only genuinely new material.
-//
-// Division of labor (mirrors modes/add.md + add-entry.mjs):
-//   - this script: enumeration, text extraction, idempotency bookkeeping —
-//     everything deterministic. It NEVER writes cv.md / config/profile.yml /
-//     modes/_profile.md; per repo convention those are agent-edited only,
-//     after explicit user confirmation (see modes/intake.md).
-//   - modes/intake.md: semantic mapping (CV → experience/skills, LinkedIn →
-//     certifications, …), conflict display, the confirm gate, and the
-//     source-annotated writes.
-//
-// PDF extraction ladder (zero new package.json deps, mirrors the
-// generate-latex.mjs engine ladder): born-digital PDFs — the dominant case
-// for CVs / LinkedIn "Save to PDF" exports / transcripts — carry a text
-// layer that `pdftotext -layout` (Poppler) extracts directly. No extractor
-// on PATH degrades to an install hint, never a crash. Scanned/image-only
-// PDFs and .docx are out of scope for v1 (the summary tells the user to
-// convert them).
-//
-// Usage:
-//   node intake.mjs                 # scan + extract, JSON to stdout
-//   node intake.mjs --summary       # human-readable table instead of JSON
-//   node intake.mjs --text <path>   # full extracted text of one source
-//   node intake.mjs --commit <path …>
-//                                   # record the confirmed sources as ingested
-//                                   # (run only after the user confirmed)
-//   node intake.mjs --commit --all  # record every source with new material —
-//                                   # only when the user merged all of them
-//   node intake.mjs --self-test     # pure-function self-test, no filesystem
 
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
@@ -50,20 +17,12 @@ const DATA_ROOT = getCareerOpsRoot();
 const DOCS_DIR = process.env.CAREER_OPS_DOCUMENTS_DIR || join(DATA_ROOT, 'documents');
 const STATE_FILE = process.env.CAREER_OPS_INTAKE_STATE || join(DATA_ROOT, 'data', 'intake-state.json');
 
-// The four intake folders from the issue spec. Files directly under
-// documents/ are picked up too — the folders are guidance, not a gate.
 export const INTAKE_FOLDERS = ['cv', 'linkedin', 'diplomas', 'references'];
 
-// Extraction ladder for PDFs, in preference order. v1 has a single rung;
-// an OCR rung for scanned PDFs is an explicit later opt-in (see #1723
-// thread), NOT a silent fallback — OCR output is too lossy to mix in
-// unannounced.
 const PDF_EXTRACTORS = [
   {
     name: 'pdftotext',
     probeArgs: ['-v'],
-    // -layout preserves column layout, which keeps two-column CVs from
-    // bleeding into scrambled text. `-` sends the text to stdout.
     extract: (path) => execFileSync(
       'pdftotext', ['-layout', path, '-'],
       { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
@@ -76,7 +35,6 @@ const PDF_INSTALL_HINT =
   + '(brew install poppler / apt install poppler-utils) — .md/.txt/.tex '
   + 'sources work without it.';
 
-/** Classify a source file by extension. Pure. */
 export function classifySource(relPath) {
   const ext = extname(relPath).toLowerCase();
   if (['.md', '.txt', '.tex'].includes(ext)) return { kind: 'direct' };
@@ -90,10 +48,6 @@ export function classifySource(relPath) {
   return { kind: 'unsupported', reason: `unrecognized extension ${ext || '(none)'}` };
 }
 
-/**
- * Walk the ladder and return the first extractor whose binary answers a
- * version probe, or null. `probe` is injectable for tests.
- */
 export function detectPdfExtractor(probe = defaultProbe) {
   for (const candidate of PDF_EXTRACTORS) {
     if (probe(candidate)) return candidate;
@@ -103,7 +57,6 @@ export function detectPdfExtractor(probe = defaultProbe) {
 
 function defaultProbe(candidate) {
   try {
-    // Bounded like extract() below: a wedged binary must not hang every run.
     execFileSync(candidate.name, candidate.probeArgs, { stdio: 'pipe', timeout: 5_000 });
     return true;
   } catch (err) {
@@ -111,23 +64,6 @@ function defaultProbe(candidate) {
   }
 }
 
-/**
- * Given whatever execFileSync threw from a version probe, did the binary
- * actually run? Pure and exported so the self-test can cover every error shape
- * without needing a real binary on PATH.
- *
- * A nonzero exit is NOT proof of absence. Poppler's pdftotext exits 0 on `-v`,
- * but Xpdf's — the Glyph & Cog build shipped by xpdfreader.com and by
- * MSYS2/mingw64 — prints its version and exits 99. Reading that as "not
- * installed" silently skipped every PDF on a machine where extraction worked
- * perfectly, and the scan summary blamed a missing extractor.
- *
- * What separates present-but-grumpy from absent is whether the process ran at
- * all: execFileSync sets `status` to the exit code when it did, and leaves it
- * null with code ENOENT / EACCES / ETIMEDOUT when the binary is missing,
- * unrunnable, or wedged. A wedged binary stays excluded on purpose — extract()
- * would hit the same timeout on every source.
- */
 export function probeRan(err) {
   return typeof err?.status === 'number';
 }
@@ -136,12 +72,6 @@ export function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/**
- * Annotate extracted sources against the recorded intake state. Pure.
- * A source is `new` (never ingested), `changed` (ingested before but the
- * extracted text differs), or `ingested` (hash matches the record — the
- * agent must not re-propose it; that is what makes re-runs idempotent).
- */
 export function computeDelta(state, sources) {
   const recorded = new Map(Object.entries(state.ingested || {}));
   return sources.map((s) => {
@@ -153,29 +83,16 @@ export function computeDelta(state, sources) {
   });
 }
 
-/**
- * Raised when the ingest ledger exists and cannot be trusted.
- *
- * Its own class so the CLI boundary can report it as a one-line message the way
- * every other expected failure in this file does, while a genuine bug still
- * arrives as a stack trace.
- */
 class StateError extends Error {
   constructor(message) { super(message); this.name = 'StateError'; }
 }
 
 function loadState() {
-  // Absent is a first run — an empty ledger is correct.
   if (!existsSync(STATE_FILE)) return { ingested: {} };
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
   } catch (err) {
-    // Existing and unreadable is NOT a first run. Returning an empty ledger
-    // makes every already-ingested document look new, so intake re-proposes
-    // additions the user has already reviewed — and the review is the whole
-    // human-in-the-loop step this mode exists for. Saying so costs one message;
-    // hiding it costs the user's trust in the proposals.
     throw new StateError(
       `${STATE_FILE} is not valid JSON (${String(err.message).split('\n')[0]}) — `
       + 'fix or delete it; deleting means already-ingested documents are proposed again.',
@@ -184,9 +101,6 @@ function loadState() {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new StateError(`${STATE_FILE} does not contain a JSON object — fix or delete it.`);
   }
-  // Absent is an empty ledger and `{}` is right. Present but not an object is
-  // the same silent reset one level down — it was replaced with `{}` and then
-  // written back by commitState, so every reviewed document looked new again.
   if (parsed.ingested === undefined || parsed.ingested === null) parsed.ingested = {};
   else if (typeof parsed.ingested !== 'object' || Array.isArray(parsed.ingested)) {
     throw new StateError(`${STATE_FILE} has an "ingested" that is not an object — fix or delete it.`);
@@ -197,11 +111,6 @@ function loadState() {
 function listSourceFiles() {
   if (!existsSync(DOCS_DIR)) return { files: [], unreadable: [] };
   const out = [];
-  // Directories that could not be listed (permissions, a dead mount behind a
-  // link). They are skipped rather than fatal — one locked folder must not
-  // abort the scan of everything else — but they are reported, because a
-  // directory that silently vanishes is a source the user dropped in and never
-  // hears about again.
   const unreadable = new Set();
   const readDir = (dir) => {
     try {
@@ -211,24 +120,8 @@ function listSourceFiles() {
       return [];
     }
   };
-  // Directories already walked, by real path. Symlinks are followed (see
-  // below), so without this a link back up the tree — documents/cv/loop ->
-  // documents/ — re-enters it until the path length gives out, reporting
-  // one CV a dozen times over. Two links to the same folder collapse too.
   const walked = new Set();
 
-  // Every directory reachable without following a link, by real path. Dirent's
-  // isDirectory() is false for a symlink, so this pass naturally stays inside
-  // the real tree.
-  //
-  // It exists because the walk keeps whichever alias of a folder it reaches
-  // first, and that path becomes the key in intake-state.json. With two ways
-  // into one folder — documents/cv plus a symlink documents/current -> cv — the
-  // key would otherwise depend on readdirSync order, which is filesystem
-  // dependent: the same documents/ could produce `cv/master.md` on one machine
-  // and `current/master.md` on another, and an already ingested source would
-  // resurface as new. Knowing the real directories up front lets a link step
-  // aside for the path the user actually created.
   const realDirs = new Set();
   const claimRealDirs = (dir) => {
     let real;
@@ -247,15 +140,11 @@ function listSourceFiles() {
     try { real = realpathSync(dir); } catch { return; }
     if (walked.has(real)) return;
     walked.add(real);
-    // Sorted so the traversal itself doesn't vary with readdirSync order.
     const entries = readDir(dir)
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'README.md' && dir === DOCS_DIR) continue;
       const abs = join(dir, entry.name);
-      // Follow symlinks (a symlinked master CV is a natural setup) —
-      // Dirent.isFile()/isDirectory() are both false for them, which would
-      // silently drop the source. Broken links are skipped.
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
@@ -266,19 +155,11 @@ function listSourceFiles() {
         } catch { continue; }
       }
       if (isDir) {
-        // A link onto a directory that is already in the tree under its own
-        // name adds nothing but a second alias — skip it wherever it sits, so
-        // documents/a/link -> documents/z cannot claim `z` before the walk
-        // reaches it. Links pointing outside documents/ have no real in-tree
-        // name, so they are still followed.
         if (entry.isSymbolicLink()) {
           let target;
           try { target = realpathSync(abs); } catch { continue; }
           if (realDirs.has(target)) continue;
         }
-        // A repository someone cloned into documents/ is not a document they
-        // dropped in: every source file in it would be offered as intake
-        // material for the profile (#3762).
         if (isNestedCheckout(abs)) continue;
         walk(abs);
       } else if (isFile) out.push(abs);
@@ -288,7 +169,6 @@ function listSourceFiles() {
   return { files: out.sort(), unreadable: [...unreadable].sort() };
 }
 
-/** documents/-relative path with forward slashes — the key used everywhere. */
 function toRelPath(abs) {
   return relative(DOCS_DIR, abs).split(sep).join('/');
 }
@@ -297,10 +177,6 @@ function extractAll() {
   const extractor = detectPdfExtractor();
   const { files, unreadable } = listSourceFiles();
   const sources = files.map((abs) => {
-    // Normalise to forward slashes: this path is the key in intake-state.json
-    // and is echoed back to `--text`, so it must not vary by platform. On
-    // Windows relative() yields `cv\master.md`, which would both break the
-    // folder split below and make a state file unportable across machines.
     const path = toRelPath(abs);
     const cls = classifySource(path);
     const base = { path, folder: path.includes('/') ? path.split('/')[0] : '(root)' };
@@ -350,17 +226,8 @@ function ensureScaffold() {
   for (const folder of INTAKE_FOLDERS) mkdirSync(join(DOCS_DIR, folder), { recursive: true });
 }
 
-// Sentinel for `--commit --all`. The safe case ("record what the user
-// confirmed") and the destructive one ("record everything") must not be
-// spelled the same way: `only.length &&` made an empty list mean "all", so
-// `--commit --summary` — main() filters flags out of the path list — recorded
-// sources the user never saw and buried them forever (#1843 review).
 const COMMIT_ALL = Symbol('commit-all');
 
-// Record sources as ingested. `only` is the list of paths the user actually
-// confirmed for merge, or COMMIT_ALL. A blanket commit after a per-item
-// confirmation would mark declined sources as ingested and silently bury them
-// on every future run, so an empty list records nothing.
 function commitState(result, only = []) {
   const all = only === COMMIT_ALL;
   const state = loadState();
@@ -374,9 +241,6 @@ function commitState(result, only = []) {
     count += 1;
   }
   mkdirSync(dirname(STATE_FILE), { recursive: true });
-  // Atomic for the same reason as hired-share's: a truncating write that is
-  // interrupted leaves unparseable JSON, which is the condition the loader
-  // above now refuses to silently paper over.
   writeFileAtomic(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
   return count;
 }
@@ -419,9 +283,6 @@ function runSelfTest() {
     detectPdfExtractor(() => true)?.name, 'pdftotext');
   eq('ladder degrades to null', detectPdfExtractor(() => false), null);
 
-  // A version probe that exits nonzero is not proof the binary is absent:
-  // Xpdf's pdftotext prints its version and exits 99. Only a process that never
-  // ran counts as missing.
   eq('exit 99 (Xpdf -v) counts as present', probeRan({ status: 99 }), true);
   eq('exit 1 counts as present', probeRan({ status: 1 }), true);
   eq('exit 0 counts as present', probeRan({ status: 0 }), true);
@@ -451,10 +312,6 @@ function runSelfTest() {
 
 const isMain = isMainModule(import.meta.url);
 
-// A function, not a bare `if (isMain)` block, so the success paths can `return`
-// instead of calling process.exit(0). `--text` writes a whole CV to stdout and
-// is meant to be piped; process.exit() is synchronous and can truncate a pipe
-// write that hasn't drained. Falling off the end leaves exitCode at 0.
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--self-test')) runSelfTest();
@@ -465,8 +322,6 @@ function main() {
     const target = args[textIdx + 1];
     if (!target) { console.error('Usage: node intake.mjs --text <path relative to documents/>'); process.exit(1); }
     const abs = resolve(DOCS_DIR, target);
-    // Scan output only ever emits paths inside documents/ — refuse anything
-    // that resolves outside it.
     if (!abs.startsWith(resolve(DOCS_DIR) + sep)) {
       console.error(`Path escapes documents/: ${target}`);
       process.exit(1);
@@ -474,10 +329,6 @@ function main() {
     if (!existsSync(abs)) { console.error(`Not found: ${target}`); process.exit(1); }
     const cls = classifySource(target);
     let text;
-    // existsSync() only proves the name resolves — a directory called `cv.md`,
-    // a file the user can't read, or a malformed PDF all throw from here. Fail
-    // the way extractAll() does (first line of the message, nonzero) instead of
-    // dumping a stack trace at someone who mistyped a path.
     try {
       if (cls.kind === 'direct') text = readFileSync(abs, 'utf-8');
       else if (cls.kind === 'pdf') {
@@ -502,7 +353,6 @@ function main() {
   if (commitIdx !== -1) {
     const only = args.slice(commitIdx + 1).filter((a) => !a.startsWith('--'));
     const all = args.includes('--all');
-    // Refuse before writing: no paths and no --all is a mistake, not consent.
     if (!all && only.length === 0) {
       console.error(
         'Nothing to commit. Pass the confirmed sources — node intake.mjs --commit <path> [<path> …] — '
@@ -520,10 +370,6 @@ function main() {
 }
 
 if (isMain) {
-  // Only StateError. Every other expected failure in main() already prints one
-  // line and exits 1; a ledger this function cannot trust is the one that
-  // reaches here as a throw, because it is raised deep inside extractAll().
-  // Anything else is a bug in this script and keeps its stack trace.
   try {
     main();
   } catch (err) {

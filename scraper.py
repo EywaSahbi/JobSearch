@@ -1,18 +1,3 @@
-"""Job-Scraper für den Raum Dortmund / Ruhrgebiet (basiert auf JobSpy).
-
-    python scraper.py            # Ansicht starten: http://127.0.0.1:8765
-                                 # (dort "Neu scrapen" klicken, Strg+C beendet)
-    python scraper.py --scrape   # nur im Terminal scrapen, ohne Ansicht
-
-Optionen für beide Varianten:
-    --hours 24                   # nur Jobs der letzten 24 Stunden
-    --fast                       # ohne LinkedIn-Beschreibungen (schneller)
-    --sites indeed linkedin      # nur bestimmte Boards
-
-In der Ansicht legt "An career-ops senden" (Taste C) einen Job samt Stellentext
-in die Inbox von career-ops (Ordner career-ops/, siehe career_ops.py). Dort
-bewertet "/career-ops pipeline" alles, was in der Inbox liegt.
-"""
 import argparse
 import hashlib
 import json
@@ -29,7 +14,6 @@ from jobspy import scrape_jobs
 
 import career_ops
 
-# ---- Einstellungen (anpassen) --------------------------------------------
 SEARCH_TERMS = [
     "Software Engineer",
     "Softwareentwickler",
@@ -38,37 +22,28 @@ SEARCH_TERMS = [
     "IT Support",
     "Fachinformatiker",
 ]
-# Zentren + Umkreis decken auch Bochum, Duisburg, Gelsenkirchen, Wuppertal,
-# Hagen, Mülheim, Oberhausen, Neuss usw. ab.
 LOCATIONS = ["Dortmund", "Essen", "Düsseldorf"]
 RADIUS_KM = 30
 COUNTRY = "Germany"
 SITES = ["indeed", "linkedin", "glassdoor"]
-RESULTS_PER_SEARCH = 30   # pro Suchbegriff, Stadt und Board
-HOURS_OLD = 168           # nur Jobs der letzten N Stunden
-KEEP_DAYS = 45            # ältere Einträge fliegen aus der Datenbank
-MAX_LINKEDIN_DETAILS = 200  # Beschreibungen pro Lauf nachladen
+RESULTS_PER_SEARCH = 30
+HOURS_OLD = 168
+KEEP_DAYS = 45
+MAX_LINKEDIN_DETAILS = 200
 
-# Titelfilter: Jobs mit einem dieser Wörter im Titel werden gelöscht.
-# Groß/Klein ist egal. Ohne Stern zählt nur das ganze Wort ("Lead" trifft
-# nicht "Leadership"), mit Stern auch Wortteile ("*ausbildung*" trifft
-# "Ausbildungsstart" und "Berufsausbildung").
 EXCLUDE_TITLE = [
-    "*ausbildung*", "Auszubildende*", "Azubi*",    # Ausbildungen
-    "Senior", "Sr", "Principal", "Lead", "Head of",  # Senior-Positionen
+    "*ausbildung*", "Auszubildende*", "Azubi*",
+    "Senior", "Sr", "Principal", "Lead", "Head of",
 ]
-# Ausnahme: Titel mit diesen Wörtern bleiben, z. B. "(Junior/Senior) Entwickler".
 KEEP_TITLE = ["Junior"]
 
 PORT = 8765
-# --------------------------------------------------------------------------
 
 ROOT = Path(__file__).parent
 OUTPUT_DIR = ROOT / "output"
 DB_FILE = OUTPUT_DIR / "jobs.json"
 JS_FILE = OUTPUT_DIR / "jobs.js"
 VIEWER = ROOT / "viewer.html"
-# Hierhin schickt die Ansicht Jobs zum Bewerten ("An career-ops senden").
 CAREER_OPS_DIR = ROOT / "career-ops"
 
 NO_CITY = {"north rhine-westphalia", "nordrhein-westfalen", "nw", "germany", "deutschland", "de"}
@@ -98,7 +73,6 @@ def city_of(location):
 
 
 def job_id(title, company, city):
-    """Gleicher Titel + Firma + Stadt = derselbe Job, egal von welchem Board."""
     parts = (re.sub(r"[^a-z0-9äöüß]+", " ", (s or "").lower()).strip() for s in (title, company, city))
     return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
@@ -134,7 +108,6 @@ def to_record(row, term, now):
 
 
 def merge(db, rec):
-    """Fügt rec in db ein. Gibt True zurück, wenn der Job neu ist."""
     old = db.get(rec["id"])
     if old is None:
         db[rec["id"]] = rec
@@ -153,11 +126,10 @@ def search(site, term, location, hours_old):
         site_name=[site],
         search_term=term,
         location=location,
-        distance=round(RADIUS_KM / 1.609),  # JobSpy rechnet in Meilen
+        distance=round(RADIUS_KM / 1.609),
         results_wanted=RESULTS_PER_SEARCH,
         hours_old=hours_old,
         country_indeed=COUNTRY,
-        # LinkedIn-Beschreibungen laden wir später nur für neue Jobs nach
         fetch_description=(site == "glassdoor"),
         description_format="markdown",
         verbose=0,
@@ -180,7 +152,7 @@ def scrape(db, sites, hours_old, now, progress=no_progress):
                 done += 1
                 try:
                     rows = search(site, term, location, hours_old)
-                except Exception as exc:  # ein Board darf nicht alles abbrechen
+                except Exception as exc:
                     counts.append(f"{site}: Fehler ({str(exc)[:60]})")
                     continue
                 wanted = [row for row in rows if not excluded(row.get("title"))]
@@ -193,7 +165,6 @@ def scrape(db, sites, hours_old, now, progress=no_progress):
 
 
 def fetch_linkedin_details(db, limit, progress=no_progress):
-    """LinkedIn liefert in der Suche keine Beschreibung, also pro Job nachladen."""
     todo = [
         j for j in db.values()
         if "linkedin" in j["links"] and not j.get("description") and j.get("detail_tries", 0) < 2
@@ -201,7 +172,6 @@ def fetch_linkedin_details(db, limit, progress=no_progress):
     if not todo:
         return
     try:
-        # interne JobSpy-API: kann sich mit einem Update ändern
         from jobspy.linkedin import LinkedIn
         from jobspy.model import ScraperInput, Site
         scraper = LinkedIn()
@@ -230,7 +200,6 @@ def fetch_linkedin_details(db, limit, progress=no_progress):
         else:
             misses += 1
             if misses >= 5:
-                # die übersprungenen Jobs sollen beim nächsten Lauf nicht als Fehlversuch zählen
                 for skipped in todo[i - misses:i]:
                     skipped["detail_tries"] -= 1
                 print("  LinkedIn blockt gerade, Rest folgt beim nächsten Lauf.")
@@ -242,7 +211,6 @@ def fetch_linkedin_details(db, limit, progress=no_progress):
 
 
 def read_db():
-    """Lädt die Datenbank ohne veraltete und herausgefilterte Jobs."""
     if not DB_FILE.exists():
         return {}, None
     data = json.loads(DB_FILE.read_text(encoding="utf-8"))
@@ -262,16 +230,14 @@ def save(db, generated):
     text = json.dumps(data, ensure_ascii=False)
     OUTPUT_DIR.mkdir(exist_ok=True)
     DB_FILE.write_text(text, encoding="utf-8")
-    # viewer.html lädt diese Datei per <script>; "</" darf darin nicht vorkommen
     JS_FILE.write_text("window.JOBS_DATA = " + text.replace("</", "<\\/") + ";\n", encoding="utf-8")
 
 
 def run_scrape(sites, hours_old, fast, progress=no_progress):
-    """Ein kompletter Lauf. Gibt (neue Jobs, Jobs insgesamt) zurück."""
     now = datetime.now().isoformat(timespec="seconds")
     db, _ = read_db()
     new = scrape(db, sites, hours_old, now, progress)
-    save(db, now)  # Zwischenstand, falls das Nachladen abgebrochen wird
+    save(db, now)
     if not fast:
         fetch_linkedin_details(db, MAX_LINKEDIN_DETAILS, progress)
         save(db, now)
@@ -279,7 +245,6 @@ def run_scrape(sites, hours_old, fast, progress=no_progress):
     return new, len(db)
 
 
-# ---- Lokaler Server für viewer.html (Knopf "Neu scrapen") ------------------
 STATE = {"running": False, "percent": 0, "text": "", "new": None, "total": None, "error": None}
 STATE_LOCK = threading.Lock()
 
@@ -292,7 +257,6 @@ def start_scrape(args):
 
     def progress(phase, done, total, text):
         share = done / total if total else 1
-        # Suche und Beschreibungen teilen sich den Balken je zur Hälfte
         percent = share * 100 if args.fast else share * 50 + (50 if phase == "details" else 0)
         STATE.update(percent=round(percent, 1), text=text)
 
@@ -327,7 +291,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def is_local(self):
-        """Nur die eigene Seite darf anfragen, keine fremden Webseiten."""
         own = (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
         origin = self.headers.get("Origin")
         return self.headers.get("Host") in own and (not origin or origin.removeprefix("http://") in own)
@@ -381,7 +344,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Server(ThreadingHTTPServer):
-    # sonst lässt Windows zwei Server auf demselben Port zu
     allow_reuse_address = False
 
 
@@ -398,7 +360,7 @@ def serve(args):
 
     db, generated = read_db()
     if generated:
-        save(db, generated)  # Titelfilter auch auf schon gespeicherte Jobs anwenden
+        save(db, generated)
     print(f"Ansicht: {url}  (Strg+C beendet)", flush=True)
     if not args.no_open:
         webbrowser.open(url)

@@ -17,7 +17,6 @@ import { ResultsList, type EnrichedOffer } from "./results-list";
 import { useExplore } from "./explore-provider";
 import { ScheduleJobAction } from "./schedule-job-action";
 
-// Same shape as core normalizeTextKey(s, " ") — never [^a-z0-9] (#2666).
 const norm = (s: string) => normalizeTextKey(s, " ");
 const CLI_NAMES: Record<string, string> = {
   claude: "Claude Code",
@@ -59,8 +58,6 @@ export function ExplorerView({
     }
   }, []);
 
-  // Initialize once from the URL (shareable search) or the server seed — without
-  // clobbering anything the assistant set before this mount.
   useEffect(() => {
     if (inited.current) return;
     inited.current = true;
@@ -70,18 +67,11 @@ export function ExplorerView({
       setMode("ai");
       setAiIntent(ai);
     } else if (sp.get("view") === "fresh") {
-      // Today's "See all N" (#84) hands off here instead of a bare config form —
-      // load the SAME /api/whats-new offers it already showed, through the normal
-      // results-phase UI. The config form (Refine search / Re-cast) stays reachable.
-      // Force scan mode: a session restored in "ai" mode (sessionStorage rehydrate)
-      // must not show the AI-search UI for this scan-only hand-off.
       setMode("scan");
       initFilters(seed.filters);
       void loadFresh();
     } else {
       initFilters(sp.toString() ? paramsToFilters(sp) : seed.filters);
-      // Onboarding hand-off: ?run=1 auto-fires the free scan + flags the first-run
-      // banner (the "matches found from your CV, free" reveal).
       if (sp.get("run") === "1") {
         setFirstRun(true);
         void discover();
@@ -110,8 +100,6 @@ export function ExplorerView({
   const isResults = phase === "results";
   const canDiscover = filters.ats.length > 0;
   const scanRunning = running && !isAi;
-  // Keep one ResultsList mounted across scanning → revealing → results so
-  // filter/sort/scroll and co-rise survive the 850ms reveal handoff.
   const showScanList = !isAi && offers.length > 0 && (scanRunning || isResults);
 
   if (running && isAi) return <AiHuntView cliName={cli.name} />;
@@ -316,9 +304,6 @@ function DegradedCard({
   droppedNoDate: number;
   partial: boolean;
 }) {
-  // 0 results, but the scan was NOT a clean full search → never "all caught up".
-  // Pick the most informative reason (authoritative when the scanner's --json mode
-  // is available; otherwise the 0-companies fallback).
   let title = "The scan ran, but couldn’t reach any sources.";
   let body =
     "The public ATS directories didn’t respond — usually a transient network hiccup or rate-limit, so nothing could be searched. This isn’t “all caught up”; a retry in a moment usually clears it.";
@@ -345,8 +330,6 @@ function DegradedCard({
 }
 
 function CappedBanner({ companiesScanned, companiesAvailable, onRefine }: { companiesScanned: number; companiesAvailable: number; onRefine: () => void }) {
-  // Results ARE present, but the scan was capped — tell the user there's more, so a
-  // partial list never reads as "everything there is".
   return (
     <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-2.5 text-[13px]">
       <span className="text-foreground">
@@ -361,13 +344,6 @@ function CappedBanner({ companiesScanned, companiesAvailable, onRefine }: { comp
 }
 
 function FailedCard({ msg, scannerMissing, onRetry }: { msg: string; scannerMissing: boolean; onRetry: () => void }) {
-  // The scanner-missing case (data-only / pre-scan-ats-full checkout) must NOT
-  // offer a "Try again" that re-fails forever — give a real next step instead.
-  // The caller decides this from the response body's SCANNER_MISSING code, never
-  // from the error text and never from the bare 400: a runtime scan error ("The
-  // scanner returned no readable output.") mentions the scanner too, and 400 is
-  // a shared channel that also carries malformed-request and MODE_MISSING
-  // failures. Neither may be misreported as a broken checkout.
   if (scannerMissing) {
     return (
       <div className="rounded-2xl border border-border bg-surface/30 px-6 py-10 text-center">

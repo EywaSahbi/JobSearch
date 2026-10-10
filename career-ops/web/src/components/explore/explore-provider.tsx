@@ -28,9 +28,9 @@ export type Phase =
   | "empty-current"
   | "empty-loose"
   | "failed"
-  | "degraded" // scan completed but searched nothing (transient fetch/rate-limit) — not "all caught up"
-  | "hunting" // AI search streaming
-  | "blocked"; // AI search needs a CLI
+  | "degraded"
+  | "hunting"
+  | "blocked";
 export type AiCost = { searches: number; candidates: number; fetches: number };
 export type SourceState = {
   state: "queued" | "active" | "swept" | "noisy";
@@ -44,8 +44,6 @@ export type SourceState = {
 type ExploreCtx = {
   filters: ExploreFilters;
   setFilters: (f: ExploreFilters) => void;
-  /** Set filters from a seed/URL only if the user/assistant hasn't touched them
-   *  yet — so a fresh page mount can't clobber assistant-set filters. */
   initFilters: (f: ExploreFilters) => void;
   phase: Phase;
   running: boolean;
@@ -59,19 +57,14 @@ type ExploreCtx = {
   status: string;
   partial: boolean;
   error: string;
-  /** The failure was the structured "scanner absent from this checkout" 400,
-   *  not a runtime scan error, so it drives the "full toolkit" panel over a retry. */
   scannerMissing: boolean;
   added: Set<string>;
   adding: Set<string>;
   discover: () => Promise<void>;
-  /** Load the SUPPLY-loop offers Today's "Fresh matches this week" already
-   *  fetched from /api/whats-new, straight into the results phase — no scan. */
   loadFresh: () => Promise<void>;
   addToPipeline: (offers: DiscoveredOffer[]) => Promise<number>;
   applyPatch: (raw: Record<string, unknown>, opts?: { merge?: boolean; run?: boolean }) => void;
   reset: () => void;
-  // ── AI search (modes/discover.md) ──
   mode: ExploreMode;
   setMode: (m: ExploreMode) => void;
   aiIntent: string;
@@ -88,9 +81,6 @@ export function useExplore(): ExploreCtx {
   return c;
 }
 
-// Explore results are expensive (a scan walks the ATS network; an AI search spends
-// tokens). Persist the SETTLED result set per-tab so a reload or a mode toggle never
-// throws the work away (disc#5 — "came back to explore, work is lost").
 const RESULTS_KEY = "career-ops:explore-results";
 type ResultSnapshot = {
   v: number;
@@ -122,8 +112,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [sources, setSources] = useState<Partial<Record<AtsSource, SourceState>>>({});
   const [matchCount, setMatchCount] = useState(0);
   const [companiesScanned, setCompaniesScanned] = useState(0);
-  // Authoritative scan-health signals (scanner --json mode, #1199): tell a capped /
-  // degraded scan from a genuinely empty one, and power a "scanned X of Y" banner.
   const [companiesAvailable, setCompaniesAvailable] = useState(0);
   const [capHit, setCapHit] = useState(false);
   const [droppedNoDate, setDroppedNoDate] = useState(0);
@@ -179,21 +167,17 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
     const acc: DiscoveredOffer[] = [];
     let sawError = "";
-    let sawScannerMissing = false; // the structured 400 (data-only checkout), not a runtime scan error
-    let companiesScannedAcc = 0; // 0 at the end = the directories never downloaded → degraded, not empty
-    let capHitAcc = false; // scan was capped (only a slice of the universe searched)
-    let datasetIssueAcc = false; // some ATS dataset was stale/empty/unreachable
-    let droppedNoDateAcc = 0; // postings dropped for lacking a publish date
+    let sawScannerMissing = false;
+    let companiesScannedAcc = 0;
+    let capHitAcc = false;
+    let datasetIssueAcc = false;
+    let droppedNoDateAcc = 0;
     try {
       const r = await fetch("/api/explore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(f),
       });
-      // Every non-OK response is decided from the parsed body, not the status.
-      // A failed response never carries a scan stream, so reading one would
-      // parse a JSON error object as scan events and report "no readable
-      // output" instead of the server's actual message.
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         sawScannerMissing = isScannerMissing(d);
@@ -226,9 +210,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
                 setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", companies: ev.companies } }));
                 break;
               case "progress":
-                // `matches` is the engine's running total. Live `offer` events
-                // (stderr JSON in --json mode) populate the card list; this
-                // number still drives the hero counter.
                 setMatchCount((m) => Math.max(m, ev.matches));
                 setSources((s) => ({ ...s, [ev.ats]: { ...s[ev.ats as AtsSource], state: "active", done: ev.scanned, total: ev.total } }));
                 break;
@@ -272,7 +253,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       sawError = e instanceof Error ? e.message : "stream error";
     }
 
-    // Mark any still-active sources as swept (stream ended).
     setSources((s) => {
       const next = { ...s };
       for (const k of Object.keys(next) as AtsSource[]) if (next[k]?.state === "active" || next[k]?.state === "queued") next[k] = { ...next[k]!, state: "swept" };
@@ -281,9 +261,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
     runningRef.current = false;
     if (acc.length > 0) {
-      // A scan that ended in an error still keeps what it found (a legacy scan
-      // stopped at the deadline, or every --json source stopped): mark it partial
-      // and keep the reason, which ResultsList shows beside the results.
       if (sawError) {
         setPartial(true);
         setError(sawError);
@@ -297,20 +274,12 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       setScannerMissing(sawScannerMissing);
       setPhase("failed");
     } else if (capHitAcc || datasetIssueAcc || droppedNoDateAcc > 0 || companiesScannedAcc === 0) {
-      // Maintainer's RULE (#1199): it is NOT "all caught up" if the scan was capped,
-      // a dataset was stale/unreachable, postings were dropped for missing a date, OR
-      // nothing was searched at all (legacy 0-companies fallback when --json is absent).
-      // Truly-empty is only when live datasets were fully searched and found nothing.
       setPhase("degraded");
     } else {
       setPhase(isBroadSearch(f) ? "empty-current" : "empty-loose");
     }
   }, []);
 
-  // Today's "See all N" link (#84) routes here with ?view=fresh instead of leaving
-  // the user on a bare config form. Re-fetch the same free, zero-token /api/whats-new
-  // history the dashboard already reads and drop it straight into the results phase
-  // — no scan, so it never touches sources/companiesScanned like discover() does.
   const loadFresh = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
@@ -326,9 +295,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setSources({});
     setError("");
     try {
-      // A finite ceiling, not `all`: explorer-view renders every offer it gets,
-      // so an unbounded list would be an unbounded DOM. `count` below stays the
-      // complete total, which is what the header actually reports.
       const r = await fetch(`/api/whats-new?limit=${MAX_OFFER_LIMIT}`);
       if (!r.ok) {
         setError(`Couldn't load fresh matches (${r.status}).`);
@@ -367,10 +333,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       const d = (await r.json()) as { added?: number };
       if (d.added && d.added > 0) {
         setAdded((s) => new Set([...s, ...fresh.map((o) => o.url)]));
-        // The new inbox rows were written server-side. Invalidate the Next router
-        // cache so the (server-rendered) Pipeline view shows them instead of a stale
-        // snapshot, and ping live listeners (today's dashboard, pipeline provider) —
-        // otherwise the user adds a job, opens Pipeline, and sees it empty (disc#5).
         router.refresh();
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("co-job-done", { detail: { kind: "explore-add" } }));
@@ -411,11 +373,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     try {
       sessionStorage.removeItem(RESULTS_KEY);
     } catch {
-      /* ignore */
     }
   }, []);
 
-  // AI search — orchestrate modes/discover.md via the user's CLI, streamed.
   const discoverAI = useCallback(async () => {
     if (runningRef.current) return;
     const intent = aiIntentRef.current.trim();
@@ -446,13 +406,12 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       const k = await fetch("/api/explore/ai/known").then((r) => r.json());
       knownUrls = new Set<string>(Array.isArray(k.urls) ? k.urls : []);
     } catch {
-      /* best-effort dedup */
     }
     const parser = makeAiStreamParser({ knownUrls });
 
     const acc: DiscoveredOffer[] = [];
     let sawError = "";
-    let sawScannerMissing = false; // the structured 400 (capability absent from this checkout), not a runtime error
+    let sawScannerMissing = false;
     const handle = (chunks: AiTraceChunk[]) => {
       for (const ch of chunks) {
         if (ch.kind === "offer") {
@@ -484,11 +443,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         setPhase("blocked");
         return;
       }
-      // Same rule as the scan path, and this is the call site the status-based
-      // check actually broke: /api/explore/ai returns three different 400s
-      // (malformed JSON, missing parameters, MODE_MISSING), and all three were
-      // reported as "this checkout has no scanner". MODE_MISSING carries its own
-      // copy about AI search, which the scanner panel overwrote.
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         sawScannerMissing = isScannerMissing(d);
@@ -524,17 +478,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Switch surface but PRESERVE the current results + filters — toggling scan↔AI must
-  // not throw away a completed search (disc#5). A new search (discover/discoverAI)
-  // clears + repopulates; an explicit reset() clears. Just stop any half-run.
   const setMode = useCallback((m: ExploreMode) => {
     runningRef.current = false;
     setModeState(m);
   }, []);
 
-  // Rehydrate the last settled result set on mount (per-tab sessionStorage), unless a
-  // search is already running. Done in an effect (not a useState initializer) to avoid
-  // an SSR hydration mismatch.
   useEffect(() => {
     if (runningRef.current) return;
     let snap: ResultSnapshot | null = null;
@@ -560,12 +508,10 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setAiTrace(Array.isArray(snap.aiTrace) ? snap.aiTrace : []);
     setAiCost(snap.aiCost ?? { searches: 0, candidates: 0, fetches: 0 });
     if (typeof snap.aiIntent === "string") setAiIntent(snap.aiIntent);
-    // Never rehydrate INTO a running phase — no live stream backs it.
     const RUNNING = new Set<Phase>(["casting", "scanning", "revealing", "hunting"]);
     setPhase(RUNNING.has(snap.phase) ? (snap.offers.length ? "results" : "idle") : snap.phase);
   }, []);
 
-  // Persist only SETTLED states (never mid-stream) so a reload restores a complete set.
   useEffect(() => {
     const SETTLED = new Set<Phase>(["results", "empty-current", "empty-loose", "failed", "degraded", "blocked"]);
     if (!SETTLED.has(phase)) return;
@@ -576,7 +522,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       };
       sessionStorage.setItem(RESULTS_KEY, JSON.stringify(snap));
     } catch {
-      /* sessionStorage full/unavailable — non-fatal */
     }
   }, [phase, mode, offers, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, sources, partial, status, error, scannerMissing, added, aiTrace, aiCost, aiIntent]);
 

@@ -1,61 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * contact-extract.mjs — discover a recruiter/interviewer contact from a pasted
- * reply, and save it to data/contacts.tsv for a later re-engagement follow-up
- * (#4361).
- *
- * Problem this closes: once a role goes to Rejected, whatever recruiter or
- * interviewer identity passed through an interview invite or rejection email
- * is effectively gone. There is no path from "I had a good interview with
- * this person months ago" to "here is their email, drafted into a follow-up"
- * when a new, different opening appears at the same company later.
- *
- * This is the CORE (local-only, no Gmail dependency) layer of #4361's
- * two-layer design. It reuses the exact input shape paste-reply.mjs already
- * established (#1802) — paste an email's Subject/From/body, or read it from a
- * file — so anyone who doesn't want to grant any tool mailbox access can
- * still use it. The opt-in Gmail-plugin layer (#1583) is future work and can
- * feed this same pipeline once it exists, because both produce the identical
- * {subject, from, body} shape this script already consumes.
- *
- * What it does, in order:
- *   1. Parse the pasted email into {subject, from, body} (via
- *      paste-reply.mjs's parseFileInput/collectInteractive — no duplicated
- *      parsing logic).
- *   2. Parse the From header into {name, email} (parseFromHeader).
- *   3. Match the email to a tracker row using reply-matcher.mjs's own
- *      matchCandidates() — the same matcher reply-watch.mjs already trusts —
- *      so this never re-implements company/role matching.
- *   4. Classify the reply (classifyReply) and infer a contact `type`
- *      (recruiter / hiring-manager / interviewer) from the email text.
- *   5. Confirm with the user (or --yes for non-interactive use) before
- *      creating or updating one row in data/contacts.tsv.
- *
- * This script NEVER writes to data/applications.md, NEVER sends anything, and
- * NEVER classifies or updates tracker status — same boundary as
- * paste-reply.mjs and reply-watch.mjs. A tracker row is required to attach the
- * contact to (via auto-match or an explicit --company/--tracker override);
- * without one, nothing is written and the script exits 0 with an explanation.
- *
- * Usage:
- *   node contact-extract.mjs --file email.txt
- *   node contact-extract.mjs --file email.txt --yes
- *   node contact-extract.mjs --file email.txt --company "Acme Inc" --tracker 42
- *   node contact-extract.mjs --file email.txt --type interviewer
- *   node contact-extract.mjs                      # interactive, same prompts as paste-reply.mjs
- *   node contact-extract.mjs --help
- *
- * --file format is identical to paste-reply.mjs's:
- *   Subject: <subject line>
- *   From: <sender name and/or email>
- *
- *   <body text, any number of lines>
- *
- * The contacts path is always data/contacts.tsv under the resolved career-ops
- * data root, matching contacts.mjs.
- */
-
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -75,9 +19,6 @@ const CONTACTS_PATH = path.join(DATA_ROOT, 'data', 'contacts.tsv');
 const APPS_FILE = resolveTrackerPath(DATA_ROOT);
 const FOLLOWUPS_FILE = path.join(DATA_ROOT, 'data', 'follow-ups.md');
 
-// Kept in sync by hand with contacts.mjs's own VALID_TYPES — both are small,
-// stable enums describing the same TSV column, and contacts.mjs does not
-// export its copy. internal-referral (#4691) added to both at the same time.
 const VALID_TYPES = new Set(['recruiter', 'hiring-manager', 'peer', 'interviewer', 'internal-referral', 'other']);
 
 const KNOWN_FLAGS = ['--file', '--yes', '--company', '--tracker', '--type', '--help', '-h'];
@@ -91,15 +32,6 @@ const USAGE = `Usage:
   node contact-extract.mjs --file <path> --type interviewer   override the inferred contact type
   node contact-extract.mjs --help`;
 
-/**
- * Parse an email "From:" header into {name, email}. Handles the three shapes
- * real mail clients produce: `"Name" <email>`, `Name <email>`, and a bare
- * address with no display name. A value that is neither is treated as a bare
- * name with no email (still useful — a contact can be saved without one, just
- * not looked up for a follow-up draft later).
- *
- * Exported for direct unit testing.
- */
 export function parseFromHeader(from) {
   if (!from || !from.trim()) return { name: '', email: null };
   const angleMatch = from.match(/^\s*"?([^"<]*?)"?\s*<([^<>]+)>\s*$/);
@@ -117,16 +49,6 @@ export function parseFromHeader(from) {
   return { name: trimmed, email: null };
 }
 
-/**
- * Infer a contacts.tsv `type` value from the reply text. Defaults to
- * 'recruiter' — the common case for an interview-invite or rejection sender —
- * and only overrides that when the body itself names a more specific role.
- * Checked in this order because a rejection sent BY a hiring manager who
- * calls themselves that in the signature is a stronger, more specific signal
- * than a generic mention of "the interview panel" elsewhere in the same email.
- *
- * Exported for direct unit testing.
- */
 export function inferContactType(text) {
   const t = (text || '').toLowerCase();
   if (/\bhiring manager\b/.test(t)) return 'hiring-manager';
@@ -134,21 +56,11 @@ export function inferContactType(text) {
   return 'recruiter';
 }
 
-/** One TSV cell must never contain a tab or newline — either would shift or
- * split the row. Exported for direct unit testing. */
 export function sanitizeCell(value) {
   const cell = String(value ?? '').replace(/[\t\r\n]+/g, ' ').trim();
   return escapeFormulaCell(cell);
 }
 
-/**
- * Create or update one contact row in data/contacts.tsv. Existing contacts are
- * matched by case-insensitive name + company, the same identity used by the
- * contacto workflow. Empty incoming optional fields preserve saved details.
- *
- * Exported for direct unit testing. Returns the file's total data-row count
- * after the write.
- */
 export async function appendContact(contact, contactsPath = CONTACTS_PATH) {
   if (!sanitizeCell(contact.name)) throw new Error('Contact name is required');
   return withPipelineLock(contactsPath, () => {
@@ -213,9 +125,6 @@ function askYesNo(query) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     let answered = false;
-    // EOF on stdin (piped input that ends without a line) fires 'close'
-    // without ever invoking the question callback below — decline rather
-    // than hang forever waiting for an answer that will never arrive.
     rl.on('close', () => { if (!answered) resolve(false); });
     rl.question(query, (ans) => {
       answered = true;
@@ -284,11 +193,6 @@ async function main() {
   let trackerNum;
   let candidateApps = apps;
 
-  // Company and tracker# must always describe the SAME row. When --tracker
-  // is given, its row is the sole source of truth for company — resolved
-  // here, atomically, rather than letting `company` drift in from a separate
-  // matchCandidates() hit further down (which searches ALL rows off the
-  // email body and has no idea a --tracker override already pinned one).
   if (trackerOverride !== undefined) {
     const trackerNumber = Number(trackerOverride.trim());
     const trackerRow = /^\d+$/.test(trackerOverride.trim()) && Number.isSafeInteger(trackerNumber)

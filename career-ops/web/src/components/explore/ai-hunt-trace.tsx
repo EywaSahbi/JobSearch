@@ -5,11 +5,6 @@ import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { AiTraceChunk } from "@/lib/explore-ai";
 
-// The live reasoning panel — a CONTAINED, polished card (apply-mode vocabulary)
-// rather than raw text on the backdrop. The narration arrives as arbitrary stream
-// deltas (split mid-word), so we COALESCE every narration chunk into one string,
-// strip markdown, and re-split into clean SENTENCES — healing the fragments. Newest
-// emphasized; auto-scrolls; co-located effect CSS (Tailwind v4 HMR gotcha).
 const STYLE = `
 .co-reason__dot{width:.5rem;height:.5rem;border-radius:50%;background:hsl(26 80% 55%);box-shadow:0 0 0 0 hsl(26 80% 55% /.5);animation:co-reason-pulse 1.5s ease-out infinite}
 .co-reason__body{-webkit-mask-image:linear-gradient(180deg,transparent,#000 16%);mask-image:linear-gradient(180deg,transparent,#000 16%)}
@@ -19,7 +14,6 @@ const STYLE = `
 @media(prefers-reduced-motion:reduce){.co-reason__dot,.co-reason__line{animation:none}}
 `;
 
-// Render **bold** spans inline without a full markdown engine.
 function renderInline(s: string) {
   return s.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
     p.startsWith("**") && p.endsWith("**") ? (
@@ -40,7 +34,6 @@ export function AiHuntTrace({ trace }: { trace: AiTraceChunk[] }) {
       .join("");
     const clean = full.replace(/`/g, "").replace(/\s+/g, " ").trim();
     if (!clean) return [];
-    // split into sentences (after . ! ? …), drop leading markdown bullets/quotes
     return clean
       .split(/(?<=[.!?…])\s+/)
       .map((s) => s.replace(/^[>\-*\s]+/, "").trim())

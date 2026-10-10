@@ -12,16 +12,11 @@ export type FollowUp = {
   status?: string;
   appliedDate?: string;
   notes?: string;
-  // Raw pass-through from followup-cadence.mjs — 'urgent'/'overdue' entries
-  // are due now, 'waiting'/'cold' are not (#86).
   urgency?: "urgent" | "overdue" | "waiting" | "cold";
   nextFollowupDate?: string | null;
   daysUntilNext?: number | null;
 };
 
-// One-tap overdue follow-up row (demand loop). "Mark followed up" appends a
-// table row to data/follow-ups.md (append-only) so the core cadence advances;
-// "Snooze" is a client dismiss. The cadence is the core's — we just surface + record.
 export function FollowUpCard({ followup, onLogged }: { followup: FollowUp; onLogged?: () => void }) {
   const [state, setState] = useState<"idle" | "logging" | "done" | "snoozed" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -42,20 +37,16 @@ export function FollowUpCard({ followup, onLogged }: { followup: FollowUp; onLog
           notes: "Followed up",
         }),
       });
-      // A 4xx/5xx means nothing was written — showing "done" would silently
-      // drop the log and the nag would just come back next visit. Surface the
-      // server's error detail so a validation reject reads differently from a
-      // transient failure (same j.error contract as next-date-dialog).
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setErrorMsg(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
-        setState("error"); // keep the row visible so the user can retry
+        setState("error");
         return;
       }
       onLogged?.();
       setState("done");
     } catch {
-      setState("error"); // keep the row visible so the user can retry
+      setState("error");
     }
   };
 

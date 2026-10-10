@@ -1,56 +1,4 @@
 #!/usr/bin/env node
-/**
- * tracker-sync-check.mjs — applications.md <-> active-interviews.md status
- * sync checker for career-ops
- *
- * The project's own rule ("any interview status change must touch both
- * data/applications.md and data/active-interviews.md") is enforced only by
- * memory/discipline today. This script cross-checks the two files for status
- * drift: a row gets scheduled/rescheduled/rejected and only one of the two
- * files is updated.
- *
- * Matching (see matchInterviewRow):
- *   1. Hard match — a `#N in tracker` reference in the active-interviews.md
- *      Notes column, looked up directly against applications.md's row number.
- *   2. Fallback fuzzy match — Company + Role text, using invite-match.mjs's
- *      normalizeCompanyName/companySimilarity (imported directly, not
- *      copied) plus role-matcher.mjs's roleFuzzyMatch (already shared with
- *      detect-reposts.mjs/dedup-tracker.mjs).
- *   Rows that can't be confidently paired land in their own "unmatched"
- *   bucket rather than being silently guessed.
- *
- * Resolution (see compareLifecycle):
- *   Tier 1 (auto-resolve) — templates/states.yml's 8 canonical states have a
- *   one-way lifecycle order: Evaluated -> Applied -> Responded -> Interview
- *   -> {Offer | Rejected | Discarded | SKIP} (the last four are terminal, no
- *   further order among them, but any of them supersedes an earlier stage).
- *   If the two files disagree and one side is strictly later-stage, that's
- *   not ambiguous — the earlier-stage file is stale. Reported as
- *   `resolution: "auto-tier1"` with the correct `suggestedStatus`.
- *
- *   Tier 2 (needs human review) — two different terminal statuses, or an
- *   unrecognized status, has no clear order. `git blame -L {line},{line}
- *   --porcelain {file}` supplies a last-modified timestamp for the relevant
- *   line in each file so a human can eyeball which is current. Reported as
- *   `resolution: "needs-review-tier2"` with both statuses and timestamps.
- *   The script does NOT write in this tier — reporting only.
- *
- * SCOPE (intentional, first version): read-only / reporting only. Tier 1 is
- * described as "auto-propagate" in the originating issue, but this script
- * does not write to applications.md — it reports the mismatch and the
- * suggested fix. Auto-write is a reasonable fast-follow once the reporting
- * mode has been used and trusted; unattended status writes on a script's very
- * first run is unnecessary risk (career-ops's `merge-tracker.mjs` gate on
- * tracker additions follows the same caution).
- *
- * Run: node tracker-sync-check.mjs              (JSON to stdout)
- *      node tracker-sync-check.mjs --summary    (human-readable table)
- *      node tracker-sync-check.mjs --apps-file path/to/applications.md
- *      node tracker-sync-check.mjs --interviews-file path/to/active-interviews.md
- *      node tracker-sync-check.mjs --self-test
- *
- * Issue #1504 — github.com/career-ops-hq/career-ops
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
@@ -71,7 +19,6 @@ const DEFAULT_INTERVIEWS_FILE = existsSync(join(DATA_ROOT, 'data/active-intervie
   ? join(DATA_ROOT, 'data/active-interviews.md')
   : join(DATA_ROOT, 'active-interviews.md');
 
-// --- CLI args ---
 const args = process.argv.slice(2);
 const summaryMode = args.includes('--summary');
 const selfTestMode = args.includes('--self-test');
@@ -84,30 +31,8 @@ const INTERVIEWS_FILE = interviewsFileIdx !== -1 && args[interviewsFileIdx + 1] 
   ? args[interviewsFileIdx + 1]
   : DEFAULT_INTERVIEWS_FILE;
 
-// --- Canonical lifecycle (templates/states.yml) ---
-// Non-terminal states are strictly ordered; terminal states have no order
-// among each other but supersede any non-terminal (earlier) state.
-//
-// Loaded from templates/states.yml at evaluation time (rather than hardcoded
-// here) so a template change — a new state, a reordered/renamed one — can't
-// silently desync from what this checker classifies. CodeRabbit flagged this
-// on PR #1505: the old hardcoded copy predated states.yml's "hired" state and
-// would have classified it as unrecognized (falling into Tier 2 "ambiguous"
-// against every other status) instead of correctly ranking it as terminal.
-//
-// states.yml has no explicit ordering field, so LIFECYCLE_ORDER is taken from
-// the file's own array order among states NOT marked `terminal: true`; the
-// terminal set and the id -> display-label map are read directly off each
-// state's `terminal` and `label` fields. See the comment above `states:` in
-// templates/states.yml for the contract.
 const STATES_FILE = join(CAREER_OPS, 'templates/states.yml');
 
-/**
- * Load the canonical lifecycle order, terminal-status set, and id -> label
- * map from templates/states.yml.
- * @param {string} statesPath - Path to templates/states.yml.
- * @returns {{ order: string[], terminal: Set<string>, labels: Record<string,string> }}
- */
 export function loadLifecycle(statesPath) {
   const doc = yaml.load(readFileSync(statesPath, 'utf-8'));
   if (!doc || !Array.isArray(doc.states)) {
@@ -128,9 +53,6 @@ export function loadLifecycle(statesPath) {
 
 const { order: LIFECYCLE_ORDER, terminal: TERMINAL_STATUSES, labels: CANONICAL_LABELS } = loadLifecycle(STATES_FILE);
 
-// Mirrors the ALIASES map in analyze-patterns.mjs / verify-pipeline.mjs —
-// applications.md status cell normalization (bold markers, trailing dates,
-// Spanish aliases from the shipped default modes).
 const STATUS_ALIASES = {
   'evaluada': 'evaluated', 'condicional': 'evaluated', 'hold': 'evaluated',
   'evaluar': 'evaluated', 'verificar': 'evaluated',
@@ -145,24 +67,12 @@ const STATUS_ALIASES = {
   'no aplicar': 'skip', 'no_aplicar': 'skip', 'monitor': 'skip', 'geo blocker': 'skip',
 };
 
-/**
- * Normalize an applications.md status cell to one of the 8 canonical ids.
- * @param {string} raw
- * @returns {string}
- */
 export function normalizeStatus(raw) {
   const clean = String(raw ?? '').replace(/\*\*/g, '').trim().toLowerCase()
     .replace(/\s+\d{4}-\d{2}-\d{2}.*$/, '').trim();
   return STATUS_ALIASES[clean] || clean;
 }
 
-// active-interviews.md's Status column tracks a per-round state (Scheduled,
-// Confirmed, Completed, Rejected, ...), not one of the 8 canonical tracker
-// states directly. Only the terminal outcomes below carry unambiguous
-// tracker-status meaning; anything else (Scheduled/Confirmed/Completed/
-// Pending/unrecognized) means the row is simply present in the live
-// interview log, which implies "at least Interview stage" — the row
-// wouldn't exist otherwise.
 const INTERVIEW_ROUND_STATUS_MAP = {
   rejected: 'rejected',
   declined: 'discarded',
@@ -174,72 +84,38 @@ const INTERVIEW_ROUND_STATUS_MAP = {
   offered: 'offer',
 };
 
-/**
- * Normalize an active-interviews.md Status cell to one of the 8 canonical
- * ids, defaulting to "interview" (presence in the live interview log implies
- * at least that stage) when the cell isn't a recognized terminal outcome.
- * @param {string} raw
- * @returns {string}
- */
 export function normalizeInterviewStatus(raw) {
   const clean = String(raw ?? '').replace(/\*\*/g, '').trim().toLowerCase();
   return INTERVIEW_ROUND_STATUS_MAP[clean] || 'interview';
 }
 
-/**
- * Compare two canonical statuses against the one-way lifecycle order.
- * Returns `{ comparable, cmp }`:
- *   - comparable=false when neither status is recognized as strictly later
- *     (two different terminal statuses, or an unrecognized status) — Tier 2.
- *   - comparable=true, cmp=0 when equal (no mismatch).
- *   - comparable=true, cmp=1 when `a` is later-stage than `b`.
- *   - comparable=true, cmp=-1 when `b` is later-stage than `a`.
- * @param {string} a - Already-normalized canonical status.
- * @param {string} b - Already-normalized canonical status.
- */
 export function compareLifecycle(a, b) {
   if (a === b) return { comparable: true, cmp: 0 };
 
   const aTerm = TERMINAL_STATUSES.has(a);
   const bTerm = TERMINAL_STATUSES.has(b);
 
-  if (aTerm && bTerm) return { comparable: false, cmp: 0 }; // two different terminal outcomes — ambiguous
+  if (aTerm && bTerm) return { comparable: false, cmp: 0 };
   if (aTerm && !bTerm) return { comparable: true, cmp: 1 };
   if (bTerm && !aTerm) return { comparable: true, cmp: -1 };
 
   const ai = LIFECYCLE_ORDER.indexOf(a);
   const bi = LIFECYCLE_ORDER.indexOf(b);
-  if (ai === -1 || bi === -1) return { comparable: false, cmp: 0 }; // unrecognized status — ambiguous
+  if (ai === -1 || bi === -1) return { comparable: false, cmp: 0 };
 
   if (ai === bi) return { comparable: true, cmp: 0 };
   return { comparable: true, cmp: ai > bi ? 1 : -1 };
 }
 
-// --- Company/role fuzzy matching ---
-// normalizeCompanyName and companySimilarity are imported directly from
-// invite-match.mjs (issue #1495 / PR #1497), which is now on main — see the
-// import at the top of this file.
-
-// A candidate needs at least this much company-name overlap (post
-// normalization) to be considered a confident fuzzy match, on top of
-// role-matcher.mjs's roleFuzzyMatch agreeing on the role text.
 const FUZZY_COMPANY_THRESHOLD = 0.5;
 
-// --- Notes-column tracker reference ---
 const TRACKER_REF_RE = /#\s*(\d+)\s+in\s+tracker/i;
 
-/**
- * Extract a `#N in tracker` reference from an active-interviews.md Notes
- * cell, if present.
- * @param {string} notes
- * @returns {number|null}
- */
 export function extractTrackerRef(notes) {
   const m = String(notes ?? '').match(TRACKER_REF_RE);
   return m ? parseInt(m[1], 10) : null;
 }
 
-// --- applications.md loader (line-number aware, for git blame) ---
 function loadTrackerWithLines(appsFile) {
   if (!existsSync(appsFile)) return [];
   const content = readFileSync(appsFile, 'utf-8');
@@ -248,20 +124,11 @@ function loadTrackerWithLines(appsFile) {
   const entries = [];
   lines.forEach((line, i) => {
     const row = parseTrackerRow(line, colmap);
-    if (row) entries.push({ ...row, lineNum: i + 1 }); // 1-based, for git blame -L
+    if (row) entries.push({ ...row, lineNum: i + 1 });
   });
   return entries;
 }
 
-// --- active-interviews.md loader (line-number aware, for git blame) ---
-//
-// Mirrors the table-scan in process-quality.mjs's parseActiveInterviews
-// (only the first contiguous pipe-table block is parsed; malformed rows are
-// dropped). Kept local — rather than calling that function and trying to
-// re-derive line numbers afterward — because this checker needs the
-// original line number of each row for `git blame -L`, which
-// parseActiveInterviews does not expose. Any change to the table-detection
-// algorithm there should be mirrored here.
 export function parseActiveInterviewsWithLines(content) {
   if (typeof content !== 'string' || !content.trim()) return [];
 
@@ -294,7 +161,7 @@ export function parseActiveInterviewsWithLines(content) {
 
     const row = {};
     header.forEach((col, i) => { row[col] = cells[i]; });
-    rows.push({ row, lineNum: idx + 1 }); // 1-based, for git blame -L
+    rows.push({ row, lineNum: idx + 1 });
   }
   return rows;
 }
@@ -304,25 +171,11 @@ function loadActiveInterviewsWithLines(interviewsFile) {
   return parseActiveInterviewsWithLines(readFileSync(interviewsFile, 'utf-8'));
 }
 
-// Case-insensitive column lookup — same rationale as process-quality.mjs's
-// findColumn: header wording ("Notes" vs "notes") is candidate-editable.
 function findColumn(row, name) {
   const key = Object.keys(row || {}).find(k => k.trim().toLowerCase() === name);
   return key ? String(row[key] ?? '') : '';
 }
 
-// --- git blame timestamp (Tier 2 tiebreak) ---
-/**
- * Last-modified timestamp (ISO 8601) for one line of a tracked file, via
- * `git blame -L {line},{line} --porcelain`. Returns null on any failure
- * (not a git repo, uncommitted file, line out of range, git not installed)
- * rather than throwing — a missing timestamp just means Tier 2 output shows
- * one side blank, not a crash.
- * @param {string} filePath - Absolute or cwd-relative path.
- * @param {number} lineNum - 1-based line number.
- * @param {string} [cwd] - Working directory for the git invocation.
- * @returns {string|null}
- */
 export function gitBlameTimestamp(filePath, lineNum, cwd = CAREER_OPS) {
   if (!Number.isInteger(lineNum) || lineNum < 1) return null;
   try {
@@ -339,24 +192,6 @@ export function gitBlameTimestamp(filePath, lineNum, cwd = CAREER_OPS) {
   }
 }
 
-// --- Row matching ---
-/**
- * Match one active-interviews.md row against applications.md entries.
- *
- * Tries the `#N in tracker` Notes reference first (hard match). Falls back
- * to fuzzy Company+Role matching when absent: a candidate is a confident
- * fuzzy match only when company-name overlap clears FUZZY_COMPANY_THRESHOLD
- * AND role-matcher.mjs's roleFuzzyMatch agrees, and exactly one such
- * candidate exists. Any ambiguity — a duplicate tracker number, or more than
- * one fuzzy candidate regardless of whether their scores tie — is treated as
- * no match, not a guess (CodeRabbit review on PR #1505: silently taking
- * `.find()`'s first result, or only bailing on a score tie, can pair an
- * interview row with the wrong application).
- *
- * @param {object} interviewRow - Plain row object (Company/Role/Notes cells).
- * @param {Array<object>} trackerEntries - From loadTrackerWithLines().
- * @returns {{ entry: object|null, method: 'tracker-ref'|'fuzzy'|'unmatched', confidence: number, note?: string }}
- */
 export function matchInterviewRow(interviewRow, trackerEntries) {
   const notes = findColumn(interviewRow, 'notes');
   const trackerRef = extractTrackerRef(notes);
@@ -394,20 +229,6 @@ export function matchInterviewRow(interviewRow, trackerEntries) {
   return { entry: candidates[0].entry, method: 'fuzzy', confidence: Math.round(candidates[0].sim * 1000) / 1000 };
 }
 
-// --- Sync report ---
-/**
- * Cross-check applications.md entries against active-interviews.md rows and
- * build the mismatch report. Pure function — no file I/O — so tests can
- * drive it directly against fixture data and an injected blame function.
- *
- * @param {Array<object>} trackerEntries - From loadTrackerWithLines() (each with `lineNum`).
- * @param {Array<{row: object, lineNum: number}>} interviewRows - From loadActiveInterviewsWithLines().
- * @param {object} [opts]
- * @param {(filePath: string, lineNum: number) => string|null} [opts.blameFn] - Injectable for tests.
- * @param {string} [opts.appsFilePath] - Path recorded on Tier 2 entries (display only).
- * @param {string} [opts.interviewsFilePath] - Path recorded on Tier 2 entries (display only).
- * @returns {{ mismatches: Array<object>, summary: object }}
- */
 export function buildSyncReport(trackerEntries, interviewRows, opts = {}) {
   const blameFn = opts.blameFn || ((filePath, lineNum) => gitBlameTimestamp(filePath, lineNum));
   const appsFilePath = opts.appsFilePath || APPS_FILE;
@@ -455,11 +276,6 @@ export function buildSyncReport(trackerEntries, interviewRows, opts = {}) {
     }
 
     if (comparable) {
-      // cmp>0 means applications.md (a) is later-stage, so active-interviews.md
-      // is the stale file; cmp<0 means the reverse. suggestedStatus is always
-      // the canonical LABEL of whichever side is later — never the raw
-      // active-interviews.md round-status text — since it's meant to be
-      // written into applications.md's Status column.
       const laterCanonical = cmp > 0 ? applicationsStatus : activeInterviewsStatus;
       const suggestedStatus = CANONICAL_LABELS[laterCanonical] || laterCanonical;
       const staleIn = cmp > 0 ? 'active-interviews.md' : 'applications.md';
@@ -478,7 +294,6 @@ export function buildSyncReport(trackerEntries, interviewRows, opts = {}) {
       continue;
     }
 
-    // Tier 2 — genuinely ambiguous. Blame both lines for a human tiebreak.
     const applicationsLastModified = blameFn(appsFilePath, entry.lineNum);
     const activeInterviewsLastModified = blameFn(interviewsFilePath, lineNum);
     results.push({
@@ -506,15 +321,6 @@ export function buildSyncReport(trackerEntries, interviewRows, opts = {}) {
   return { mismatches: results, summary };
 }
 
-/**
- * End-to-end: load both files from disk and build the sync report. This is
- * the function verify-pipeline.mjs imports rather than shelling out, so the
- * matching/resolution logic lives in exactly one place.
- * @param {object} [opts]
- * @param {string} [opts.appsFile]
- * @param {string} [opts.interviewsFile]
- * @returns {{ mismatches: Array<object>, summary: object }}
- */
 export function checkTrackerSync(opts = {}) {
   const appsFile = opts.appsFile || APPS_FILE;
   const interviewsFile = opts.interviewsFile || INTERVIEWS_FILE;
@@ -523,7 +329,6 @@ export function checkTrackerSync(opts = {}) {
   return buildSyncReport(trackerEntries, interviewRows, { appsFilePath: appsFile, interviewsFilePath: interviewsFile });
 }
 
-// --- Summary mode ---
 function printSummary(result) {
   console.log(`\n${'='.repeat(90)}`);
   console.log('  Tracker Sync Check — career-ops');
@@ -564,7 +369,6 @@ function printSummary(result) {
   console.log('\n  Read-only report — no files were modified. Fix Tier 1 rows by hand for now.\n');
 }
 
-// --- Self-test ---
 function runSelfTest() {
   let pass = 0;
   let fail = 0;
@@ -572,7 +376,6 @@ function runSelfTest() {
     if (cond) { pass += 1; } else { fail += 1; console.error(`  FAIL: ${label}`); }
   };
 
-  // --- normalizeStatus / normalizeInterviewStatus ---
   check(normalizeStatus('**Applied**') === 'applied', 'normalizeStatus strips bold markers');
   check(normalizeStatus('Rejected 2026-06-01') === 'rejected', 'normalizeStatus strips trailing date');
   check(normalizeStatus('entrevista') === 'interview', 'normalizeStatus maps Spanish alias');
@@ -580,7 +383,6 @@ function runSelfTest() {
   check(normalizeInterviewStatus('Rejected') === 'rejected', 'terminal round status maps through');
   check(normalizeInterviewStatus('Withdrawn') === 'discarded', 'withdrawn maps to discarded');
 
-  // --- compareLifecycle ---
   check(compareLifecycle('applied', 'applied').cmp === 0, 'equal statuses: no mismatch');
   check(compareLifecycle('applied', 'interview').comparable && compareLifecycle('applied', 'interview').cmp === -1, 'applied < interview (b later)');
   check(compareLifecycle('interview', 'applied').comparable && compareLifecycle('interview', 'applied').cmp === 1, 'interview > applied (a later)');
@@ -588,7 +390,6 @@ function runSelfTest() {
   check(!compareLifecycle('rejected', 'discarded').comparable, 'two different terminal statuses are not comparable (tier 2)');
   check(!compareLifecycle('applied', 'bogus-status').comparable, 'unrecognized status is not comparable (tier 2)');
 
-  // --- loadLifecycle (states.yml-derived, CodeRabbit review on PR #1505) ---
   check(LIFECYCLE_ORDER.includes('evaluated') && LIFECYCLE_ORDER.includes('interview'), 'LIFECYCLE_ORDER loaded from states.yml includes the non-terminal stages');
   check(TERMINAL_STATUSES.has('offer') && TERMINAL_STATUSES.has('rejected') && TERMINAL_STATUSES.has('discarded') && TERMINAL_STATUSES.has('skip'), 'TERMINAL_STATUSES loaded from states.yml includes the original 4 terminal states');
   check(TERMINAL_STATUSES.has('hired'), 'TERMINAL_STATUSES loaded from states.yml also picks up "hired" (would have been unrecognized under the old hardcoded copy)');
@@ -597,18 +398,11 @@ function runSelfTest() {
   check(compareLifecycle('interview', 'hired').comparable && compareLifecycle('interview', 'hired').cmp === -1, 'hired (states.yml-derived terminal) supersedes a non-terminal stage');
   check(!compareLifecycle('hired', 'rejected').comparable, 'hired vs. a different terminal status is ambiguous (tier 2), same as the pre-existing terminal states');
 
-  // --- normalizeCompanyName / companySimilarity (imported from invite-match.mjs) ---
   check(normalizeCompanyName('Acme Corp.') === 'acme', 'strips "Corp." suffix');
   check(normalizeCompanyName('Acme Technologies Inc.') === 'acme', 'strips chained suffixes');
   check(companySimilarity('acme', 'acme') === 1, 'identical strings score 1');
   check(companySimilarity('acme', 'globex') === 0, 'unrelated names score 0');
 
-  // Non-ASCII company names: the old hand-copied local implementation used a
-  // Latin-only character class ([^a-z0-9 ]) that stripped every non-Latin
-  // character, collapsing names like "Яндекс" or "アクメ株式会社" to an empty
-  // string and sending matchInterviewRow() straight to unmatched. The real
-  // invite-match.mjs implementation uses \p{L}\p{M}\p{N} (any script) instead,
-  // so the normalized key survives and a same-company match succeeds.
   check(normalizeCompanyName('Яндекс') === 'яндекс', 'non-ASCII (Cyrillic) company name survives normalization instead of collapsing to empty');
   check(companySimilarity(normalizeCompanyName('Яндекс'), normalizeCompanyName('Яндекс')) === 1, 'identical non-ASCII company names still score a perfect match');
   const nonAsciiEntries = [
@@ -620,15 +414,9 @@ function runSelfTest() {
   );
   check(nonAsciiResult.entry !== null && nonAsciiResult.entry.num === 401, 'non-ASCII company name matches via matchInterviewRow instead of falling to unmatched (regression for the hand-copied Latin-only normalizer)');
 
-  // --- extractTrackerRef ---
   check(extractTrackerRef('Confirmed for Tuesday. #42 in tracker.') === 42, 'extracts "#N in tracker" reference');
   check(extractTrackerRef('No reference here') === null, 'returns null when no reference present');
 
-  // --- matchInterviewRow ambiguity handling (CodeRabbit review on PR #1505) ---
-  // Duplicate tracker numbers: a `#N in tracker` Notes reference must not
-  // silently resolve to trackerEntries.find()'s first hit when two rows
-  // share the same number (a real applications.md corruption case) — the
-  // match should bail to unmatched instead of guessing which row is right.
   const dupNumEntries = [
     { num: 201, company: 'Acme Corp', role: 'Backend Engineer', status: 'Applied', lineNum: 1 },
     { num: 201, company: 'Acme Holdings', role: 'Backend Engineer II', status: 'Applied', lineNum: 2 },
@@ -641,11 +429,6 @@ function runSelfTest() {
   check(dupNumResult.method === 'unmatched', 'duplicate tracker numbers: matchInterviewRow reports unmatched, not the first find() hit');
   check(/2 rows use that number/.test(dupNumResult.note || ''), 'duplicate tracker numbers: note explains the ambiguity');
 
-  // Multiple non-tied fuzzy candidates: two tracker rows both clear
-  // FUZZY_COMPANY_THRESHOLD and roleFuzzyMatch for the same interview row,
-  // but with different (non-tied) similarity scores. Bailing only on an
-  // exact score tie would let the higher-scoring one win by default; the
-  // fix requires exactly one candidate, full stop.
   const nonTiedEntries = [
     { num: 301, company: 'Acme Partners', role: 'Program Manager', status: 'Applied', lineNum: 1 },
     { num: 302, company: 'Acme Partners Group Studio', role: 'Program Manager', status: 'Applied', lineNum: 2 },
@@ -661,7 +444,6 @@ function runSelfTest() {
   check(nonTiedResult.method === 'unmatched', 'multiple non-tied fuzzy candidates: matchInterviewRow reports unmatched, not fuzzy');
   check(/Ambiguous fuzzy match/.test(nonTiedResult.note || ''), 'multiple non-tied fuzzy candidates: note flags the ambiguity');
 
-  // --- parseActiveInterviewsWithLines (line-number tracking) ---
   const md = [
     '# Active Interviews',
     '',
@@ -673,8 +455,6 @@ function runSelfTest() {
   check(parsedWithLines.length === 1, 'parses one data row from a small fixture table');
   check(parsedWithLines[0]?.lineNum === 5, 'reports the correct 1-based source line number for the data row');
 
-  // --- End-to-end fixtures: buildSyncReport ---
-  // Fixture tracker entries (mirrors applications.md's parsed row shape).
   const trackerEntries = [
     { num: 101, date: '2026-06-01', company: 'Acme Corp', role: 'Backend Engineer', score: '4.2/5', status: 'Applied', pdf: '✅', report: '[101](reports/101-acme-2026-06-01.md)', notes: '', lineNum: 10 },
     { num: 102, date: '2026-05-01', company: 'Northwind Traders', role: 'Program Coordinator', score: '3.9/5', status: 'Discarded', pdf: '✅', report: '[102](reports/102-northwind-2026-05-01.md)', notes: '', lineNum: 11 },
@@ -682,32 +462,14 @@ function runSelfTest() {
     { num: 104, date: '2026-03-15', company: 'Contoso Logistics', role: 'Training Specialist', score: '4.1/5', status: 'Interview', pdf: '✅', report: '[104](reports/104-contoso-2026-03-15.md)', notes: '', lineNum: 13 },
   ];
 
-  // Row A — matched via #N in tracker reference; clean tier-1 auto-resolve:
-  // applications.md still says "Applied" but the live interview log shows
-  // the round was Rejected — active-interviews.md is later-stage, so
-  // applications.md is the stale file.
   const rowA = { row: { Company: 'Acme Corp', Role: 'Backend Engineer', Round: 'Round 1', 'Date/Time': '2026-06-08', Interviewer: 'Panel', Status: 'Rejected', Notes: '#101 in tracker' }, lineNum: 20 };
 
-  // Row B — tier-2 ambiguous: applications.md says Discarded, the interview
-  // log's round status says Rejected — two different terminal outcomes with
-  // no clear order between them.
   const rowB = { row: { Company: 'Northwind Traders', Role: 'Program Coordinator', Round: 'Final', 'Date/Time': '2026-05-20', Interviewer: 'HM', Status: 'Rejected', Notes: '#102 in tracker' }, lineNum: 21 };
 
-  // Row C — matched via fuzzy Company+Role fallback (no tracker reference;
-  // company spelled slightly differently ["Inc" suffix], role phrased
-  // slightly differently but role-matcher.mjs's roleFuzzyMatch still agrees
-  // on 2+ discriminating tokens — "(Hybrid)" tokenizes to a stopword, unlike
-  // a real specialization suffix, so it doesn't split the titles apart).
-  // Also doubles as a tier-1 case: the tracker still shows "Applied" but the
-  // live interview log implies Interview stage.
   const rowC = { row: { Company: 'Fabrikam Health Inc', Role: 'HR Business Partner (Hybrid)', Round: 'Prescreen', 'Date/Time': '2026-04-12', Interviewer: 'Recruiter', Status: 'Scheduled', Notes: 'clean process' }, lineNum: 22 };
 
-  // Row D — unmatched/low-confidence: no tracker reference, and the company
-  // name doesn't resemble anything in the fixture tracker.
   const rowD = { row: { Company: 'Totally Unrelated Ventures', Role: 'Mystery Role', Round: 'Prescreen', 'Date/Time': '2026-07-01', Interviewer: 'Someone', Status: 'Scheduled', Notes: '' }, lineNum: 23 };
 
-  // Row E — matched via #N reference, statuses agree (no mismatch): confirms
-  // the "clean, nothing to report" path also works end-to-end.
   const rowE = { row: { Company: 'Contoso Logistics', Role: 'Training Specialist', Round: 'Round 2', 'Date/Time': '2026-03-20', Interviewer: 'Panel', Status: 'Scheduled', Notes: '#104 in tracker' }, lineNum: 24 };
 
   const fakeBlame = (filePath, lineNum) => `2026-0${lineNum % 9 || 1}-01T00:00:00.000Z`;
@@ -754,7 +516,6 @@ function runSelfTest() {
   check(report.summary.matchedNoMismatch === 1, 'summary counts exactly one matched-no-mismatch result');
   check(report.summary.total === 5, 'summary total matches the number of active-interviews.md rows processed');
 
-  // --- No active-interviews.md rows at all -> empty, no crash ---
   const emptyReport = buildSyncReport(trackerEntries, [], { blameFn: fakeBlame });
   check(emptyReport.mismatches.length === 0, 'empty interview-row input returns no mismatches');
   check(emptyReport.summary.total === 0, 'empty interview-row input reports total=0');
@@ -763,7 +524,6 @@ function runSelfTest() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-// --- Run (CLI only; guarded so the module is safely importable for tests) ---
 if (isMainModule(import.meta.url)) {
   if (selfTestMode) {
     runSelfTest();

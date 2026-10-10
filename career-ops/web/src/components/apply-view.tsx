@@ -9,8 +9,6 @@ import type { ApplyField } from "@/lib/apply/extract";
 import { cn } from "@/lib/cn";
 import { Fragment, useEffect, useRef, useState } from "react";
 
-// Co-located UI animations (HMR-proof vs Tailwind v4's stale globals.css):
-// field cascade-in, per-field "just drafted" flash, skeleton shimmer, hero orb.
 const STYLE = `
 @keyframes co-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 .co-rise{animation:co-rise .55s cubic-bezier(.22,1,.36,1) both}
@@ -25,10 +23,6 @@ const STYLE = `
 @media (prefers-reduced-motion: reduce){.co-rise,.co-flash,.co-skel,.co-orb,.co-ring{animation:none}}
 `;
 
-// The form-proxy UI: the real employer form is opened headlessly on the user's
-// machine and re-rendered here in plain language, pre-filled from their CV. The
-// user verifies every answer, then we fill the real form behind the scenes and
-// bring it to the front for them to submit. We never submit.
 export function ApplyView() {
   const a = useApply();
   const [input, setInput] = useState("");
@@ -66,8 +60,6 @@ export function ApplyView() {
             </div>
           </div>
         )}
-        {/* A session that failed still has a row and an origin behind it, so the
-            way back and the way to record it must survive the failure. */}
         {a.status === "error" && <ApplyExitBar />}
       </div>
     );
@@ -85,7 +77,6 @@ export function ApplyView() {
     <div className="mx-auto max-w-2xl">
       <style>{STYLE}</style>
 
-      {/* journey: Read → Draft → Review */}
       <PhaseRail phase={phase} />
 
       {!busy && (
@@ -97,7 +88,6 @@ export function ApplyView() {
         </div>
       )}
 
-      {/* opening: big magic hero + skeleton fields (no layout jump when real ones arrive) */}
       {opening && (
         <>
           <ProcessingHero title="Reading your form…" subtitle="Opening the real application on your machine and reading every field." />
@@ -105,7 +95,6 @@ export function ApplyView() {
         </>
       )}
 
-      {/* driving: watch the agent reach the form live (it navigates, never submits) */}
       {driving && <DrivePanel steps={a.driveSteps} />}
 
       {a.error && (
@@ -117,7 +106,6 @@ export function ApplyView() {
       {!busy && (
         <div className="co-rise">
           <ApplyIssues issues={a.issues} />
-          {/* drafting banner while the planner writes the answers */}
           {prefilling && (
             <div className="mb-4 flex items-center gap-3 rounded-xl border border-brand/30 bg-brand-soft/60 px-4 py-3 backdrop-blur-sm">
               <span className="relative grid size-8 shrink-0 place-items-center">
@@ -164,8 +152,6 @@ export function ApplyView() {
             </details>
           )}
 
-          {/* the questions — float on the blurred form image, cascade in, each
-              flashes brand-orange the instant its drafted answer lands */}
           <div className="space-y-1 rounded-2xl border border-border/70 bg-surface/80 p-2 shadow-2xl shadow-black/10 backdrop-blur-md sm:p-3">
             {a.fields.map((f, i) => (
               <div key={f.id} className="co-rise rounded-xl px-3 py-2.5" style={{ animationDelay: `${Math.min(i * 45, 700)}ms` }}>
@@ -203,7 +189,6 @@ export function ApplyView() {
             </p>
           </div>
 
-          {/* agent filling the form live (full-agent escalation) */}
           {filling && a.driveSteps.length > 0 && <div className="mt-6"><DrivePanel steps={a.driveSteps} filling /></div>}
 
           {(filling || done) && a.steps.length > 0 && (
@@ -236,29 +221,17 @@ export function ApplyView() {
         </div>
       )}
 
-      {/* the way out: back out of the form, or record that you sent it */}
       <ApplyExitBar />
     </div>
   );
 }
 
-// ── Leaving the page: back out, or record that you applied ─────────────────
-// You submit the real form yourself on the employer's site, so the moment you
-// apply happens outside career-ops — this is where you tell the tracker about
-// it. The write goes through /api/status, the same route the tracker's own
-// status control uses, so there is only ever one writer to the table.
 function ApplyExitBar() {
   const a = useApply();
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [marking, setMarking] = useState(false);
   const [error, setError] = useState("");
-  // The status write outlives this bar when the user navigates while it is in
-  // flight. The write still lands; what must not happen is dragging them back
-  // off whatever page they moved on to once it returns.
-  // Set on mount as well as cleared on unmount: React re-runs an effect after
-  // its cleanup (StrictMode does this on every mount in development), so a
-  // cleanup-only flag latches false while the bar is still on screen.
   const onPage = useRef(true);
   useEffect(() => {
     onPage.current = true;
@@ -267,16 +240,6 @@ function ApplyExitBar() {
     };
   }, []);
 
-  // reset() also closes the headless form session on the user's machine —
-  // navigating away without it strands the browser this page opened. The
-  // destination is read before reset() clears the origin it comes from.
-  //
-  // The staleness check comes FIRST, before reset(). By the time a late status
-  // response gets here the user may have started a different application, and
-  // reset() is not addressed to a particular session: it would close whichever
-  // one is open now, taking a form the user is in the middle of with it.
-  // Leaving that session alone is the same outcome as navigating away from the
-  // page by any other route.
   function leave() {
     if (!onPage.current) return;
     const target = resolveReturnPath(a.from);
@@ -296,17 +259,14 @@ function ApplyExitBar() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        if (!onPage.current) return; // moved on already; the row is unchanged
+        if (!onPage.current) return;
         setError(d.error || "Couldn't mark it applied — the tracker row is unchanged.");
         setMarking(false);
         return;
       }
       leave();
     } catch {
-      if (!onPage.current) return; // moved on already
-      // The route writes the tracker before it answers, so a connection that
-      // drops on the way back leaves the write's fate genuinely unknown —
-      // claiming the row is untouched here would be a guess.
+      if (!onPage.current) return;
       setError("Couldn't confirm the update — check the row in your tracker before relying on it.");
       setMarking(false);
     }
@@ -362,7 +322,6 @@ function ApplyExitBar() {
   );
 }
 
-// ── Watch the agent reach the form live (it navigates, never submits) ───────
 const DRIVE_VERB: Record<string, string> = { click: "Clicked", type: "Typed into", select: "Selected", scroll: "Scrolled", "parse-error": "Thinking…", stuck: "Stuck", reached_form: "Reached the form" };
 function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean }) {
   const last = steps[steps.length - 1];
@@ -390,10 +349,6 @@ function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean 
               <span className="grid size-5 shrink-0 place-items-center rounded-full bg-brand-soft text-[10px] font-semibold text-brand">{s.turn}</span>
               <span className="shrink-0 font-medium">{DRIVE_VERB[s.action] ?? s.action}</span>
               <span className="truncate text-faint">{s.detail}</span>
-              {/* `submit-control` is the guard doing its job (good news, distinct
-                  color); `not-offered`/`gone` are the page moving under us
-                  (a caution, not a protection) — same amber as before this
-                  field had a consumer at all. */}
               {s.note &&
                 (s.refusal === "submit-control" ? (
                   <span className="inline-flex shrink-0 items-center gap-1 text-emerald-700 dark:text-emerald-400">
@@ -410,7 +365,6 @@ function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean 
   );
 }
 
-// ── Issues the interpreter surfaced — never fail mute ───────────────────────
 function ApplyIssues({ issues }: { issues: ApplyIssue[] }) {
   if (!issues.length) return null;
   const warns = issues.filter((i) => i.level === "warn" || i.level === "block");
@@ -440,7 +394,6 @@ function ApplyIssues({ issues }: { issues: ApplyIssue[] }) {
   );
 }
 
-// ── Journey rail: Reading → Drafting → Review ───────────────────────────────
 function PhaseRail({ phase }: { phase: number }) {
   const steps = [
     { label: "Reading form", icon: ScanLine },
@@ -480,8 +433,6 @@ function PhaseRail({ phase }: { phase: number }) {
   );
 }
 
-// Honest, calming rotation of what the planner is actually doing, so the (~1-2min)
-// draft doesn't feel stalled. Crossfades every ~2.8s.
 const DRAFT_MSGS = [
   "Reading your CV…",
   "Reading the role and company…",
@@ -544,13 +495,11 @@ function FieldRow({
   drafting: boolean;
   onChange: (v: string) => void;
 }) {
-  // Flash brand-orange the moment a drafted answer first lands (empty → value).
   const prev = useRef(value);
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (!prev.current && value) {
       setFlash(true);
-      // outlast the staggered animation-delay (≤900ms) + the 1.15s flash
       const t = setTimeout(() => setFlash(false), 2300);
       prev.current = value;
       return () => clearTimeout(t);
@@ -562,8 +511,6 @@ function FieldRow({
     "w-full rounded-lg border bg-surface/60 px-3 py-2 text-sm outline-none transition focus:border-brand/60 focus:ring-2 focus:ring-brand/20",
     needs ? "border-amber-500/50" : "border-border",
   );
-  // While the planner is drafting, an empty answer shimmers like it's being
-  // written; it flashes into the real value the instant the draft lands.
   const writing = drafting && !value && f.type !== "file";
   return (
     <div className={flash ? "co-flash" : ""} style={flash ? { animationDelay: `${Math.min(index * 70, 900)}ms` } : undefined}>

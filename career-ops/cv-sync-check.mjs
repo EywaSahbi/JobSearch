@@ -1,15 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * cv-sync-check.mjs — Validates that the career-ops setup is consistent.
- *
- * Checks:
- * 1. cv.md exists
- * 2. config/profile.yml exists and has required fields
- * 3. No hardcoded metrics in _shared.md or batch/batch-prompt.md
- * 4. article-digest.md freshness (if exists)
- */
-
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -19,15 +9,6 @@ import { validateFlags } from './lib/cli-flags.mjs';
 
 const CODE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
-
-// ── CLI flags + help ────────────────────────────────────────────────
-//
-// docs/SCRIPTS.md lists `node cv-sync-check.mjs` as a runnable command, but the
-// script read no arguments at all: a mistyped flag was ignored and the checks
-// ran anyway, so `--hlep` looked like a successful run of whatever the caller
-// meant (#3565). KNOWN_FLAGS is exactly --help/-h because that is every flag
-// this file parses. Unrecognized flags exit 1 naming the flag; --help/-h print
-// USAGE and exit 0.
 
 const KNOWN_FLAGS = ['--help', '-h'];
 
@@ -40,7 +21,6 @@ validateFlags(process.argv.slice(2), KNOWN_FLAGS, USAGE);
 const warnings = [];
 const errors = [];
 
-// 1. Check cv.md exists
 const cvPath = join(DATA_ROOT, 'cv.md');
 if (!existsSync(cvPath)) {
   errors.push('cv.md not found in project root. Create it with your CV in markdown format.');
@@ -51,7 +31,6 @@ if (!existsSync(cvPath)) {
   }
 }
 
-// 2. Check profile.yml exists
 const profilePath = join(DATA_ROOT, 'config', 'profile.yml');
 if (!existsSync(profilePath)) {
   errors.push('config/profile.yml not found. Copy from config/profile.example.yml and fill in your details.');
@@ -66,21 +45,18 @@ if (!existsSync(profilePath)) {
   }
 }
 
-// 3. Check for hardcoded metrics in prompt files
 const filesToCheck = [
   { path: join(CODE_ROOT, 'modes', '_shared.md'), name: '_shared.md' },
   { path: join(CODE_ROOT, 'modes', '_writing.md'), name: '_writing.md' },
   { path: join(CODE_ROOT, 'batch', 'batch-prompt.md'), name: 'batch-prompt.md' },
 ];
 
-// Pattern: numbers that look like hardcoded metrics (e.g., "170+ hours", "90% self-service")
 const metricPattern = /\b\d{2,4}\+?\s*(hours?|%|evals?|layers?|tests?|fields?|bases?)\b/gi;
 
 for (const { path, name } of filesToCheck) {
   if (!existsSync(path)) continue;
   const content = readFileSync(path, 'utf-8');
 
-  // Skip lines that are clearly instructions (contain "NEVER hardcode" etc.)
   const lines = content.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -92,7 +68,6 @@ for (const { path, name } of filesToCheck) {
   }
 }
 
-// 4. Check article-digest.md freshness
 const digestPath = join(DATA_ROOT, 'article-digest.md');
 if (existsSync(digestPath)) {
   const stats = statSync(digestPath);
@@ -102,7 +77,6 @@ if (existsSync(digestPath)) {
   }
 }
 
-// Output results
 console.log('\n=== career-ops sync check ===\n');
 
 if (errors.length === 0 && warnings.length === 0) {

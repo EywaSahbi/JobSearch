@@ -13,11 +13,6 @@ import { instrumentSerif } from "@/lib/fonts";
 import { NAV_ITEMS, isActivePath } from "@/lib/nav-items";
 import { useJobs } from "@/components/jobs/job-store";
 
-// Mobile navigation (< md): a glass top bar + a right-side slide-over drawer that
-// mirrors the desktop sidebar (nav + workers + usage + theme). Premium details:
-// spring slide, scrim blur, swipe-to-close, body scroll-lock, Escape, focus move,
-// safe-area insets (notch / home bar), worker pulse, reduced-motion aware.
-// Motion/inset CSS is co-located (env() insets + the Tailwind v4 stale-CSS HMR gotcha).
 const STYLE = `
 /* Solid bg == the page bg == the theme-color meta, so Safari's top bar / status
    strip / Dynamic Island and the header read as ONE continuous surface (seamless
@@ -41,12 +36,10 @@ export function MobileNav() {
   const { jobs } = useJobs();
   const running = jobs.filter((j) => j.status === "running").length;
 
-  // Close on route change.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
 
-  // Scroll-lock + Escape + move focus into the drawer while open.
   useEffect(() => {
     if (!open) return;
     const prevOverflow = document.body.style.overflow;
@@ -56,7 +49,6 @@ export function MobileNav() {
         setOpen(false);
         return;
       }
-      // Trap Tab focus within the drawer while open.
       if (e.key === "Tab" && panelRef.current) {
         const f = panelRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
         if (f.length === 0) return;
@@ -80,7 +72,6 @@ export function MobileNav() {
     };
   }, [open]);
 
-  // Swipe-right-to-close.
   const drag = useRef({ x0: 0, dx: 0, active: false });
   const onTouchStart = (e: React.TouchEvent) => {
     drag.current = { x0: e.touches[0].clientX, dx: 0, active: true };

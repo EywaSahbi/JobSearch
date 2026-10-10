@@ -16,11 +16,6 @@ import { FollowupsDueSectionSkeleton } from "@/components/page-loading-skeletons
 import { scoreNum } from "@/lib/format";
 import { pickAwaitingDecision } from "@/lib/home/awaiting.mjs";
 
-// The retention "Today": a dual-loop action queue (the maintainer's
-// "N new matches this week · M follow-ups due"). SUPPLY loop = fresh free-scan
-// matches (zero tokens, /api/whats-new); DEMAND loop = follow-ups due
-// (/api/followups). Each item one-tap actionable. Home stays a VIEW over the
-// canonical files — every action dispatches a real registry action / route.
 export function TodayDashboard({
   applications,
   inbox,
@@ -55,13 +50,7 @@ export function TodayDashboard({
       })
       .then((d) => {
         if (!isLatest()) return;
-        // The cadence route reports engine failures as HTTP 200 with
-        // available:false; that is unavailable, not an empty action queue.
         if (d.available === false) throw new Error("Follow-ups unavailable");
-        // /api/followups already filters to urgency 'urgent'/'overdue' — due
-        // now, never 'waiting'/'cold' (#86). Both count toward "due"; a
-        // missing metadata.overdue must read as 0 due, never as "every entry
-        // is overdue" (the old `?? d.entries?.length` fallback).
         setFollowups(Array.isArray(d.entries) ? d.entries : []);
         setOverdue((d.metadata?.overdue ?? 0) + (d.metadata?.urgent ?? 0));
         setNextUpcoming(d.nextUpcoming ?? null);
@@ -88,9 +77,6 @@ export function TodayDashboard({
 
   useEffect(() => {
     refetch();
-    // A worker (evaluate/pdf) just wrote a real tracker row — refresh the server
-    // snapshot (applications/inbox props) + the client loops so the freshly-scored
-    // role appears in "Awaiting your decision" without a manual reload.
     const onDone = () => {
       router.refresh();
       refetch();
@@ -102,9 +88,6 @@ export function TodayDashboard({
     };
   }, [refetch, router]);
 
-  // Awaiting decision: scored (Evaluated) but no terminal status yet. The
-  // ordering lives in lib/home/awaiting.mjs so it can be tested — see the file
-  // for why "first six in the array" was a bug waiting for #3529.
   const awaiting = useMemo(() => pickAwaitingDecision(applications, scoreNum), [applications]);
 
   const newThisWeek = freshCount;
@@ -117,7 +100,6 @@ export function TodayDashboard({
     <div className="mx-auto max-w-5xl px-6 py-10 max-sm:pb-24">
       <section className="dot-bg relative overflow-hidden rounded-2xl border border-border bg-surface/40 px-7 py-10 md:px-10 md:py-12">
         <HeroGlow />
-        {/* Readability scrim between the animated glow (z-0) and the copy (z-10). */}
         <div aria-hidden className="pointer-events-none absolute inset-0 z-[1] bg-surface/55 backdrop-blur-[2px] dark:bg-background/45" />
         <div className="relative z-10">
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted">
@@ -168,7 +150,6 @@ export function TodayDashboard({
         </div>
       )}
 
-      {/* A. Follow-ups due (demand loop) */}
       {followupsLoading ? (
         <FollowupsDueSectionSkeleton />
       ) : followupsError ? (
@@ -177,17 +158,12 @@ export function TodayDashboard({
         <Section icon={Bell} title="Follow-ups due" hint="Keep your applications alive — a nudge beats silence">
           <div className="grid gap-2.5">
             {followups.map((f) => (
-              // Refetch (not a local decrement) so the parent's followups/nextUpcoming
-              // stay in sync with the server — logging the LAST due item must flip this
-              // section over to "Next follow-up" instead of leaving it empty.
               <FollowUpCard key={`${f.num}-${f.company}`} followup={f} onLogged={refetch} />
             ))}
           </div>
         </Section>
       ) : (
         nextUpcoming && (
-          // Nothing is due — say so honestly instead of an empty "due" block,
-          // but still surface what's next so the queue isn't silent (#86).
           <Section icon={Bell} title="Next follow-up" hint="Nothing due yet">
             <p className="text-sm text-muted">
               <span className="font-medium text-foreground">{nextUpcoming.company}</span>
@@ -198,7 +174,6 @@ export function TodayDashboard({
         )
       )}
 
-      {/* B. Awaiting your decision */}
       {awaiting.length > 0 && (
         <Section icon={CircleHelp} title="Awaiting your decision" hint="Scored — apply or skip">
           <div className="grid gap-2.5 sm:grid-cols-2">
@@ -209,7 +184,6 @@ export function TodayDashboard({
         </Section>
       )}
 
-      {/* C. Fresh matches this week (supply loop) */}
       {!freshError && fresh.length > 0 && (
         <Section icon={Sparkles} title="Fresh matches this week" hint="Found by your free scans · 0 tokens">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

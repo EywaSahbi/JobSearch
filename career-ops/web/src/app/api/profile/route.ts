@@ -9,12 +9,6 @@ import { isMapping } from "@/lib/portals-config.mjs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Merge-safe writer for config/profile.yml (a USER-LAYER file — DATA_CONTRACT:
-// never clobber the user's archetypes/narrative/proof-points). On first create we
-// seed from config/profile.example.yml; on an existing file we deep-merge ONLY the
-// proposed keys, write atomically (temp + rename), and only ever via the confirm-
-// gated setProfile action. The web orchestrates the real file — no parallel store.
-
 type ProfilePatch = {
   name?: string;
   email?: string;
@@ -30,7 +24,6 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Deep-merge src onto dst (objects recurse; arrays/scalars replace). Non-mutating. */
 function deepMerge(dst: unknown, src: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = isObj(dst) ? { ...dst } : {};
   for (const [k, v] of Object.entries(src)) {
@@ -52,8 +45,6 @@ function patchToProfile(p: ProfilePatch): Record<string, unknown> {
   if (p.currency) comp.currency = p.currency;
   if (p.remote) comp.location_flexibility = p.remote;
   if (Object.keys(comp).length) out.compensation = comp;
-  // seniority intentionally not written (no canonical home in profile.yml);
-  // archetypes/narrative live in modes/_profile.md — this writer never touches them.
   return out;
 }
 
@@ -73,9 +64,6 @@ export async function POST(req: Request) {
   const file = path.join(root, "config", "profile.yml");
   let base: Record<string, unknown> = {};
   let seeded = false;
-  // DATA-LOSS GUARD (maintainer, bug-class #649/#704/#920/#958): distinguish
-  // "no profile yet" (safe to seed from the example) from "profile EXISTS but is
-  // malformed" (NEVER overwrite — that would silently destroy the user's data).
   if (!fs.existsSync(file)) {
     try {
       base = (yaml.load(fs.readFileSync(path.join(root, "config", "profile.example.yml"), "utf8")) as Record<string, unknown>) || {};
@@ -90,8 +78,6 @@ export async function POST(req: Request) {
     } catch {
       return Response.json({ error: "config/profile.yml exists but is not valid YAML — refusing to overwrite it." }, { status: 409 });
     }
-    // Valid YAML can still be a list, scalar, or null. Treating those as an
-    // empty profile would discard the existing document on this partial write.
     if (!isMapping(parsed)) {
       return Response.json({ error: "config/profile.yml must contain named settings, not a list or single value. Refusing to overwrite it." }, { status: 409 });
     }
@@ -100,8 +86,6 @@ export async function POST(req: Request) {
 
   const merged = deepMerge(base, proposed);
   try {
-    // Back up the prior profile before the first normalized write (yaml.dump
-    // reformats — comments are not preserved; the .bak is the safety net).
     atomicWriteWithBackup(file, yaml.dump(merged, { lineWidth: 100, noRefs: true }));
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "write failed" }, { status: 500 });

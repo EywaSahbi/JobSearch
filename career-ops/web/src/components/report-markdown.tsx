@@ -97,7 +97,6 @@ function StarCards({ header, rows }: { header: string[]; rows: string[][] }) {
   );
 }
 
-/** GFM report body: STAR+R grids become cards; Fit cells become tone badges. */
 export function ReportMarkdown({ children }: { children: string }) {
   const chunks = splitPipeTables(children);
   return (

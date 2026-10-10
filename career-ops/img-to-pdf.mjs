@@ -1,29 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * img-to-pdf.mjs — Screenshot/image -> single-page PDF via Playwright
- *
- * Some ATS upload fields demand a PDF specifically and reject images
- * (screenshots of an offer, a portal error, a badge, etc). This wraps
- * the image in a minimal HTML page and renders it with the same
- * Playwright/Chromium engine generate-pdf.mjs already uses for CVs —
- * zero new npm dependencies.
- *
- * Deliberately standalone: it does NOT go through generate-pdf.mjs, so
- * it is never subject to that script's cv.md section-order validation
- * (which only makes sense for the CV HTML template).
- *
- * MVP scope: one image -> one PDF page. Multi-image/multi-page is an
- * explicit non-goal for v1 (see issue #1730).
- *
- * Usage:
- *   node img-to-pdf.mjs <image-path> <output-path> [--force]
- *   node img-to-pdf.mjs --self-test
- *
- * --force is required to overwrite an existing output file; without it
- * the script errors out rather than silently clobbering a PDF.
- */
-
 import { chromium } from 'playwright';
 import { resolve, dirname, extname } from 'path';
 import { readFile, writeFile, mkdir } from 'fs/promises';
@@ -40,21 +16,11 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
 };
 
-/**
- * @param {string} imagePath
- * @returns {string|null} MIME type, or null if the extension is unsupported.
- */
 export function detectMimeType(imagePath) {
   const ext = extname(imagePath).toLowerCase();
   return MIME_TYPES[ext] || null;
 }
 
-/**
- * Parse CLI args into { inputPath, outputPath, force, help, error }.
- * Pure and side-effect free so it's testable without touching the filesystem.
- *
- * @param {string[]} args
- */
 export function parseArgs(args) {
   let inputPath = '';
   let outputPath = '';
@@ -92,15 +58,6 @@ function usage() {
   console.log('MVP scope: one image in, one PDF page out. Multi-image/multi-page is not supported.');
 }
 
-/**
- * Render a single image file to a single-page PDF matching the image's own
- * pixel dimensions (at 96 CSS px/inch), so the output is neither cropped
- * nor padded with blank margins.
- *
- * @param {string} inputPath - Absolute path to the source image.
- * @param {string} outputPath - Absolute path to write the PDF to.
- * @returns {Promise<{outputPath: string, size: number, width: number, height: number}>}
- */
 export async function convertImageToPdf(inputPath, outputPath) {
   const mimeType = detectMimeType(inputPath);
   if (!mimeType) {
@@ -145,9 +102,6 @@ export async function convertImageToPdf(inputPath, outputPath) {
       return { width: img.naturalWidth, height: img.naturalHeight };
     });
 
-    // 96 CSS px per inch is the standard browser/Playwright conversion —
-    // sizing the PDF page to the image's own dimensions means the image
-    // fills the page exactly: no cropping, no blank margins.
     const widthIn = width / 96;
     const heightIn = height / 96;
 
@@ -171,7 +125,6 @@ function selfTest() {
     if (!cond) { console.error(`SELF-TEST FAIL: ${msg}`); process.exit(1); }
   };
 
-  // detectMimeType
   assert(detectMimeType('screenshot.png') === 'image/png', 'png detected');
   assert(detectMimeType('a/b/c.JPG') === 'image/jpeg', 'uppercase JPG detected');
   assert(detectMimeType('x.jpeg') === 'image/jpeg', 'jpeg detected');
@@ -182,7 +135,6 @@ function selfTest() {
   assert(detectMimeType('x.pdf') === null, 'unsupported extension -> null');
   assert(detectMimeType('noext') === null, 'no extension -> null');
 
-  // parseArgs
   const a1 = parseArgs(['in.png', 'out.pdf']);
   assert(a1.inputPath === 'in.png' && a1.outputPath === 'out.pdf' && a1.force === false && a1.error === null, 'basic positional args');
 

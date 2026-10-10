@@ -1,38 +1,11 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
 import { decodeEntities } from './_html-entities.mjs';
 
-// softgarden provider — the hosted job widgets at
-// https://{tenant}.softgarden.io/{lang}/widgets/jobs (e.g. RENK:
-// renk-group.softgarden.io/de/widgets/jobs). Companies embed this Wicket page
-// as an iframe on their branded career sites; fetched directly it is a plain
-// server-rendered document that lists EVERY posting — no auth, no JS, no
-// pagination observed (filtering happens client-side via AJAX we don't need).
-//
-// One posting renders as:
-//   <div class="matchElement" id="job_id_{id}">
-//     <div class="matchValue date">04.07.26</div>
-//     <div class="matchValue title">
-//       <a href="../../job/{id}/{slug}?jobDbPVId=…&l=de">{Title}</a></div>
-//     <div class="matchValue audience">…</div>
-//     <div class="matchValue ProjectGeoLocationCity">…
-//       <span class="location-view-item">{City}</span>…</div>
-//   </div>
-//
-// The href is relative to the /{lang}/widgets/ path — we resolve it against
-// the widget URL so it lands on {origin}/job/{id}/{slug}?… (verified live).
-// The date is the locale's short form (de: D.M.YY with dots; en variants use
-// slashes M/D/YY) — same heuristic as the successfactors CSB parser.
+const MAX_JOBS = 1000;
 
-const MAX_JOBS = 1000; // cap postings taken from one widget page
-
-/** @param {string} s */
 function clean(s) {
   return decodeEntities(s.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-/** Resolve the widget URL: explicit /widgets/jobs URLs pass through, any other
- * *.softgarden.io URL defaults to the German jobs widget. */
 export function resolveWidgetUrl(entry) {
   const raw = entry.api || entry.careers_url || '';
   let u;
@@ -49,10 +22,6 @@ export function resolveWidgetUrl(entry) {
   return `${u.origin}/${lang}/widgets/jobs`;
 }
 
-// Widget dates are the locale's SHORT form: de widgets emit D.M.YY with dots,
-// en variants M/D/YY with slashes. Separator infers the field order; 2-digit
-// years are 20YY. Junk → undefined ("unknown date", never a bogus timestamp).
-/** @param {unknown} raw @returns {number | undefined} */
 export function parseSoftgardenDate(raw) {
   if (typeof raw !== 'string') return undefined;
   const s = raw.trim();
@@ -60,9 +29,9 @@ export function parseSoftgardenDate(raw) {
   const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   const dot = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (slash) {
-    [, a, b, year] = slash; // M/D/Y
+    [, a, b, year] = slash;
   } else if (dot) {
-    [, b, a, year] = dot; // D.M.Y → swap to month/day
+    [, b, a, year] = dot;
   } else {
     return undefined;
   }
@@ -75,10 +44,6 @@ export function parseSoftgardenDate(raw) {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
-/**
- * Parse the widget page into raw {id, title, url, location, postedAt} records.
- * @param {string} html @param {string} widgetUrl
- */
 export function parseWidget(html, widgetUrl) {
   if (typeof html !== 'string') return [];
   const out = [];
@@ -93,7 +58,6 @@ export function parseWidget(html, widgetUrl) {
     if (!title) continue;
     let url;
     try {
-      // hrefs are relative to the /{lang}/widgets/ path ("../../job/…").
       url = new URL(decodeEntities(linkM[1]), widgetUrl).href;
     } catch {
       continue;
@@ -118,7 +82,6 @@ export function parseWidget(html, widgetUrl) {
   return out;
 }
 
-/** @type {Provider} */
 export default {
   id: 'softgarden',
 

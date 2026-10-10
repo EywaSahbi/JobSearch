@@ -81,7 +81,6 @@ export function writeScheduledStoreAtomic(storePath, store) {
     try {
       fs.rmSync(tempPath, { force: true });
     } catch {
-      // The atomic rename already succeeded, or best-effort cleanup failed.
     }
   }
 }
@@ -124,8 +123,6 @@ export function readLockStatus(resourcePath, options = {}) {
 function takeOverStaleLock(lockDir) {
   const quarantine = `${lockDir}.recovery-${process.pid}-${randomUUID()}`;
   try {
-    // Rename is atomic: if another process acquired the lock after our status
-    // read, this fails instead of recursively deleting its live lock.
     fs.renameSync(lockDir, quarantine);
   } catch (error) {
     if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(error?.code)) return false;
@@ -136,11 +133,10 @@ function takeOverStaleLock(lockDir) {
     try {
       fs.renameSync(quarantine, lockDir);
     } catch {
-      // A newer owner is already at lockDir; never remove it.
     }
     return false;
   }
-  try { fs.rmSync(quarantine, { recursive: true, force: true }); } catch { /* retry next pass */ }
+  try { fs.rmSync(quarantine, { recursive: true, force: true }); } catch { }
   return true;
 }
 
@@ -162,7 +158,7 @@ async function withRecoveryGuard(resourcePath, options, fn) {
     } catch (error) {
       if (error?.code !== "EEXIST") {
         if (created) {
-          try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch { /* best effort */ }
+          try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch { }
         }
         throw error;
       }
@@ -178,7 +174,7 @@ async function withRecoveryGuard(resourcePath, options, fn) {
     return await fn();
   } finally {
     if (readOwner(guardDir)?.token === token) {
-      try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch { /* stale recovery handles it */ }
+      try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch { }
     }
   }
 }
@@ -208,7 +204,7 @@ async function acquireResourceLock(resourcePath, options = {}) {
       } catch (error) {
         if (error?.code !== "EEXIST") {
           if (created) {
-            try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* best effort */ }
+            try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { }
           }
           throw error;
         }
@@ -229,7 +225,6 @@ async function acquireResourceLock(resourcePath, options = {}) {
     try {
       fs.rmSync(lockDir, { recursive: true, force: true });
     } catch {
-      // A future stale-lock recovery can remove it.
     }
   };
 }

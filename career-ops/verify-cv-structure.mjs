@@ -1,46 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * Verify a tailored CV JSON payload preserves cv.md's structure — a
- * different class of bug than verify-cv-facts.mjs catches. That gate blocks
- * FABRICATION (a claim absent from the source); this one warns about silent
- * LOSS or REORDERING of what the source already has, which fabrication
- * checking has no way to see: an omitted company descriptor, a dropped
- * skills category, or an experience entry rendered out of chronological
- * order are all internally consistent with cv.md's own facts, just not
- * faithful to its structure.
- *
- * Non-blocking by design: the header shapes this understands
- * (`### Company {—|--|-} Location[ · descriptor]`) are common conventions,
- * not a system-wide cv.md spec, so a hard gate here would
- * enforce a habit nobody agreed to rather than a real contract. Findings
- * are surfaced as a warning the user reviews, not a failure that stops the
- * pipeline.
- *
- * Written 2026-08-24 after three same-day tailored CVs for different target
- * companies all silently dropped a company descriptor (a "· Series B
- * fintech"-style suffix), one also dropped the Languages skill category
- * and every education description, and all three swapped two experience
- * entries out of chronological order — none of which verify-cv-facts.mjs
- * is designed to catch, so all three PDFs passed that gate anyway.
- *
- * Understands the Experience section names in lib/cv-markdown.mjs
- * (`## Experience`, `## Work Experience`, `## Professional Experience`,
- * `## Employment History`, `## Work History`) whose entry headers use an em
- * dash, en dash, double hyphen, or single hyphen between company and
- * location, read through Pandoc Markdown (`## **[Experience]{.smallcaps}**`,
- * `### **Co** --- City`) as well as plain (#4879). These are common
- * conventions, not a system-wide cv.md spec, so a cv.md written another way
- * parses to zero
- * entries — with nothing to compare against, this reports UNVERIFIED (exit 0)
- * rather than a false "passed", so a format mismatch warns instead of either
- * silently no-opping or blocking every user whose cv.md looks different.
- *
- * Usage:
- *   node verify-cv-structure.mjs <payload.json> [--source cv.md]
- *   node verify-cv-structure.mjs --self-test
- */
-
 import { existsSync, readFileSync, realpathSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { isAbsolute, join, resolve, relative, sep, dirname, basename } from 'path';
 import { tmpdir } from 'os';
@@ -52,41 +11,10 @@ import { findExperienceSections, parseCompanyHeading, EXPERIENCE_HEADING_NAMES }
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SOURCE = 'cv.md';
 
-/**
- * Parse cv.md's Experience entries (any EXPERIENCE_HEADING_NAMES section)
- * from its `### Company {—|–|--|-} Location[ · descriptor]` headers, in file
- * order
- * (which IS the ground-truth
- * chronological order — cv.md is user-authored, never generated).
- *
- * Scoped to the recognized Experience sections only, each up to the next level-2
- * heading: a `### University — City, ST`-shaped header under `## Education`
- * (or any other section) would otherwise parse as a phantom experience
- * entry, capable of triggering a false order/descriptor warning if its name
- * happens to match something in the payload.
- *
- * @param {string} cvMdText
- * @returns {{ company: string, location: string }[]}
- */
 export function parseCvMdExperience(cvMdText) {
-  // Every recognized section, in file order: a cv.md split into, say,
-  // "## Professional Experience" and "## Work History" is still one
-  // chronology, and stopping at the first would let a dropped descriptor or a
-  // swap in the second pass unchecked.
   return findExperienceSections(cvMdText).flat().map(parseCompanyHeading).filter(Boolean);
 }
 
-/**
- * Match a payload experience entry's `company` field to a cv.md entry.
- * Payload company names are sometimes a superset (e.g. cv.md's "Early
- * Career" becomes "Early Career — Acme Systems, Globex Inc, Initech" when a
- * tailored CV flattens three sub-roles into one entry), so this checks
- * either direction, case-insensitively.
- *
- * @param {string} payloadCompany
- * @param {string} cvMdCompany
- * @returns {boolean}
- */
 function normalizeCompany(name) {
   return String(name || '').toLowerCase().trim();
 }
@@ -98,26 +26,6 @@ function companiesMatch(payloadCompany, cvMdCompany) {
   return a === b || a.startsWith(b) || b.startsWith(a) || a.includes(b) || b.includes(a);
 }
 
-/**
- * Find the best-matching index for `company` in `entries`. Prefers an exact
- * (normalized) match; falls back to companiesMatch's fuzzy containment only
- * when no exact match exists. Without this, "Acme Labs" in the payload
- * would resolve to an earlier "Acme" entry in cv.md (a valid substring
- * match) instead of its own "Acme Labs" entry, letting a genuinely swapped
- * "Acme"/"Acme Labs" pair slip past the order check.
- *
- * A fuzzy candidate is rejected when its name has an exact match on the
- * source side. That prevents an omitted "Acme" from borrowing the retained
- * "Acme Labs" payload entry when cv.md contains both companies; "Acme Labs"
- * belongs to its own exact source entry. Expansion forms such as
- * "Early Career — Acme, Globex" still fall back because no source entry owns
- * that full expanded name.
- *
- * @param {{company: string}[]} entries entries on the side being searched
- * @param {string} company company name from the source side
- * @param {{company: string}[]} sourceEntries all entries on the source side
- * @returns {number} index in entries, or -1 if nothing matches
- */
 function findCompanyIndex(entries, company, sourceEntries = []) {
   const target = normalizeCompany(company);
   const exactIndex = entries.findIndex((e) => normalizeCompany(e.company) === target);
@@ -129,16 +37,6 @@ function findCompanyIndex(entries, company, sourceEntries = []) {
   });
 }
 
-/**
- * Check chronological order: for every pair of payload experience entries
- * that both match a cv.md entry, the payload must present them in the same
- * relative order cv.md does. Catches two swapped entries without needing to
- * parse date strings at all — cv.md's own file order is the ground truth.
- *
- * @param {{company: string}[]} payloadExperience
- * @param {{company: string}[]} cvMdExperience
- * @returns {string[]} human-readable violations, empty when order is fine
- */
 export function checkExperienceOrder(payloadExperience, cvMdExperience) {
   const violations = [];
   const cvMdIndexOf = (company) => findCompanyIndex(cvMdExperience, company, payloadExperience);
@@ -149,8 +47,6 @@ export function checkExperienceOrder(payloadExperience, cvMdExperience) {
     for (let j = i + 1; j < resolved.length; j++) {
       const a = resolved[i];
       const b = resolved[j];
-      // a appears before b in the payload; cv.md must agree they're in the
-      // same relative order, or the payload has reordered them.
       if (a.cvMdIndex > b.cvMdIndex) {
         violations.push(`"${a.company}" is rendered before "${b.company}", but cv.md has them in the opposite order`);
       }
@@ -159,26 +55,15 @@ export function checkExperienceOrder(payloadExperience, cvMdExperience) {
   return violations;
 }
 
-/**
- * Check that every payload experience entry whose matching cv.md entry has
- * a "· descriptor" suffix (e.g. "Series B healthcare automation") carries
- * that same descriptor in its own `location` field. A payload entry may
- * legitimately drop other cv.md content or reword bullets, but silently
- * losing the descriptor is the specific failure this catches.
- *
- * @param {{company: string, location?: string}[]} payloadExperience
- * @param {{company: string, location: string}[]} cvMdExperience
- * @returns {string[]} human-readable violations, empty when all descriptors survive
- */
 export function checkLocationDescriptors(payloadExperience, cvMdExperience) {
   const violations = [];
   for (const cvMdEntry of cvMdExperience) {
     const descriptorMatch = cvMdEntry.location.match(/·\s*(.+)$/);
-    if (!descriptorMatch) continue; // cv.md itself has no descriptor for this entry — nothing to lose
+    if (!descriptorMatch) continue;
     const descriptor = descriptorMatch[1].trim();
     const payloadIndex = findCompanyIndex(payloadExperience, cvMdEntry.company, cvMdExperience);
     const payloadEntry = payloadIndex === -1 ? undefined : payloadExperience[payloadIndex];
-    if (!payloadEntry) continue; // entry omitted entirely from this tailored CV — a legitimate choice, not this check's concern
+    if (!payloadEntry) continue;
     const payloadLocation = String(payloadEntry.location || '');
     if (!payloadLocation.includes(descriptor)) {
       violations.push(`"${cvMdEntry.company}" is missing its cv.md descriptor "${descriptor}" (payload location: "${payloadLocation || '(empty)'}")`);
@@ -187,48 +72,17 @@ export function checkLocationDescriptors(payloadExperience, cvMdExperience) {
   return violations;
 }
 
-/**
- * Run both structural checks against a tailored CV JSON payload.
- *
- * This gate understands the EXPERIENCE_HEADING_NAMES sections whose
- * `### Company {—|–|--|-} Location[ · descriptor]` headers use an em dash, en
- * dash, double hyphen, or single hyphen. Those are common conventions, not a
- * system-wide cv.md spec — AGENTS.md only requires "clean markdown, standard sections."
- * A cv.md written any other way parses to zero entries, and with nothing to
- * compare the payload against, both checks trivially find no violations. A
- * bare 'pass' there would be a false "verified" — the gate ran, found
- * nothing wrong, and never actually looked at anything. 'unverified' names
- * that failure mode instead of hiding it: same non-blocking exit code as
- * 'pass' (a cv.md-format mismatch shouldn't brick the pipeline for every
- * user who doesn't write cv.md exactly this way), but the CLI output cannot
- * be mistaken for a real check having run.
- *
- * @param {object} payload the parsed JSON payload build-cv-html.mjs consumes
- * @param {string} cvMdText raw cv.md content
- * @returns {{ verdict: 'pass'|'warn'|'unverified', orderViolations: string[], descriptorViolations: string[] }}
- */
 export function verifyStructure(payload, cvMdText) {
   const cvMdExperience = parseCvMdExperience(cvMdText);
   if (cvMdExperience.length === 0) {
     return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
   }
-  // The CLI validates payload shape before ever calling verifyStructure(),
-  // but this is an exported function any other caller can reach directly —
-  // so it must be safe against malformed input on its own, not just when
-  // reached through the CLI's pre-validated path.
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
     return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
   }
-  // A present, non-array `experience` (null, an object, a string, ...) is a
-  // malformed payload, not "no experience" — silently coercing it to []
-  // would let checkExperienceOrder/checkLocationDescriptors find nothing to
-  // compare and report a false 'pass'.
   if (payload.experience !== undefined && !Array.isArray(payload.experience)) {
     return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
   }
-  // A null (or otherwise non-object) entry inside an array experience would
-  // otherwise reach checkExperienceOrder/checkLocationDescriptors' `e.company`
-  // access uncaught.
   if (Array.isArray(payload.experience) && payload.experience.some((e) => e === null || typeof e !== 'object' || Array.isArray(e))) {
     return { verdict: 'unverified', orderViolations: [], descriptorViolations: [] };
   }
@@ -257,8 +111,6 @@ function resolveSourcePath(path) {
     throw new Error('--source must stay within CAREER_OPS_ROOT');
   }
 
-  // Lexical containment blocks `..`; canonical containment also blocks an
-  // in-root symlink from redirecting readFileSync() outside the data root.
   if (existsSync(candidate)) {
     const canonicalRoot = realpathSync(root);
     const canonicalCandidate = realpathSync(candidate);
@@ -357,7 +209,7 @@ function runSelfTest() {
     ['"Beta Industries" is rendered before "Career Break", but cv.md has them in the opposite order']);
 
   const missingDescriptor = [
-    { company: 'Acme Corp', location: 'Austin, TX' }, // descriptor dropped
+    { company: 'Acme Corp', location: 'Austin, TX' },
     { company: 'Career Break', location: 'Lake Tahoe, CA' },
     { company: 'Beta Industries', location: 'Chicago, IL · Series A last-mile logistics SaaS' },
   ];
@@ -375,17 +227,11 @@ function runSelfTest() {
     verifyStructure({ experience: subsetOmitted }, cvMd).verdict, 'pass');
 
   const noDescriptorInSource = [
-    { company: 'Career Break', location: 'Lake Tahoe, CA, near the shoreline' }, // reworded, cv.md has no descriptor to lose
+    { company: 'Career Break', location: 'Lake Tahoe, CA, near the shoreline' },
   ];
   equal('an entry cv.md never gave a descriptor has nothing to check',
     verifyStructure({ experience: noDescriptorInSource }, cvMd).verdict, 'pass');
 
-  // A cv.md that doesn't use a recognized header shape (a different heading
-  // level, prose instead of headers, or simply no Experience section at all)
-  // parses to zero entries. With
-  // nothing to compare against, a bare 'pass' would be a false "verified" —
-  // this must report 'unverified' instead, and never fabricate a violation
-  // against entries it never actually saw.
   const unrecognizedCvMd = '## Experience\n\nWorked at a company for a while.\n';
   const unverifiedResult = verifyStructure({ experience: correctOrder }, unrecognizedCvMd);
   equal('cv.md with no recognized headers: reports unverified, not a false pass',
@@ -393,9 +239,6 @@ function runSelfTest() {
   equal('unverified result names no violations (nothing was actually checked)',
     unverifiedResult.orderViolations.length + unverifiedResult.descriptorViolations.length, 0);
 
-  // The example CV is the format shipped to users: "## Work Experience" and
-  // double-hyphen company/location separators. It must be checked rather than
-  // producing the default-input UNVERIFIED warning.
   const shippedCvMd = readFileSync(join(ROOT, 'examples', 'cv-example.md'), 'utf-8');
   const shippedEntries = parseCvMdExperience(shippedCvMd);
   equal('shipped example parses both Work Experience entries',
@@ -403,9 +246,6 @@ function runSelfTest() {
   equal('shipped example format produces a real structural verdict',
     verifyStructure({ experience: shippedEntries }, shippedCvMd).verdict, 'pass');
 
-  // Pandoc-flavored cv.md (#4879): bold + span section heading, bold company,
-  // Pandoc's `---` em dash. Same entries as the plain form, so the order and
-  // descriptor checks actually run instead of reporting UNVERIFIED.
   const pandocCvMd = [
     '## **[Technical Platforms & Tools]{.smallcaps}**',
     '',
@@ -445,8 +285,6 @@ function runSelfTest() {
   equal('an en-dash company/location separator is recognized',
     parseCvMdExperience('## Experience\n\n### Co – City\n'), [{ company: 'Co', location: 'City' }]);
 
-  // Two recognized sections are one chronology: entries in the second are
-  // parsed and checked, not dropped (CodeRabbit on #4880).
   const twoSectionCvMd = [
     '## Professional Experience', '', '### Acme — Austin, TX · Series B fintech', '',
     '## Education', '', '### State University — Austin, TX', '',
@@ -469,21 +307,12 @@ function runSelfTest() {
     parseCvMdExperience(singleHyphenCvMd),
     [{ company: 'Single Hyphen Co', location: 'Remote · developer tools' }]);
 
-  // A "### Company — Location" header outside the Experience section (e.g.
-  // a degree entry under Education) must not be parsed as an experience
-  // entry — cv.md's `## Education` section carries a header shape that
-  // collides with Experience's, and this gate scans by section boundary,
-  // not by header shape alone.
   const decoyEntries = parseCvMdExperience(cvMd);
   equal('Education section header is excluded from parsed experience entries',
     decoyEntries.some((e) => e.company.includes('Decoy University')), false);
   equal('Experience section still yields its 4 real entries despite the Education decoy',
     decoyEntries.length, 4);
 
-  // An exact company match must win over a fuzzy substring match: without
-  // this, a payload's "Acme Corp" could resolve to cv.md's unrelated
-  // "Acme" entry (a valid prefix match) instead of its own "Acme Corp"
-  // entry, letting a genuinely swapped pair slip past the order check.
   const prefixCollisionCvMd = [
     '## Experience',
     '',
@@ -506,9 +335,6 @@ function runSelfTest() {
     prefixCollisionResult.orderViolations,
     ['"Acme Corp" is rendered before "Acme", but cv.md has them in the opposite order']);
 
-  // A fuzzy candidate that has its own exact source entry is unavailable to
-  // an omitted sibling. Without this guard, omitted "Acme" borrows retained
-  // "Acme Labs" and reports a descriptor that was never dropped.
   const omittedPrefixCvMd = [
     '## Experience',
     '',
@@ -527,9 +353,6 @@ function runSelfTest() {
     verifyStructure({ experience: onlyAcmeLabs }, omittedPrefixCvMd),
     { verdict: 'pass', orderViolations: [], descriptorViolations: [] });
 
-  // CLI-level regression tests: the null-payload and unreadable-source
-  // guards live in runCli(), not verifyStructure(), so exercise them
-  // in-process against real temp files rather than as in-memory unit tests.
   {
     const selfTestDir = mkdtempSync(join(tmpdir(), 'verify-cv-structure-selftest-'));
     try {
@@ -591,15 +414,10 @@ function runSelfTest() {
     }
   }
 
-  // verifyStructure() itself must not silently coerce a present, non-array
-  // payload.experience into an empty array — that would report a false
-  // 'pass' against a recognized cv.md without ever checking the payload.
   const nonArrayExperienceResult = verifyStructure({ experience: 'not an array' }, cvMd);
   equal('verifyStructure never reports pass for a non-array experience value',
     nonArrayExperienceResult.verdict === 'pass', false);
 
-  // verifyStructure() is exported and reachable by any caller, not only the
-  // CLI's pre-validated path — it must not throw on malformed input either.
   equal('verifyStructure(null, cvMd) reports unverified instead of throwing',
     verifyStructure(null, cvMd),
     { verdict: 'unverified', orderViolations: [], descriptorViolations: [] });

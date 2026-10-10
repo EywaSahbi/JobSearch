@@ -9,24 +9,12 @@ import { companyDomains } from "@/lib/core/company-domains.mjs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Localhost logo proxy + on-disk cache, FOREVER per key. Honors local-first: the
-// browser never talks to Google directly. Accepts `?domain=` (exact) OR
-// `?company=` (a name → we guess a handful of likely domains and resolve once).
-// Each key is fetched at most once ever, then served from .career-ops-web/logo-cache
-// (a hit, or an empty sentinel for a known miss). On any miss → 404 so the
-// client's <img onError> falls back to the offline monogram. Because the cache is
-// keyed by company, once a company's logo resolves it's instant for that card AND
-// every other card (this search or any future one), forever. "Forever" is why
-// company keys are versioned — see lib/core/logo-cache-key.
-
 const DOMAIN_RE = /^[a-z0-9.-]{1,253}\.[a-z]{2,}$/i;
 
 function cacheDir(): string {
   return path.join(careerOpsRoot(), ".career-ops-web", "logo-cache");
 }
 
-/** Fetch a real favicon for one domain (Google's tokenless service). Returns the
- *  bytes, or null for a miss (Google serves a tiny globe placeholder for misses). */
 async function fetchFavicon(domain: string): Promise<ArrayBuffer | null> {
   try {
     const res = await fetch(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`, {
@@ -54,9 +42,6 @@ export async function GET(req: NextRequest) {
     key = domain.replace(/[^a-z0-9.-]/g, "_");
     candidates = [domain];
   } else if (company) {
-    // Versioned + digested (see lib/core/logo-cache-key): the cache never
-    // expires, so the key has to carry both the resolver version and enough of
-    // the name to keep two companies apart.
     const companyKey = companyCacheKey(company);
     if (!companyKey) return new Response("bad company", { status: 400 });
     key = companyKey;
@@ -66,12 +51,9 @@ export async function GET(req: NextRequest) {
     return new Response("need domain or company", { status: 400 });
   }
 
-  // `key` is already sanitized above, but enforce containment anyway: a cache
-  // path must never resolve outside the cache dir (defense in depth).
   const file = path.resolve(cacheDir(), `${key}.png`);
   if (!file.startsWith(path.resolve(cacheDir()) + path.sep)) return new Response("bad key", { status: 400 });
 
-  // 1) serve from disk cache forever (hit, or empty sentinel = known miss)
   try {
     const buf = await fs.readFile(file);
     if (buf.byteLength > 0) {
@@ -79,10 +61,8 @@ export async function GET(req: NextRequest) {
     }
     return new Response("no logo", { status: 404 });
   } catch {
-    /* not cached yet → resolve below */
   }
 
-  // 2) resolve once: first candidate domain that yields a real favicon wins
   let bytes: ArrayBuffer | null = null;
   for (const d of candidates) {
     bytes = await fetchFavicon(d);
@@ -91,9 +71,8 @@ export async function GET(req: NextRequest) {
 
   try {
     await fs.mkdir(cacheDir(), { recursive: true });
-    await fs.writeFile(file, bytes ? Buffer.from(bytes) : new Uint8Array(0)); // sentinel on miss → never refetch
+    await fs.writeFile(file, bytes ? Buffer.from(bytes) : new Uint8Array(0));
   } catch {
-    /* best-effort */
   }
 
   if (!bytes) return new Response("no logo", { status: 404 });

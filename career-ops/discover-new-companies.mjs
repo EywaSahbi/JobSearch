@@ -1,34 +1,4 @@
 #!/usr/bin/env node
-/**
- * discover-new-companies.mjs — propose scanner-discovered companies for discovery
- *
- * The missing hop between the scanners and discover-ats.mjs. See modes/discover.md.
- *
- * ── The gap this closes ────────────────────────────────────────────────────
- * The zero-token scanners (scan.mjs, scan-ats-full.mjs) record every company
- * they touch in data/scan-history.tsv, including companies that are NOT in
- * portals.yml — the Gupy provider in particular sweeps that whole platform by
- * keyword, so it constantly surfaces employers nobody configured.
- *
- * Nothing ever fed those names back. They stayed in the history file, and each
- * run rediscovered them from scratch. discover-ats.mjs can resolve a company to
- * a scannable Greenhouse/Ashby/Lever/Workday board, but it takes a hand-written
- * list as input and does not read scan-history.tsv.
- *
- * This script is that missing hop:
- *
- *   scan-history.tsv → [this script] → companies.yml → discover-ats.mjs → portals.yml
- *
- * It only ever WRITES a candidate list. portals.yml is user-layer and is
- * touched exclusively by `discover-ats.mjs --write`, after you review the
- * preview. Zero LLM tokens; the only I/O is reading two local files.
- *
- * company-history.mjs also reads scan-history.tsv, but it is read-only and
- * renders per-company evidence cards; it never emits a discover-ats input, so
- * the two are complementary rather than overlapping.
- *
- * Issue #4181 — github.com/career-ops-hq/career-ops
- */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -99,11 +69,6 @@ if (!existsSync(HISTORY_PATH)) {
   process.exit(1);
 }
 
-// ── Already-tracked set ─────────────────────────────────────────────────────
-// Match on the canonicalized name so alias drift ("Stone" vs "Pagar.me (Stone)")
-// does not resurface a company that is already configured. Disabled entries
-// count as tracked: the user turned them off deliberately, and re-proposing
-// them every run would be noise.
 const portalsRaw = existsSync(PORTALS_PATH)
   ? (yaml.load(readFileSync(PORTALS_PATH, 'utf-8')) || {})
   : {};
@@ -114,19 +79,11 @@ for (const entry of portalsRaw.tracked_companies || []) {
   if (entry && typeof entry.name === 'string') tracked.add(canon(entry.name));
 }
 
-// ── Walk the history ────────────────────────────────────────────────────────
-// Legacy headerless scan-history.tsv files exist and are never rewritten (see
-// appendToScanHistory in scan.mjs), so detect the header instead of assuming
-// row 0 is one — the same guard parseScanHistory (detect-reposts.mjs) uses.
-// An unconditional skip would silently drop the first company in a headerless
-// file. Columns are read by name through lib/scan-history-columns.mjs, whose
-// order is fixed whatever header (if any) the file carries.
 const rows = readFileSync(HISTORY_PATH, 'utf-8').split('\n');
 const hasHeader = /^\s*url\s*\t/i.test(rows[0] ?? '');
 
 const cutoffMs = SINCE_DAYS > 0 ? Date.now() - SINCE_DAYS * 86_400_000 : null;
 
-/** @type {Map<string, {name:string, rows:number, added:number, lastSeen:string, titles:Set<string>, hosts:Set<string>}>} */
 const found = new Map();
 
 for (let i = hasHeader ? 1 : 0; i < rows.length; i++) {
@@ -139,7 +96,6 @@ for (let i = hasHeader ? 1 : 0; i < rows.length; i++) {
   const seen = row.first_seen.trim();
   if (cutoffMs != null) {
     const t = Date.parse(seen);
-    // Undated rows pass — same "don't penalize missing data" rule the scanners use.
     if (Number.isFinite(t) && t < cutoffMs) continue;
   }
 
@@ -155,12 +111,9 @@ for (let i = hasHeader ? 1 : 0; i < rows.length; i++) {
   if (seen > rec.lastSeen) rec.lastSeen = seen;
   const title = row.title.trim();
   if (title && rec.titles.size < 3) rec.titles.add(title);
-  try { rec.hosts.add(new URL(row.url).hostname); } catch { /* malformed URL — skip host hint */ }
+  try { rec.hosts.add(new URL(row.url).hostname); } catch { }
 }
 
-// ── Rank and cut ────────────────────────────────────────────────────────────
-// Companies that actually produced pipeline entries rank above ones that only
-// ever got filtered out — those are the boards most worth resolving.
 let candidates = [...found.values()]
   .filter((c) => c.rows >= MIN_ROWS)
   .filter((c) => (ADDED_ONLY ? c.added > 0 : true))
@@ -169,7 +122,6 @@ let candidates = [...found.values()]
 const totalBeforeLimit = candidates.length;
 candidates = candidates.slice(0, LIMIT);
 
-// ── Emit ────────────────────────────────────────────────────────────────────
 if (has('--summary')) {
   console.log('='.repeat(78));
   console.log('  New companies seen by scanners but absent from portals.yml');

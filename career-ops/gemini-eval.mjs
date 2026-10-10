@@ -1,46 +1,11 @@
 #!/usr/bin/env node
-// Set Windows console to UTF-8 to prevent mojibake in terminal output
 if (process.platform === 'win32') {
   try {
     const { execFileSync } = await import('child_process');
     execFileSync('chcp.com', ['65001'], { stdio: 'ignore' });
   } catch {
-    // ignore
   }
 }
-
-/**
- * gemini-eval.mjs — Gemini-powered Job Offer Evaluator for career-ops
- *
- * A free-tier alternative to the Claude-based pipeline.
- * Reads evaluation logic from modes/oferta.md + modes/_shared.md,
- * reads the user's resume from cv.md, and evaluates a Job Description
- * passed as a command-line argument.
- *
- * Usage:
- *   node gemini-eval.mjs "Paste full JD text here"
- *   node gemini-eval.mjs --file ./jds/my-job.txt
- *   node gemini-eval.mjs --posting-url https://acme.com/jobs/42 --file ./jds/my-job.txt
- *
- * Requires:
- *   GEMINI_API_KEY in .env (or environment variable)
- *
- * Default model: gemini-3.6-flash (GA July 2026)
- *
- * Model deprecation reference (per Google AI for Developers, May 2026):
- *   - gemini-2.0-flash       deprecated 2026-03-31  (do not use — generateContent 404)
- *   - gemini-2.0-flash-lite  deprecated 2026-03-31
- *   - gemini-2.5-flash       deprecated 2026-06-17
- *   - gemini-2.5-flash-lite  deprecated 2026-07-22
- *   - gemini-3.5-flash       prior Flash generation (still available)
- *   - gemini-3.6-flash       current default (stable)
- *
- * Stable Gemini models follow a 12-month lifecycle from their release date.
- * Source: https://ai.google.dev/gemini-api/docs/models
- *
- * When the current default approaches its deprecation date, bump
- * `modelName` below and the `--model` examples accordingly.
- */
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'path';
@@ -61,21 +26,14 @@ import {
 import { buildBudgetedPrompt } from './lib/context-budget.mjs';
 import * as yaml from 'js-yaml';
 
-// ---------------------------------------------------------------------------
-// Bootstrap: load .env before anything else
-// ---------------------------------------------------------------------------
 try {
   const { config } = await import('dotenv');
   config();
 } catch {
-  // dotenv is optional — fall back to process.env if not installed
 }
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { TSV_ADDITION_HEADER } from './tracker-parse.mjs';
@@ -84,10 +42,8 @@ const CODE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
 
 const PATHS = {
-  // Primary evaluation logic lives in these two mode files (default values)
   shared:      join(CODE_ROOT, 'modes', '_shared.md'),
   oferta:      join(CODE_ROOT, 'modes', 'oferta.md'),
-  // Canonical skill path referenced in Issue #344
   evaluate:    join(CODE_ROOT, '.claude', 'skills', 'career-ops', 'SKILL.md'),
   cv:          join(DATA_ROOT, 'cv.md'),
   profile:     join(DATA_ROOT, 'modes', '_profile.md'),
@@ -97,15 +53,6 @@ const PATHS = {
   trackerAdditions: join(DATA_ROOT, 'batch', 'tracker-additions'),
 };
 
-// Determine the localization modes directory/directories and evaluation filename
-// dynamically from config/profile.yml. language.modes_dir may be a single string
-// (one declared market — the historical, still-default shape) or an array of
-// strings (multiple simultaneously-declared candidate markets, #3793). The FIRST
-// declared market is always "primary": it supplies the evaluation-mode file
-// (oferta.md/angebot.md/...), because Block A-F evaluation logic can only run
-// from one such file at a time. Every declared market's _shared.md is loaded
-// into context (see below) so the agent can judge, from the JD's own signals —
-// never from JD language alone — which declared market actually applies.
 let modesDirs = ['modes'];
 let evalFilename = 'oferta.md';
 
@@ -113,7 +60,6 @@ function stripBom(str) {
   return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
 }
 
-/** Validate one modes_dir candidate: must stay inside the project root and exist. */
 function resolveModesDirCandidate(customModesDir) {
   if (typeof customModesDir !== 'string' || !customModesDir.trim()) return null;
   const dirPath = resolve(CODE_ROOT, customModesDir);
@@ -136,38 +82,20 @@ if (existsSync(PATHS.profileYml)) {
     const rawModesDir = profile && profile.language && profile.language.modes_dir;
     if (rawModesDir) {
       const candidates = Array.isArray(rawModesDir) ? rawModesDir : [rawModesDir];
-      // AGENTS.md "Output Language vs Market Modes": the FIRST declared entry
-      // is always primary. Resolve IT first, before touching the rest — an
-      // unusable primary falls back to the DEFAULT evaluation mode, and must
-      // NEVER silently promote a later declared market into the primary slot
-      // (that would evaluate against the wrong market's A-F rules without
-      // anyone asking for it).
       const primaryRaw = candidates[0];
       const primaryDir = resolveModesDirCandidate(primaryRaw);
       const candidateFiles = ['oferta.md', 'angebot.md', 'offre.md', 'fursah.md', 'kyujin.md', 'is-ilani.md', 'naukri.md'];
       const primaryEvalFile = primaryDir && candidateFiles.find((file) => existsSync(join(CODE_ROOT, primaryDir, file)));
       const extras = candidates.slice(1).map(resolveModesDirCandidate).filter(Boolean);
       if (primaryDir && primaryEvalFile) {
-        // Primary resolved. Any further declared markets only need to exist —
-        // they contribute _shared.md context (below), never an evaluation
-        // mode file of their own.
         modesDirs = [primaryDir, ...extras];
         evalFilename = primaryEvalFile;
       } else {
-        // Primary directory exists but has no recognizable evaluation-mode
-        // file in it — fall back to the default (modes/oferta.md), not to
-        // any secondary declared market.
         if (primaryDir) {
           console.warn(`⚠️   No matching evaluation file found in ${primaryDir}; using default modes/oferta.md`);
         }
-        // The primary may still have useful _shared.md context even when its
-        // evaluation file is missing. Keep it after the default evaluation
-        // directory, then append valid secondary markets.
         modesDirs = ['modes', ...(primaryDir && primaryDir !== 'modes' ? [primaryDir] : []), ...extras.filter((dir) => dir !== 'modes' && dir !== primaryDir)];
       }
-      // else: resolveModesDirCandidate(primaryRaw) already warned why the
-      // primary itself could not be resolved; falling through to the default
-      // modes/oferta.md below.
     }
   } catch (err) {
     console.warn(`⚠️   Could not parse config/profile.yml: ${err.message}`);
@@ -177,13 +105,8 @@ if (existsSync(PATHS.profileYml)) {
 const modesDir = modesDirs[0];
 PATHS.shared = join(CODE_ROOT, modesDir, '_shared.md');
 PATHS.oferta = join(CODE_ROOT, modesDir, evalFilename);
-// Additional declared markets (modes_dir given as an array with 2+ entries):
-// their _shared.md files are read alongside the primary one further below.
 const extraModesDirs = modesDirs.slice(1);
 
-// ---------------------------------------------------------------------------
-// CLI argument parsing
-// ---------------------------------------------------------------------------
 const args = process.argv.slice(2);
 
 if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
@@ -223,7 +146,6 @@ if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
   process.exit(0);
 }
 
-// Parse flags
 let jdText = '';
 let postingUrl = '';
 let modelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -259,21 +181,11 @@ if (!jdText) {
   process.exit(1);
 }
 
-// A posting URL is the tracker's deterministic dedup key, so it is taken only in
-// a form that can actually become one. Parsed, not prefix-matched: `https://`
-// satisfies a prefix test and would then sit in the URL column looking like a
-// key while normalizeUrl derives nothing from it, deduping nothing. A
-// placeholder written there would be worse still, handing every such row the
-// same key -- which is why an absent URL yields `(pasted)` in the report header
-// and no url cell at all, rather than a stand-in.
 if (postingUrl && !isPostingUrl(postingUrl)) {
   console.error(`❌  --posting-url must be a complete http(s) URL: "${postingUrl}"`);
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// Validate environment
-// ---------------------------------------------------------------------------
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
   console.error(`
@@ -286,9 +198,6 @@ if (!apiKey) {
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// File helpers
-// ---------------------------------------------------------------------------
 function readFile(path, label) {
   if (!existsSync(path)) {
     console.warn(`⚠️   ${label} not found at: ${path}`);
@@ -338,19 +247,14 @@ function validateEvaluationShape(text) {
   }
 }
 
-// Lazy import — only used when saving
 let readdirSync;
 try {
   ({ readdirSync } = await import('fs'));
-} catch { /* already imported above via named exports */ }
-// Use named import fallback
+} catch { }
 if (!readdirSync) {
   readdirSync = (await import('fs')).readdirSync;
 }
 
-// ---------------------------------------------------------------------------
-// Load context files
-// ---------------------------------------------------------------------------
 console.log('\n📂  Loading context files...');
 
 const sharedLabel = join(modesDir, '_shared.md').replace(/\\/g, '/');
@@ -358,11 +262,6 @@ const ofertaLabel = join(modesDir, evalFilename).replace(/\\/g, '/');
 let sharedContext    = readFile(PATHS.shared,      sharedLabel);
 const ofertaLogic    = readFile(PATHS.oferta,      ofertaLabel);
 
-// Multi-market (#3793): fold in every OTHER declared market's _shared.md so the
-// agent has all declared candidates' vocabulary/legal-concept context, not just
-// the primary one. It must pick per-JD by market signal (hiring-entity
-// jurisdiction, currency, benefits/legal vocabulary), never by JD language alone
-// — see AGENTS.md "Output Language vs Market Modes".
 for (const extraDir of extraModesDirs) {
   const extraLabel = join(extraDir, '_shared.md').replace(/\\/g, '/');
   const extraContent = readFile(join(CODE_ROOT, extraDir, '_shared.md'), extraLabel);
@@ -373,9 +272,6 @@ const profileContent = readFile(PATHS.profile,     'modes/_profile.md');
 const profileYml     = readFile(PATHS.profileYml,  'config/profile.yml');
 const languageInstruction = outputLanguageInstruction(parseOutputLanguage(profileYml));
 
-// ---------------------------------------------------------------------------
-// Build the system prompt with token budget management
-// ---------------------------------------------------------------------------
 const { contextBody, budgetReport } = buildBudgetedPrompt({
   sharedContent: sharedContext,
   ofertaContent: ofertaLogic,
@@ -384,7 +280,7 @@ const { contextBody, budgetReport } = buildBudgetedPrompt({
   profileContent,
   jdText,
   noCompress,
-  maxTokens: 1_048_576, // gemini-2.5-flash context window
+  maxTokens: 1_048_576,
 });
 
 if (contextOnly) {
@@ -392,7 +288,6 @@ if (contextOnly) {
   console.log(`🧭  Evaluation mode: ${resolvedEvalMode}`);
 }
 
-// Log token budget info
 if (budgetReport.compressed) {
   console.log(`📊  Token budget: ${budgetReport.beforeTokens} → ${budgetReport.afterTokens} tokens (saved ${budgetReport.beforeTokens - budgetReport.afterTokens})`);
   console.log(`    Trimmed sections: ${budgetReport.removed.join(', ')}`);
@@ -432,29 +327,17 @@ LEGITIMACY: <High Confidence | Proceed with Caution | Suspicious>
 ---END_SUMMARY---
 `;
 
-// Deterministic seam for context-resolution tests. This reports the computed
-// budget without constructing a client or making a network request.
 if (!contextOnly) {
 
-// ---------------------------------------------------------------------------
-// Call Gemini API
-// ---------------------------------------------------------------------------
 console.log(`🤖  Calling Gemini (${modelName})... this may take 30-60 seconds.\n`);
 
 const genAI = new GoogleGenerativeAI(apiKey);
-// Prompt caching (#1709) — engine 3 of the four, adapted to Gemini's shape.
-// Gemini has no `cache_control` field; its lever is the ~12K-token static prefix
-// (shared + oferta + cv) being a stable `systemInstruction` rather than the first
-// turn of `contents` — that's what its 2.5 models cache implicitly across
-// back-to-back requests. So the static context moves to `systemInstruction` and
-// generateContent() carries only the per-JD user turn. The prompt text is
-// unchanged — just where it sits in the request.
 const model = genAI.getGenerativeModel({
   model: modelName,
   systemInstruction: systemPrompt,
   generationConfig: {
-    temperature: 0.4,      // deterministic enough for structured evaluation
-    maxOutputTokens: 8192, // full 7-block evaluation
+    temperature: 0.4,
+    maxOutputTokens: 8192,
   },
 });
 
@@ -488,17 +371,11 @@ try {
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// Display evaluation
-// ---------------------------------------------------------------------------
 console.log('\n' + '═'.repeat(66));
 console.log('  CAREER-OPS EVALUATION — powered by Google Gemini');
 console.log('═'.repeat(66) + '\n');
 console.log(evaluationText);
 
-// ---------------------------------------------------------------------------
-// Parse score summary
-// ---------------------------------------------------------------------------
 const summaryMatch = evaluationText.match(
   /---SCORE_SUMMARY---\s*([\s\S]*?)---END_SUMMARY---/
 );
@@ -529,9 +406,6 @@ if (summaryMatch) {
   legitimacy = extract('LEGITIMACY');
 }
 
-// ---------------------------------------------------------------------------
-// Save report
-// ---------------------------------------------------------------------------
 if (saveReport) {
   let reportSaved = false;
   let reservedNumbers = [];
@@ -543,16 +417,6 @@ if (saveReport) {
 
       reservedNumbers   = await reserveReportNumbers(1, { rootDir: DATA_ROOT, reportsDir: PATHS.reports });
       const num         = formatReportNumber(reservedNumbers[0]);
-      // LOCAL calendar day (#3070). This one value becomes three things that have to
-      // agree with each other and with the user's calendar: the report FILENAME
-      // ({num}-{slug}-{today}.md), the report's own `**Date:**` header, and the date
-      // column of the tracker row written for it.
-      //
-      // On the UTC day an evaluation run on a Sunday evening in the Americas produces
-      // 042-acme-2026-08-18.md, dated the 18th, in a tracker row dated the 18th —
-      // while every other date the user sees, and every date the other scripts now
-      // stamp, says the 17th. The filename is the part that cannot be corrected
-      // later: reports are addressed by it.
       const today       = localToday();
       const companySlug = slugifyCompany(company);
       const filename    = `${num}-${companySlug}-${today}.md`;
@@ -587,18 +451,8 @@ ${evaluationText.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '').tri
         `[${num}](reports/${filename})`,
         'Gemini evaluation',
       ];
-      // Optional `url` column, appended only when there is a real URL to put in
-      // it. merge-tracker.mjs matches on the URL FIRST -- the one tier that can
-      // prove two same-title rows are different openings -- so writing it here
-      // puts the row on that tier at merge time instead of leaving it to a
-      // later `--backfill-urls`. Label and value are appended together: the
-      // headed path resolves cells by NAME, so a value without its label would
-      // be dropped, and a label without its value would leave the url cell
-      // absent (#3517).
       const trackerHeader = postingUrl ? `${TSV_ADDITION_HEADER}\turl` : TSV_ADDITION_HEADER;
       if (postingUrl) trackerFields.push(tsvSafe(postingUrl));
-      // Header row first: merge-tracker resolves the fields by name, so this
-      // row cannot be ingested into the wrong columns (#3517).
       writeFileSync(trackerPath, `${trackerHeader}\n${trackerFields.join('\t')}\n`, 'utf-8');
       console.log(`\n✅  Report saved: reports/${filename}`);
       console.log(`📊  Tracker addition saved: batch/tracker-additions/${num}-${companySlug}.tsv`);

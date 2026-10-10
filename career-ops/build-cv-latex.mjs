@@ -14,50 +14,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = resolve(__dirname, 'templates', 'cv-template.tex');
 const PLACEHOLDER_RE = /\{\{[A-Z_]+\}\}/g;
 
-// Markdown bold inside bullets — the LaTeX half of #1728, which taught the HTML
-// path to render `**text**` as <strong> (normalizeTextForATS in generate-pdf.mjs).
-// escapeLatex() leaves `*` alone because it is not a LaTeX special character, so
-// the markers reached the .tex verbatim and printed as literal asterisks (#3351).
-//
-// Order is the safety property, and it mirrors the HTML twin: escapeLatex() runs
-// FIRST, so every backslash and brace in the payload is already neutralized
-// (`\` becomes \textbackslash{}, braces become \{ \}). Nothing the candidate wrote
-// can survive as a real control sequence — this pass only reinterprets the `**`
-// markers, which escaping deliberately left untouched. Same regex as the HTML
-// path so the two twins agree on what counts as bold.
-//
-// The gate covers every field this builder emits inside a \resumeItem: experience
-// bullets, project bullets, and the education coursework line. Coursework does not
-// carry the payload key `bullets`, but it renders as a bullet, and a bullet whose
-// emphasis silently prints as `**` is the bug being fixed — the shape of the
-// output decides what goes through the gate, not the name of the payload field.
 const MARKDOWN_BOLD_RE = /\*\*([^*]+?)\*\*/g;
 
-/**
- * Escape bullet text, then restore markdown bold as \textbf.
- *
- * Use this for every value that ends up inside a \resumeItem; use escapeLatex
- * directly everywhere else, where `**` is meant to stay literal.
- *
- * @param {string} text raw payload text, not yet escaped
- * @returns {string} LaTeX-safe text with `**…**` spans rendered as \textbf{…}
- */
 function escapeLatexBullet(text) {
-  // Replacer FUNCTION, not a string: escaped text is full of `\$` and `\&`, and a
-  // string replacement would reinterpret `$&` and friends as match references
-  // (same trap the render path documents below).
   return escapeLatex(text).replace(MARKDOWN_BOLD_RE, (_, inner) => `\\textbf{${inner}}`);
 }
 
-/**
- * Render the Education section as \resumeSubheading blocks.
- *
- * An entry's optional `coursework` becomes a single \resumeItem line, which is
- * why it goes through escapeLatexBullet rather than escapeLatex.
- *
- * @param {Array<object>} entries `education[]` from the payload
- * @returns {string} LaTeX for the section body, or '' when there is nothing to render
- */
 function buildEducation(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
   const blocks = [];
@@ -73,12 +35,6 @@ function buildEducation(entries) {
   return blocks.join('\n\n');
 }
 
-/**
- * Render the Work Experience section as \resumeSubheading blocks.
- *
- * @param {Array<object>} entries `experience[]` from the payload
- * @returns {string} LaTeX for the section body, or '' when there is nothing to render
- */
 function buildExperience(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
   const blocks = [];
@@ -90,15 +46,6 @@ function buildExperience(entries) {
   return blocks.join('\n\n');
 }
 
-/**
- * Render the Projects section as \resumeProjectHeading blocks.
- *
- * A valid `url` turns the project name into an \href link (#3198); the name
- * itself stays escaped either way.
- *
- * @param {Array<object>} entries `projects[]` from the payload
- * @returns {string} LaTeX for the section body, or '' when there is nothing to render
- */
 function buildProjects(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
   const blocks = [];
@@ -115,10 +62,6 @@ function buildProjects(entries) {
   return blocks.join('\n\n');
 }
 
-// Awards are one line each — no bullet list — so they reuse
-// \resumeProjectHeading (bold left column, year right) rather than
-// \resumeSubheading, which would leave an empty second row. The issuing body
-// follows the title in the same $|$ style buildProjects() uses for context.
 function buildAwards(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
   const blocks = [];
@@ -135,9 +78,6 @@ function buildSkills(categories) {
   return categories.map(c => {
     if (!hasRequiredFields(c, 'skills', 'tex')) return '';
     const items = Array.isArray(c.items) ? c.items.join(', ') : (c.items || '');
-    // category is optional (the spec requires only items), so an entry without
-    // one must not render an empty bold group and a leading ": " — the HTML
-    // builder drops the prefix the same way.
     const prefix = hasText(c.category) ? `\\textbf{${escapeLatex(c.category)}}{: }` : '';
     return `        ${prefix}{${escapeLatex(items)}} \\\\`;
   }).filter(Boolean).join('\n');
@@ -192,8 +132,6 @@ async function main() {
   }
   for (const message of warnings) console.error(`Warning: ${message}`);
 
-  // Honor a selected .tex template variant (cv.template default or --template=<name>),
-  // falling back to the base cv-template.tex when no variant exists.
   const texName = (process.argv.find((a) => a.startsWith('--template=')) || '').split('=')[1];
   let TEMPLATE_PATH_RESOLVED;
   try {
@@ -209,8 +147,6 @@ async function main() {
 
   let template = await readFile(TEMPLATE_PATH_RESOLVED, 'utf-8');
 
-  // Drop the optional sections (projects, education) that have no entries, so
-  // an absent one leaves no bare header behind. See cv-sections-core.mjs.
   template = stripEmptySections(template, payload, 'tex');
 
   const emailUrl = sanitizeUrl(payload.email?.url || '');
@@ -236,11 +172,6 @@ async function main() {
     SKILLS: buildSkills(payload.skills),
   };
 
-  // Replacer FUNCTION, not a string: escapeLatex turns `$` into `\$` but leaves
-  // the next character alone, so a bullet containing `$'` survives as the JS
-  // replacement pattern meaning "everything after the match" and splices the
-  // rest of the template into the document — silently, with a valid-looking
-  // exit 0. A replacer function's return value is inserted literally.
   for (const [key, value] of Object.entries(substitutions)) {
     template = template.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), () => value);
   }
@@ -327,11 +258,6 @@ async function runSelfTest() {
     ],
   };
 
-  // Guard the payload key contract (#3523). The LaTeX and HTML templates do
-  // NOT share an education schema — this one is {institution, degree, dates,
-  // coursework}, the HTML one is {title, org, year, description} — so a payload
-  // written for the wrong builder must be rejected by name, not rendered as a
-  // \resumeSubheading full of empty braces.
   const htmlStyleEducation = [{
     title: 'Bachelor of Science in Computer Science',
     org: 'Test University',
@@ -354,14 +280,12 @@ async function runSelfTest() {
     process.exit(1);
   }
 
-  // The valid sample must stay clean: no errors, no warnings.
   const clean = validatePayload(sample, 'tex');
   if (clean.errors.length || clean.warnings.length) {
     console.error(`Self-test failed: valid sample payload reported ${JSON.stringify(clean)}`);
     process.exit(1);
   }
 
-  // A payload root that is not an object must be rejected.
   for (const badRoot of [[], null, 'x']) {
     if (validatePayload(badRoot, 'tex').errors.length === 0) {
       console.error(`Self-test failed: payload root ${JSON.stringify(badRoot)} was accepted`);
@@ -369,7 +293,6 @@ async function runSelfTest() {
     }
   }
 
-  // skills[].items accepts a string or a non-empty array; nothing else renders.
   for (const items of ['Python, JavaScript', ['FastAPI', 'React']]) {
     const ok = validatePayload({ ...sample, skills: [{ category: 'L', items }] }, 'tex');
     if (ok.errors.length) {
@@ -388,7 +311,6 @@ async function runSelfTest() {
     process.exit(1);
   }
 
-  // A mistyped SECTION name must be reported, not silently dropped.
   const typoSection = validatePayload({ ...sample, educations: sample.education }, 'tex');
   if (!typoSection.warnings.some(w => w.includes('educations')) || typoSection.errors.length !== 0) {
     console.error(`Self-test failed: mistyped section name not reported: ${JSON.stringify(typoSection)}`);
@@ -399,14 +321,11 @@ async function runSelfTest() {
     process.exit(1);
   }
 
-  // One non-text element is enough to break the joined line.
   if (validatePayload({ ...sample, skills: [{ category: 'L', items: ['JS', {}] }] }, 'tex').errors.length === 0) {
     console.error('Self-test failed: skills items array with a non-text element was accepted');
     process.exit(1);
   }
 
-  // category is optional, and its absence must not leave an empty bold group
-  // and a dangling ": " on the line.
   const noCategory = buildSkills([{ items: 'Docker, K8s' }]);
   if (noCategory.includes('textbf{}') || noCategory.includes('{: }')) {
     console.error(`Self-test failed: category-less skills line renders an empty prefix: ${noCategory}`);
@@ -417,28 +336,21 @@ async function runSelfTest() {
     process.exit(1);
   }
 
-  // One key, one warning: a section the .tex template cannot render is both
-  // absent from KNOWN_ROOT_KEYS and listed in UNRENDERED_SECTIONS, and used to
-  // collect a message from each path.
   const certWarnings = validatePayload({ ...sample, certifications: [{ title: 'CKA' }] }, 'tex').warnings
     .filter(w => w.startsWith('certifications:'));
   if (certWarnings.length !== 1) {
     console.error(`Self-test failed: expected exactly 1 certifications warning, got ${certWarnings.length}: ${JSON.stringify(certWarnings)}`);
     process.exit(1);
   }
-  // The surviving one must be the specific message, not the typo-style guess.
   if (!certWarnings[0].includes('has no certifications section')) {
     console.error(`Self-test failed: the wrong certifications warning survived: ${certWarnings[0]}`);
     process.exit(1);
   }
-  // An object-valued unknown key counts as populated here too.
   if (!validatePayload({ ...sample, educations: { institution: 'U' } }, 'tex').warnings.some(w => w.includes('educations'))) {
     console.error('Self-test failed: object-valued unknown root key was not reported');
     process.exit(1);
   }
 
-  // An unsupported section given a scalar value must warn too: the .tex
-  // template drops summary whatever shape it arrives in.
   for (const scalar of [2026, 0, true, false, 'hi']) {
     if (!validatePayload({ ...sample, summary: scalar }, 'tex').warnings.some(w => w.startsWith('summary:'))) {
       console.error(`Self-test failed: scalar unsupported section ${JSON.stringify(scalar)} was not reported`);
@@ -452,7 +364,6 @@ async function runSelfTest() {
     }
   }
 
-  // Every list section carries the guard, not just education.
   for (const [section, bad] of [
     ['education', [{ school: 'Test University', qualification: 'BSc' }]],
     ['experience', [{ employer: 'Acme', title: 'Engineer' }]],
@@ -465,8 +376,6 @@ async function runSelfTest() {
     }
   }
 
-  // escapeLatex() returns '' for anything that is not a string, so a
-  // non-string required field must fail like an absent one.
   for (const badInstitution of [{}, [], 0, true, null]) {
     const bad = [{ institution: badInstitution, degree: 'BSc' }];
     if (validatePayload({ ...sample, education: bad }, 'tex').errors.length === 0) {
@@ -475,8 +384,6 @@ async function runSelfTest() {
     }
   }
 
-  // A section the .tex template cannot render must warn rather than vanish:
-  // certifications exist in the HTML template only.
   const certWarn = validatePayload({ ...sample, certifications: [{ title: 'CKA' }] }, 'tex');
   if (certWarn.errors.length !== 0
       || !certWarn.warnings.some(w => w.includes('certifications'))) {
@@ -522,7 +429,6 @@ async function runSelfTest() {
     SKILLS: buildSkills(sample.skills),
   };
 
-  // Replacer function, same reason as the render path above.
   for (const [key, value] of Object.entries(substitutions)) {
     template = template.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), () => value);
   }

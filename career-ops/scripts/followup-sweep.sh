@@ -1,6 +1,4 @@
 #!/bin/zsh
-# Unattended follow-up sweep, run via launchd (see docs/AUTOMATION.md).
-# Never sends anything -- writes drafts to output/ for the user to review.
 
 set -euo pipefail
 

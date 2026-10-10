@@ -1,16 +1,7 @@
 import fs from "node:fs";
 import * as yaml from "js-yaml";
 
-/**
- * A configuration error that lets the route distinguish a broken user-layer
- * file (409: the user must repair it) from an installation/read failure (500).
- */
 export class PortalsConfigError extends Error {
-  /**
-   * @param {string} message
-   * @param {"invalid-user-config" | "read-failed" | "invalid-template"} kind
-   * @param {unknown} [cause]
-   */
   constructor(message, kind, cause) {
     super(message, { cause });
     this.name = "PortalsConfigError";
@@ -18,21 +9,12 @@ export class PortalsConfigError extends Error {
   }
 }
 
-/** @param {unknown} value */
 export function isMapping(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-/**
- * Load portals.yml without treating parse/read failures as a missing file.
- * The shipped template is used only when the user-layer file is absent.
- *
- * @param {string} file
- * @param {string} templateFile
- * @returns {{ doc: Record<string, unknown>, seeded: boolean }}
- */
 export function loadPortalsDocument(file, templateFile) {
   let source;
   let seeded = false;
@@ -73,14 +55,6 @@ export function loadPortalsDocument(file, templateFile) {
   return { doc: parsed, seeded };
 }
 
-/**
- * Return a merge-safe document that changes only the filters owned by the web
- * onboarding flow. All scanner sources and user customizations are preserved.
- *
- * @param {Record<string, unknown>} doc
- * @param {string[]} roles
- * @param {string[] | undefined} locations
- */
 export function mergePortalFilters(doc, roles, locations) {
   const merged = { ...doc };
   const titleFilter = isMapping(doc.title_filter) ? { ...doc.title_filter } : {};

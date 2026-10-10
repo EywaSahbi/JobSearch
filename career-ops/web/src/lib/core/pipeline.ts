@@ -5,18 +5,6 @@ import { pathToFileURL } from "node:url";
 import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import type { DiscoveredOffer } from "./scan";
 
-/**
- * "Add to pipeline" — appends user-selected discovered offers to data/pipeline.md
- * AND records them in data/scan-history.tsv (so future scans dedup them). We reuse
- * the CANONICAL writers exported by the core's scan.mjs (`appendToPipeline`,
- * `appendToScanHistory`) instead of re-implementing the line format / section
- * markers — single source of truth, per the web↔core contract. We invoke them in
- * a short-lived node process (cwd = the user's career-ops root) so the core's own
- * code does the writing; the web never owns a parallel copy of that logic.
- *
- * Discovered-but-not-added offers stay "new" (a dry-run scan writes nothing);
- * only an explicit add records them as seen. No tokens are spent here.
- */
 export type AddResult = { added: number; error?: string };
 
 export function addOffersToPipeline(offers: DiscoveredOffer[]): Promise<AddResult> {
@@ -28,14 +16,10 @@ export function addOffersToPipeline(offers: DiscoveredOffer[]): Promise<AddResul
       title: o.title || "",
       location: o.location || "",
       source: o.source || o.ats || "explorer",
-      // Preserve the optional per-offer signal so it survives to pipeline.md.
-      // The core writer treats an empty note as absent (byte-identical output).
       note: o.note || "",
     }));
   if (clean.length === 0) return Promise.resolve({ added: 0 });
 
-  // Data-only / pre-scan-ats checkout has no scan.mjs writers → fail with an
-  // actionable message instead of a silent added:0.
   if (!fs.existsSync(rootScript("scan"))) {
     return Promise.resolve({ added: 0, error: "This checkout is data-only — the pipeline writer (scan.mjs) isn't available." });
   }

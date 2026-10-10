@@ -5,9 +5,6 @@ import { Sparkles } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { CostBadge } from "@/components/cost/cost-badge";
 
-// Auto-pipeline, one click: paste a job URL → fire a real evaluation worker
-// (the same kind:"evaluate" that runs modes/oferta.md + writes the A–F report +
-// tracker row). The worker pills + assistant cards show progress.
 export function QuickEvaluate() {
   const { startJob } = useJobs();
   const [url, setUrl] = useState("");

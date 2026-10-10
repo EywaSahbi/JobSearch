@@ -7,8 +7,6 @@ import { jobErrorHint } from "@/lib/job-error-hint.mjs";
 import { cn } from "@/lib/cn";
 import { isFencingNotice } from "@/lib/cli-fencing.mjs";
 
-// Humanize raw agent tool names into what the user actually cares about, so a
-// multi-minute evaluation reads as progress instead of a cryptic tool dump (#8).
 const STEP_LABELS: Record<string, string> = {
   WebFetch: "Reading the posting",
   WebSearch: "Searching the web",
@@ -24,15 +22,6 @@ const STEP_LABELS: Record<string, string> = {
 };
 const humanizeStep = (label: string): string => STEP_LABELS[label] ?? label;
 
-// The unfenced-runtime notice is emitted as the run's FIRST step, before the CLI
-// produces any output — and this card renders only the newest step, so it would be
-// displaced within a second of the run starting. Scan the whole list instead, and
-// render it in the sticky slot below, the same shape jobErrorHint already uses.
-// Returns the notice ITSELF, not a boolean. There are two shapes — a runtime that
-// cannot be restricted at all, and one only partly restricted — and a card that
-// matched either then printed one hardcoded sentence told a sandboxed Codex run it
-// "ran with its default access", which is false. Rendering what the route emitted
-// keeps one source for the wording and cannot misdescribe a level (#2507).
 function fencingNotice(job: Job): string | undefined {
   return job.steps.find((s) => isFencingNotice(s.label))?.label;
 }
@@ -43,8 +32,6 @@ const fmtElapsed = (ms: number): string => {
 };
 const fmtTokens = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-// Tick once a second WHILE running so a long evaluation visibly counts up (never
-// looks frozen). Stops re-rendering as soon as the job settles.
 function useElapsed(running: boolean, startedAt: number): number {
   const [now, setNow] = useState(startedAt);
   useEffect(() => {
@@ -55,12 +42,6 @@ function useElapsed(running: boolean, startedAt: number): number {
   }, [running, startedAt]);
   return Math.max(0, now - startedAt);
 }
-
-// The ONE worker card — a pure function of a Job. Rendered in three surfaces:
-// the sidebar tray (variant="tray", inside WorkerPills' Link), inline in the
-// assistant chat (variant="inline"), and conceptually the /jobs/[id] timeline.
-// Keeping it single is what guarantees the human UI and the agentic UI stay
-// visually identical. TONE + pillTone live here (the canonical source).
 
 export const TONE = {
   good: { bar: "bg-emerald-500/70", chip: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", icon: "text-emerald-500" },
@@ -153,5 +134,4 @@ export function WorkerCard({
   );
 }
 
-// Re-exported icon used by callers that compose their own trailing affordances.
 export { X as DismissIcon };

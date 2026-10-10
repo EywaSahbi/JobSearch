@@ -1,19 +1,5 @@
-// @ts-check
-
-// Shared ISO 3166-1 country-code → English-name lookup for providers whose
-// payload carries a country only as a code. location_filter matches on the
-// names users write ("United Kingdom", "Germany"), so a bare code never reaches
-// it. Names come from Intl.DisplayNames (CLDR via Node's ICU), so a few differ
-// from everyday spelling (CZ → "Czechia", TR → "Türkiye") and can shift between
-// Node versions — tests should not pin those exact strings.
-
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
-/**
- * Resolve a two-letter ISO country code to an English name. Returns '' for
- * anything that isn't a resolvable two-letter code.
- * @param {unknown} code
- */
 export function countryName(code) {
   if (typeof code !== 'string' || !/^[A-Za-z]{2}$/.test(code)) return '';
   try {
@@ -24,10 +10,6 @@ export function countryName(code) {
   }
 }
 
-// ISO 3166-1 alpha-3 → alpha-2. Intl.DisplayNames only accepts alpha-2, and
-// some payloads (Gem's `isoCountry`: "USA", "GBR") carry alpha-3. Generated
-// from the ISO 3166-1 list (249 assigned codes).
-/** @type {Readonly<Record<string, string>>} */
 const ALPHA3_TO_ALPHA2 = Object.freeze({
   ABW: 'AW', AFG: 'AF', AGO: 'AO', AIA: 'AI', ALA: 'AX', ALB: 'AL', AND: 'AD', ARE: 'AE',
   ARG: 'AR', ARM: 'AM', ASM: 'AS', ATA: 'AQ', ATF: 'TF', ATG: 'AG', AUS: 'AU', AUT: 'AT',
@@ -63,11 +45,6 @@ const ALPHA3_TO_ALPHA2 = Object.freeze({
   ZWE: 'ZW',
 });
 
-/**
- * Resolve a two- or three-letter ISO 3166-1 country code to an English name.
- * Returns '' for anything else, including an unassigned code.
- * @param {unknown} code
- */
 export function countryNameFromIso(code) {
   if (typeof code !== 'string') return '';
   const c = code.trim().toUpperCase();

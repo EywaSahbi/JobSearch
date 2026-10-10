@@ -7,9 +7,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Streamed agentic drive over an OPEN session: the AI drives the headed page to
-// REACH a fillable application form (the user watches each step live), then we
-// extract + finalize. NEVER submits (enforced in driveSession).
 export async function POST(req: Request) {
   let body: { sessionId?: string; cliId?: string; goal?: "reach" | "full"; answers?: { label: string; value: string }[] };
   try {
@@ -18,8 +15,6 @@ export async function POST(req: Request) {
     return Response.json({ error: "bad json" }, { status: 400 });
   }
   const { sessionId, goal = "reach", answers } = body;
-  // Same fallback as the session open that precedes every drive, which is where
-  // a substitution is reported (#4607); driveSession() itself needs Claude.
   const cliId = (body.cliId && resolveCliOrFallback(body.cliId)?.spec.id) || body.cliId || "";
   const s = sessionId ? getSession(sessionId) : undefined;
   if (!s) return Response.json({ error: "apply session not found (it may have expired)" }, { status: 404 });
@@ -31,7 +26,6 @@ export async function POST(req: Request) {
         try {
           controller.enqueue(encoder.encode(JSON.stringify(o) + "\n"));
         } catch {
-          /* client gone */
         }
       };
       try {
@@ -47,8 +41,6 @@ export async function POST(req: Request) {
         const result = await driveSession(page, cliId, goal, isFormReady, (step) => emit({ t: "step", ...step }), budget, answers);
 
         if (goal === "full") {
-          // The agent filled the real form — bring it to the front for the human
-          // to review + submit themselves. We never submit.
           if (result.reached) await handoffSession(s.id).catch(() => {});
           emit({ t: "done", filled: result.reached, turns: result.turns, reason: result.reason });
           return;
@@ -61,7 +53,6 @@ export async function POST(req: Request) {
             return;
           }
         }
-        // Didn't reach a real form → classify why for a clear message.
         const why = await classifyEmpty(page, s.url).catch(() => ({ message: "Couldn't reach a fillable form on this page." }));
         emit({ t: "error", reason: result.reason, message: result.reason === "stuck" ? result.steps.at(-1)?.detail || why.message : why.message });
       } catch (e) {

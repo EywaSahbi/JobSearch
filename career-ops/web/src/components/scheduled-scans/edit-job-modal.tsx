@@ -34,11 +34,9 @@ export function EditJobModal({
       setEngine(job.engine || "full");
       setEvery(job.every || 6);
       setUnit(job.unit || "hours");
-      // Merge job's persisted filters on top of defaults so all fields are defined
       setFilters({
         ...DEFAULT_FILTERS,
         ...job.filters,
-        // Ensure arrays are never undefined
         positive: job.filters?.positive || [],
         negative: job.filters?.negative || [],
         allow: job.filters?.allow || [],
@@ -98,7 +96,6 @@ export function EditJobModal({
         <form onSubmit={handleSubmit} className="mt-5 space-y-5">
           {error && <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-500">{error}</div>}
 
-          {/* ─── Name + Engine + Cadence ─── */}
           <div>
             <label className="mb-1 block text-[13px] font-medium text-foreground">Scan Name</label>
             <input
@@ -152,12 +149,10 @@ export function EditJobModal({
             </div>
           </div>
 
-          {/* ─── Reuse FilterBuilder from Explore ─── */}
           <div className="rounded-xl border border-border bg-surface/30 p-4">
             <FilterBuilder filters={filters} onChange={setFilters} />
           </div>
 
-          {/* ─── Actions ─── */}
           <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
             <button
               type="button"

@@ -1,37 +1,16 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// The Muse provider — public, zero-auth JSON jobs feed.
-// Endpoint: https://www.themuse.com/api/public/jobs?page={n}
-// Response shape: { results: [...], page: n, page_count: N }
-// All pages are fetched sequentially and aggregated before normalizing.
-//
-// Wire in via a `job_boards:` entry with `provider: themuse`.
-
 import { sleep } from './_http.mjs';
 
 const FEED_BASE = 'https://www.themuse.com/api/public/jobs';
 const TRUSTED_HOST = 'www.themuse.com';
 
-// Safety cap on pagination. The feed can carry tens of thousands of pages;
-// this board only ever samples the first slice of it regardless of retry
-// behavior below.
 const MAX_PAGES = 100;
 
-// Retry policy for transient page failures (429 rate-limit, 5xx,
-// timeouts/aborts). Without retry, one stalled request out of up to 100
-// sequential page fetches throws and discards every job already gathered
-// from this board for the run -- the whole board reads as "not working" when
-// only one page had a bad moment. Mirrors workday.mjs / oraclecloud.mjs.
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
 
-// Delay between successive pages so a 100-page walk doesn't fire as a burst
-// against the same host (mirrors workday.mjs / oraclecloud.mjs).
 const INTER_PAGE_DELAY_MS = 250;
 
-/** Parses a `Retry-After` header value (seconds, or an HTTP-date) to ms, or null. */
 function parseRetryAfterMs(value) {
   if (!value) return null;
   const secs = Number(value);
@@ -44,17 +23,9 @@ function isRetryableError(err) {
   const status = err?.status;
   if (status === 429) return true;
   if (typeof status === 'number' && status >= 500) return true;
-  return status === undefined; // network error / timeout / abort — no status set
+  return status === undefined;
 }
 
-/**
- * Fetches a single page, retrying transient failures with backoff. The
- * thrown error (whether retries were exhausted or the error was
- * non-retryable) carries `attempts` — the actual number of fetchJson calls
- * made — so a caller reporting failure doesn't have to assume the fixed
- * MAX_RETRIES+1 ceiling, which would misreport a non-retryable error (one
- * attempt, no retries) as having exhausted the full retry budget.
- */
 async function fetchPageWithRetry(ctx, url, opts) {
   let lastErr;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -65,9 +36,6 @@ async function fetchPageWithRetry(ctx, url, opts) {
       lastErr.attempts = attempt + 1;
       if (attempt === MAX_RETRIES || !isRetryableError(err)) throw lastErr;
       const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
-      // A server-supplied Retry-After is honored, but still clamped — an
-      // unbounded value would otherwise stall this board's fetch for as long
-      // as the server says, defeating the point of a bounded backoff.
       const retryAfterMs = parseRetryAfterMs(err?.retryAfter);
       const delayMs = retryAfterMs !== null ? Math.min(retryAfterMs, RETRY_MAX_DELAY_MS * 4) : (backoff + Math.random() * 250);
       await sleep(delayMs, ctx);
@@ -76,7 +44,6 @@ async function fetchPageWithRetry(ctx, url, opts) {
   throw lastErr;
 }
 
-/** @param {string} url */
 function assertMuseUrl(url) {
   let parsed;
   try {
@@ -91,20 +58,6 @@ function assertMuseUrl(url) {
   return url;
 }
 
-/**
- * Normalize a single result from the Muse API response. Exported for unit tests.
- *
- * Field mapping:
- *   name              → title
- *   refs.landing_page → url
- *   company.name      → company
- *   locations[0].name → location
- *
- * Returns null when required fields (title or url) are missing or invalid.
- *
- * @param {any} j
- * @returns {{ title: string, url: string, company: string, location: string } | null}
- */
 export function normalizeMuseJob(j) {
   if (!j || typeof j !== 'object') return null;
   const title = typeof j.name === 'string' ? j.name.trim() : '';
@@ -122,23 +75,13 @@ export function normalizeMuseJob(j) {
   return { title, url, company, location };
 }
 
-/** @type {Provider} */
 export default {
   id: 'themuse',
 
   async fetch(_entry, ctx) {
     assertMuseUrl(FEED_BASE);
 
-    // Page 0 is fetched outside the tolerant loop below and its failure is
-    // NOT caught: a completely dead board must throw, not return []. A
-    // caught page-0 failure would return an empty array indistinguishable
-    // from a healthy "0 jobs today" result -- scan.mjs's consecutive-failure
-    // detector resets its streak on any non-throwing fetch, so a themuse
-    // outage would silently reset the very detector meant to catch it.
-    // Mirrors workday.mjs, which fetches its first page outside the
-    // retry-tolerant loop (`page = 1` start) for the same reason.
     const firstUrl = `${FEED_BASE}?page=0`;
-    // redirect:'error' prevents SSRF via server-side redirects
     const first = await fetchPageWithRetry(ctx, firstUrl, { redirect: 'error' });
     if (!first || !Array.isArray(first.results)) {
       throw new Error(
@@ -150,11 +93,6 @@ export default {
       ? Math.min(first.page_count, MAX_PAGES)
       : 1;
 
-    // Pages 1+ stay tolerant: a page that exhausts retries, OR comes back
-    // with an unexpected shape (a successful fetch, no retry involved --
-    // caught here so it lands in the same truncation path instead of
-    // escaping uncaught and discarding allResults), truncates with a warning
-    // and returns whatever was already gathered instead of discarding it.
     for (let page = 1; page < pageCount; page++) {
       await sleep(INTER_PAGE_DELAY_MS, ctx);
       const url = `${FEED_BASE}?page=${page}`;

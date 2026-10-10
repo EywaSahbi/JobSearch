@@ -19,24 +19,14 @@ const STAGES: { key: string; label: string }[] = [
   { key: "DISCARDED", label: "Discarded" },
 ];
 
-// Two views behind one route, selected by ?view= so the tab is linkable and the
-// assistant can navigate straight to it — the same "URL is the source of truth"
-// rule pipeline-view.tsx follows for its tabs.
 const VIEWS = ["progress", "insights"] as const;
 type View = (typeof VIEWS)[number];
 
 export default async function Analytics({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const raw = Array.isArray(sp.view) ? sp.view[0] : sp.view;
-  // Anything unrecognized falls back to progress rather than rendering an empty
-  // page, so a stale or hand-edited link still lands somewhere useful.
   const view: View = (VIEWS as readonly string[]).includes(String(raw)) ? (String(raw) as View) : "progress";
 
-  // Only the count is shared with the subheading; everything each view needs to
-  // read, it reads for itself. Progress reaches into the core to recover funnel
-  // history, and Insights renders none of that — so that read belongs inside
-  // ProgressView, not out here where an incomplete core install would take the
-  // whole route down with it.
   const { applications } = pipelineSummary();
   const total = applications.length;
 
@@ -95,11 +85,6 @@ async function ProgressView({ applications }: { applications: ReturnType<typeof 
   const topCompanies = [...companyCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const maxCompany = Math.max(1, ...topCompanies.map((c) => c[1]));
 
-  // CUMULATIVE, unlike the stage bars above: these two tiles are achievement
-  // counters whose zero-state shows a coaching nudge, so a candidate who has
-  // already advanced past a stage must not read 0 for it (an offer-holder was
-  // told "Interviews follow replies — keep follow-ups warm"). Mirrors
-  // everInterview/everOffer in stats.mjs, including stages recovered from history.
   const { interviews, offers } = await cumulativeTilesWithHistory(
     applications.map((a) => ({ n: a.n, status: canonStatus(a.status) })),
     readApplicationStatusLog(),
@@ -107,7 +92,6 @@ async function ProgressView({ applications }: { applications: ReturnType<typeof 
 
   return (
     <>
-      {/* headline stats */}
       <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat value={total} label="evaluated" />
         <Stat value={avg ? avg.toFixed(2) : "—"} label="avg score" />
@@ -150,8 +134,6 @@ async function ProgressView({ applications }: { applications: ReturnType<typeof 
         ))}
       </Section>
 
-      {/* The core's cumulative funnel and conversion rates. Last, because it is
-          the one block that waits on a spawned script. */}
       <FunnelRates />
     </>
   );

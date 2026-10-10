@@ -1,13 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * Resolve and initialize one application-scoped artifact directory.
- *
- * Generated CVs are intentionally kept under output/ because they are user
- * artifacts. The directory key is stable for a report/company/role tuple so
- * the JD, source CV, tailored CV, PDF, and reuse decision stay together.
- */
-
 import { mkdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { parseArgs } from 'util';
@@ -17,7 +9,6 @@ import { isMainModule } from './lib/is-main-module.mjs';
 const DEFAULT_OUTPUT_ROOT = resolve('output');
 const DECISIONS = new Set(['reuse', 'reuse-with-edits', 'regenerate']);
 
-/** Convert a user-facing label into a safe, readable path segment. */
 export function slugifySegment(value, fallback = 'application') {
   const slug = String(value ?? '')
     .trim()
@@ -27,7 +18,6 @@ export function slugifySegment(value, fallback = 'application') {
   return slug || fallback;
 }
 
-/** Return all stable paths belonging to one application artifact bundle. */
 export function applicationArtifactPaths({ reportNum, company, role, version = 1, root = DEFAULT_OUTPUT_ROOT }) {
   if (!/^\d+$/.test(String(reportNum ?? ''))) {
     throw new Error('reportNum must be a numeric report number');
@@ -63,7 +53,6 @@ export function applicationArtifactPaths({ reportNum, company, role, version = 1
   };
 }
 
-/** Create the JD and CV subdirectories for an application bundle. */
 export function ensureApplicationArtifactDirs(paths) {
   for (const directory of [
     join(paths.root, 'jd'),
@@ -74,7 +63,6 @@ export function ensureApplicationArtifactDirs(paths) {
   return paths;
 }
 
-/** Write an auditable CV reuse decision beside the application artifacts. */
 export function writeReuseDecision(paths, {
   decision,
   score = null,
@@ -102,18 +90,8 @@ export function writeReuseDecision(paths, {
   return record;
 }
 
-// --help was swallowed by parseArgs's strict mode and reported as an unknown
-// option (#2774), so the built-in help flag looked like a typo. Handled via
-// lib/cli-flags.mjs's validateFlags() (#2775), which rejects unrecognized
-// flags before --help so `--help --bogus` still errors.
-//
-// requireOperand is opted in because this script has no value validation of
-// its own to say anything better: without it `--report --help` consumed the
-// next token, printed usage and exited 0 (the #2961 class), so a malformed
-// flag went unreported.
 const KNOWN_FLAGS = ['--report', '--company', '--role', '--version', '--root', '--init', '--help', '-h'];
 
-// Every flag except --init takes its value as the next argv token.
 const VALUE_FLAGS = ['--report', '--company', '--role', '--version', '--root'];
 
 const USAGE = `Usage:

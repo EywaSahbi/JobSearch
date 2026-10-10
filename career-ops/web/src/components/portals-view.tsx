@@ -23,7 +23,6 @@ export function PortalsView() {
   const [loading, setLoading] = useState(false);
   const { jobs, startJob } = useJobs();
 
-  // map the agentic "fix-portal" workers to the company they're repairing
   const fixByCompany = useMemo(() => {
     const m = new Map<string, (typeof jobs)[number]>();
     for (const j of jobs) {

@@ -1,27 +1,3 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// Target list: `tracked_companies:` (one configured Eploy tenant per entry).
-// Eploy careers sites expose a public `/live-jobs.xml` sitemap containing the
-// tenant's complete live inventory. This avoids the ASP.NET Web Forms results
-// pager, whose stateful POST flow needs cookies and returns a redirect between
-// pages. The sitemap is anonymous, server-rendered, and available on branded
-// careers domains as well as `<tenant>.eploy.net`.
-//
-// Branded domains have no shared hostname suffix, so this provider is
-// intentionally explicit-only:
-//
-//   - name: Example employer
-//     provider: eploy
-//     careers_url: https://careers.example.com/vacancies/
-//     eploy:
-//       fetchDetails: false  # optional; exact title/location/JD enrichment
-//       detailLimit: 25      # 1..100, default 25
-//
-// The sitemap's `<lastmod>` is deliberately NOT mapped to `postedAt`: it is a
-// modification timestamp, not the publication date. Without detail enrichment,
-// titles are reconstructed conservatively from the canonical job-page slug.
-
 import { intInRange } from './_config-utils.mjs';
 import { decodeEntities } from './_html-entities.mjs';
 import { htmlToText } from './_html-to-text.mjs';
@@ -32,18 +8,10 @@ const JOB_PATH_RE = /^\/vacancies\/(\d+)\/([^/?#]+)\.html\/?$/i;
 const DETAIL_BATCH = 3;
 const DETAIL_PACE_MS = 250;
 
-/** @param {unknown} value */
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/**
- * Eploy supports arbitrary branded domains. Keep that flexibility without
- * allowing config to target loopback, IP literals, or internal-only names.
- * Redirects are rejected separately on every request.
- * @param {any} entry
- * @returns {URL|null}
- */
 function resolveCareersOrigin(entry) {
   let parsed;
   try {
@@ -62,19 +30,10 @@ function resolveCareersOrigin(entry) {
   return new URL(`https://${host}`);
 }
 
-/** @param {URL} origin */
 function buildFeedUrl(origin) {
   return new URL(FEED_PATH, origin).href;
 }
 
-/**
- * A branded Eploy sitemap normally links back to its own origin. Some tenants
- * instead publish the canonical `<tenant>.eploy.net` job
- * URL. Permit only those two forms; an arbitrary off-site `<loc>` is data, not
- * authority to broaden the fetch boundary.
- * @param {URL} url
- * @param {URL} origin
- */
 function isAllowedJobUrl(url, origin) {
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
   const sameHost = host === origin.hostname.toLowerCase();
@@ -95,7 +54,6 @@ const ACRONYMS = new Map([
   ['uk', 'UK'], ['ui', 'UI'], ['ux', 'UX'],
 ]);
 
-/** @param {string} slug */
 export function titleFromSlug(slug) {
   let decoded;
   try { decoded = decodeURIComponent(slug); } catch { decoded = slug; }
@@ -114,15 +72,6 @@ export function titleFromSlug(slug) {
     .join(' - ');
 }
 
-/**
- * Parse the standard Eploy live-jobs sitemap. Empty bodies and valid empty
- * `<urlset>` documents represent an empty board. A non-empty response that is
- * not a sitemap fails loudly so a login page or template change cannot masquerade
- * as zero vacancies.
- * @param {unknown} xml
- * @param {URL} origin
- * @param {string} company
- */
 export function parseEploySitemap(xml, origin, company) {
   if (typeof xml !== 'string' || !xml.trim()) return [];
   if (!/<urlset\b[^>]*>/i.test(xml)) {
@@ -148,7 +97,6 @@ export function parseEploySitemap(xml, origin, company) {
   return jobs;
 }
 
-/** @param {any} address */
 function locationFromAddress(address) {
   if (!address || typeof address !== 'object') return '';
   const country = typeof address.addressCountry === 'object'
@@ -159,25 +107,17 @@ function locationFromAddress(address) {
   ].filter(Boolean))].join(', ');
 }
 
-/** @param {any} value */
 function isJobPosting(value) {
   const type = value?.['@type'];
   return type === 'JobPosting' || (Array.isArray(type) && type.includes('JobPosting'));
 }
 
-/** @param {any} value @returns {any[]} */
 function flattenJsonLd(value) {
   if (Array.isArray(value)) return value.flatMap(flattenJsonLd);
   if (!value || typeof value !== 'object') return [];
   return [value, ...flattenJsonLd(value['@graph'])];
 }
 
-/**
- * Details use two observed Eploy shapes: newer themes emit schema.org
- * JobPosting JSON-LD, while legacy themes expose Web Forms location fields and
- * an HTML meta description. Malformed detail data simply yields no enrichment.
- * @param {unknown} html
- */
 export function parseEployDetail(html) {
   if (typeof html !== 'string' || !html.trim()) return {};
   for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script\s*>/gi)) {
@@ -204,7 +144,6 @@ export function parseEployDetail(html) {
   };
 }
 
-/** @param {any} entry */
 function parseConfig(entry) {
   const cfg = entry?.eploy || {};
   return {
@@ -213,7 +152,6 @@ function parseConfig(entry) {
   };
 }
 
-/** @type {Provider} */
 export default {
   id: 'eploy',
 
@@ -250,7 +188,6 @@ export default {
           if (text(detail.description)) job.description = text(detail.description);
           if (Number.isFinite(detail.postedAt)) job.postedAt = detail.postedAt;
         } catch {
-          // Detail lookup is opt-in enrichment. Keep the sitemap row on failure.
         }
       }));
       if (i + DETAIL_BATCH < candidates.length) await sleep(DETAIL_PACE_MS, ctx);

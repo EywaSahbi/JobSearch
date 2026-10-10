@@ -5,8 +5,6 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
-// Single-line monospace command + copy-to-clipboard — ported from the
-// career-ops-docs home. Truncates on narrow viewports (intent is "copy this").
 export function CopyableCommand({
   command,
   className,
@@ -22,7 +20,6 @@ export function CopyableCommand({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Non-secure context or permission denied — fail silently.
     }
   }
 

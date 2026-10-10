@@ -1,10 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * Import CV facts into a reviewable, source-backed Master Career Profile.
- * Parsing is deliberately conservative: the CV is evidence, not an instruction.
- */
-
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
@@ -324,7 +319,7 @@ async function doImport(args) {
       writeFileSync(tmpPath, yaml.dump(merged, { noRefs: true, lineWidth: 100 }), { encoding: 'utf8', flag: 'w' });
       renameSync(tmpPath, profilePath);
     } catch (error) {
-      try { rmSync(tmpPath, { force: true }); } catch { /* keep the save error, not the cleanup one */ }
+      try { rmSync(tmpPath, { force: true }); } catch { }
       throw error;
     }
     process.stdout.write(`Saved ${profilePath}. Approved items are marked verified; existing entries were preserved.\n`);

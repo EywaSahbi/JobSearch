@@ -1,17 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * extract-latex-content.mjs — Detect LaTeX CV family and list editable prose slots.
- *
- * v1 families:
- *   - resumeSubheading (\\resumeItem bullets + \\textbf{Category}{: skills})
- *   - tabularx-itemize (\\item bodies inside itemize, no resume macros)
- *
- * Usage:
- *   node extract-latex-content.mjs <source.tex>
- *   node extract-latex-content.mjs <source.tex> --out manifest.json
- */
-
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, basename } from 'path';

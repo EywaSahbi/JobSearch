@@ -23,12 +23,6 @@ import { DeleteFromTracker } from "@/components/delete-from-tracker";
 import { ReportMarkdown } from "@/components/report-markdown";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
 
-// Progressive disclosure of the report. Current oferta.md writes letter F as
-// Interview Plan (STAR+R), not a verdict — never promote by letter (#3416).
-// The score + 4.0 apply line + legitimacy live in one Peak-End callout (#4203).
-// Block B (CV Match) stays open; everything else, including Role Summary and
-// STAR+R, is collapsed (#4205). Machine artifacts stay in the Technical tier.
-
 function isMachine(heading: string): boolean {
   return /machine summary|submitted|submit[-\s]?log/i.test(heading);
 }
@@ -65,14 +59,9 @@ export function ReportView({
   id: string;
   app: Application | null;
   report: string | null;
-  /** kept in the props contract (the page passes it) but no longer surfaced —
-   *  the raw .md filename is a dev artifact, not header content. */
   file?: string | null;
   canDelete?: boolean;
   pdfReadyFromIndex?: boolean;
-  /** A tailored cover letter for THIS application exists in output/ (resolved by
-   *  the page, see resolveTailoredCover). View only — covers are never generated
-   *  from here. */
   coverReady?: boolean;
 }) {
   const meta = report ? parseReport(report) : null;

@@ -1,52 +1,4 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
 import { safeEncodeURIComponent } from './_safe-url.mjs';
-
-// ADP Workforce Now Recruitment provider — hits the public, no-auth
-// "staffing" event API behind a tenant's recruitment page. A single-company
-// ATS adapter: configure it as a `tracked_companies:` entry, one per tenant.
-// Auto-detects from careers_url pattern
-// `https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=...&ccId=...`
-//
-//   List:   GET {base}/job-requisitions?cid={CID}&ccId={CCID}&$skip=1&$top=20
-//   Detail: GET {base}/job-requisitions/{itemID}?cid={CID}&ccId={CCID}&lang=en_US&locale=en_US
-//
-// where {base} is the fixed literal host
-// https://workforcenow.adp.com/mascsr/default/careercenter/public/events/staffing/v1.
-//
-// Pagination is a plain row offset, ONE-BASED ($skip=1 is the first page, not
-// 0) — advance by the number of rows actually returned each page, not a fixed
-// PAGE_SIZE, and stop once the running count reaches the response's own
-// `meta.totalNumber` or a page comes back empty (mirrors workday.mjs's own
-// "never trust the source's page count alone" discipline, just expressed as a
-// running total instead of a page-count ceiling).
-//
-// ── ID semantics (do not conflate) ──────────────────────────────────────────
-// - itemID            ADP's internal resource id (e.g. "9200947568911_1").
-//                      Detail-fetch key AND the stable dedup/job.url key.
-// - ExternalJobID      The public job number, tucked inside
-//                      customFieldGroup.stringFields (an ADP OData-style
-//                      name/value list — find the entry whose
-//                      nameCode.codeValue === 'ExternalJobID'). Used to build
-//                      the public posting URL. Falls back to itemID when
-//                      absent — verified live that the fallback still opens a
-//                      working posting page.
-// - clientRequisitionID  The employer's own req number. Display-only, never
-//                      used as an id anywhere in this provider.
-//
-// The list payload does not carry the full JD (that's `requisitionDescription`
-// on the detail response only), so — mirroring smartrecruiters.mjs/vdab.mjs —
-// description enrichment is opt-in per tracked_companies entry:
-//
-//   adpWorkforcenow:
-//     fetchDetails: true   # fetch each posting's detail JSON for descriptions
-//     detailLimit: 25      # max detail calls per sweep when fetchDetails=true
-//
-// Rate limiting was observed live but not fully characterized upstream, so
-// pagination and detail enrichment both stay conservative: small inter-page
-// delay, retry/backoff via the shared helper, sequential (not concurrent)
-// detail calls.
 
 import { fetchJsonWithRetry, sleep } from './_http.mjs';
 import { intInRange } from './_config-utils.mjs';
@@ -55,35 +7,15 @@ import { htmlToText } from './_html-to-text.mjs';
 const ADP_HOST = 'workforcenow.adp.com';
 const API_BASE = `https://${ADP_HOST}/mascsr/default/careercenter/public/events/staffing/v1`;
 
-const PAGE_SIZE = 20; // ADP's fixed page size; $skip advances by rows actually returned, not this constant.
+const PAGE_SIZE = 20;
 
-// Safety cap on pagination, independent of what the API reports as
-// meta.totalNumber — a tampered/misbehaving response must not turn one
-// portals.yml line into an unbounded request loop (ADDING_A_PROVIDER.md,
-// "Absolute page ceiling"). Override with max_pages on the entry for a
-// tenant that genuinely has more postings than this covers.
-const DEFAULT_MAX_PAGES = 100; // 100 * 20 = 2000 postings
-const MAX_PAGES_CAP = 1500; // hard ceiling even for an explicit override
+const DEFAULT_MAX_PAGES = 100;
+const MAX_PAGES_CAP = 1500;
 
-// Retry policy for transient page/detail failures (429, 5xx, timeouts/aborts).
-// Rate limiting was "observed empirically but not fully characterized" per
-// the source issue — the default shared policy (2 retries) is conservative
-// enough without inventing tuning this provider has no evidence for.
 const RETRY_POLICY = { retries: 2, baseDelayMs: 500, maxDelayMs: 8_000 };
 
-// Delay between successive LIST pages within one tenant's pagination loop.
-// Same rationale as workday.mjs's INTER_PAGE_DELAY_MS: a burst of same-host
-// requests with zero delay risks tripping a rate limiter on any tenant deep
-// enough to paginate past page 1.
 const INTER_PAGE_DELAY_MS = 250;
 
-/**
- * A careers/recruitment page:
- * `https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=...&ccId=...`
- * cid/ccId may appear in either order and alongside other query params.
- * @param {import('./_types.js').PortalEntry} entry
- * @returns {{ cid: string, ccId: string } | null}
- */
 function resolveTenant(entry) {
   for (const raw of [entry?.api, entry?.careers_url]) {
     if (typeof raw !== 'string' || !raw) continue;
@@ -102,11 +34,6 @@ function resolveTenant(entry) {
   return null;
 }
 
-/**
- * @param {string} cid
- * @param {string} ccId
- * @param {number} skip
- */
 function buildListUrl(cid, ccId, skip) {
   const u = new URL(`${API_BASE}/job-requisitions`);
   u.searchParams.set('cid', cid);
@@ -116,11 +43,6 @@ function buildListUrl(cid, ccId, skip) {
   return u.href;
 }
 
-/**
- * @param {string} itemId
- * @param {string} cid
- * @param {string} ccId
- */
 function buildDetailUrl(itemId, cid, ccId) {
   const u = new URL(`${API_BASE}/job-requisitions/${safeEncodeURIComponent(itemId)}`);
   u.searchParams.set('cid', cid);
@@ -130,9 +52,6 @@ function buildDetailUrl(itemId, cid, ccId) {
   return u.href;
 }
 
-/**
- * @param {string} url
- */
 function assertAdpUrl(url) {
   let parsed;
   try {
@@ -147,29 +66,18 @@ function assertAdpUrl(url) {
   return url;
 }
 
-// customFieldGroup is ADP's generic OData-ish name/value list, split by type
-// (stringFields, dateFields, ...). Each entry carries nameCode.codeValue as
-// the field's logical name and a typed `*Value` payload.
-/**
- * @param {any} customFieldGroup
- * @param {string} groupKey e.g. 'stringFields' | 'dateFields'
- * @param {string} codeValue e.g. 'ExternalJobID'
- */
 function findCustomField(customFieldGroup, groupKey, codeValue) {
   const list = customFieldGroup?.[groupKey];
   if (!Array.isArray(list)) return null;
   return list.find((f) => f?.nameCode?.codeValue === codeValue) ?? null;
 }
 
-/** @param {any} customFieldGroup */
 export function extractExternalJobId(customFieldGroup) {
   const field = findCustomField(customFieldGroup, 'stringFields', 'ExternalJobID');
   const v = field?.stringValue;
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
-// NaN-safe Date.parse — `|| undefined` would also coerce a valid epoch 0.
-/** @param {unknown} value */
 function toEpochMs(value) {
   if (!value) return undefined;
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
@@ -177,7 +85,6 @@ function toEpochMs(value) {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-/** @param {any} job */
 export function extractPostedAt(job) {
   const direct = toEpochMs(job?.postDate);
   if (direct !== undefined) return direct;
@@ -185,11 +92,6 @@ export function extractPostedAt(job) {
   return toEpochMs(field?.dateValue);
 }
 
-// requisitionLocations[].nameCode carries a ready-made label; some tenants
-// leave it empty and only populate the structured address instead. Multiple
-// work locations are deduped and joined with " / ", same convention as
-// csod.mjs / successfactors.mjs.
-/** @param {any} job */
 export function extractLocation(job) {
   const list = Array.isArray(job?.requisitionLocations) ? job.requisitionLocations : [];
   const out = [];
@@ -208,17 +110,6 @@ export function extractLocation(job) {
   return out.join(' / ');
 }
 
-/**
- * Optional, best-effort — never invent a figure absent from the payload.
- * Prefers the structured payGradeRange (mirrors ashby.mjs's `{min, max,
- * currency}` shape, which scan.mjs's salary_filter / formatCompensation
- * already know how to consume); falls back to whatever numbers are literally
- * present in the tagged customFieldGroup strings some tenants use instead —
- * pulling out digits already in the field, not inventing structure it
- * doesn't have. Returns null when neither source is present or usable.
- * @param {any} job
- * @returns {{min?: number, max?: number, currency?: string} | null}
- */
 export function extractSalary(job) {
   const range = job?.payGradeRange;
   const minAmt = range?.minimumRate?.amountValue;
@@ -234,10 +125,6 @@ export function extractSalary(job) {
     };
   }
 
-  // Fallback: tenant-tagged custom fields carrying a free-text range (e.g.
-  // "$50,000 - $70,000"). Extract whatever numbers are present; a single
-  // number becomes both min and max, two or more become the low/high of the
-  // set (order-independent — some tenants write "up to $X" style strings).
   const salaryRange = findCustomField(job?.customFieldGroup, 'stringFields', 'SalaryRange')?.stringValue;
   const symbolOrCode = findCustomField(job?.customFieldGroup, 'stringFields', 'CurrencySymbolOrCode')?.stringValue;
   if (typeof salaryRange === 'string' && salaryRange.trim()) {
@@ -258,17 +145,8 @@ export function extractSalary(job) {
   return null;
 }
 
-/**
- * Canonical public posting URL. Falls back to itemID as `jobId` when
- * ExternalJobID is absent — verified live that this still opens a working
- * posting page.
- * @param {string} cid @param {string} ccId @param {string} itemId @param {string | null} externalJobId
- */
 export function buildPostingUrl(cid, ccId, itemId, externalJobId) {
   const jobId = externalJobId || itemId;
-  // URLSearchParams performs the query-component encoding. Probe the values
-  // with safeEncodeURIComponent only to retain the lone-surrogate fail-safe; passing
-  // its encoded output to URLSearchParams would double-encode `%`.
   if (safeEncodeURIComponent(jobId) === null || safeEncodeURIComponent(itemId) === null) return null;
   const u = new URL(`https://${ADP_HOST}/mascsr/default/mdf/recruitment/recruitment.html`);
   u.searchParams.set('cid', cid);
@@ -280,18 +158,6 @@ export function buildPostingUrl(cid, ccId, itemId, externalJobId) {
   return u.href;
 }
 
-/**
- * Parse one `job-requisitions` list-page response into raw job rows.
- *
- * ADP returns `{ jobRequisitions: [...], meta: { totalNumber } }`. A row
- * missing a usable `itemID` or title is dropped (both required — itemID is
- * the dedup/detail key, and a blank job.url would collapse distinct postings
- * — same discipline as bamboohr.mjs's id/name filter).
- *
- * @param {any} json
- * @param {{ cid: string, ccId: string, companyName: string }} cfg
- * @returns {{ jobs: Array<{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min?: number, max?: number, currency?: string}}>, total: number | null, raw: any[] }}
- */
 export function parseListPage(json, cfg) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('adp-workforcenow: unrecognized job-requisitions response');
@@ -314,8 +180,7 @@ export function parseListPage(json, cfg) {
     if (!itemId || !title) continue;
     const externalJobId = extractExternalJobId(job.customFieldGroup);
     const url = buildPostingUrl(cfg.cid, cfg.ccId, itemId, externalJobId);
-    if (!url) continue; // a lone-surrogate id — drop just this one posting
-    /** @type {{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min?: number, max?: number, currency?: string}}} */
+    if (!url) continue;
     const row = {
       title,
       url,
@@ -331,7 +196,6 @@ export function parseListPage(json, cfg) {
   return { jobs, total, raw };
 }
 
-/** @param {any} entry */
 function parseAdpConfig(entry) {
   const cfg = (entry && entry.adpWorkforcenow) || {};
   return {
@@ -340,14 +204,12 @@ function parseAdpConfig(entry) {
   };
 }
 
-/** Resolve the page cap: a positive integer `max_pages` on the entry, capped. */
 function resolveMaxPages(entry) {
   const v = entry?.max_pages;
   if (Number.isInteger(v) && v > 0) return Math.min(v, MAX_PAGES_CAP);
   return DEFAULT_MAX_PAGES;
 }
 
-/** @type {Provider} */
 export default {
   id: 'adp-workforcenow',
 
@@ -363,22 +225,13 @@ export default {
     const cfg = { cid, ccId, companyName: entry.name };
 
     const maxPages = resolveMaxPages(entry);
-    // verify-portals' liveness probe sets ctx.maxPages — cooperate the same
-    // way workday.mjs/smartrecruiters.mjs do, so the probe costs one request.
     const ctxCap = Number.isInteger(ctx?.maxPages) && ctx.maxPages > 0 ? ctx.maxPages : Infinity;
     const pageLimit = Math.min(maxPages, ctxCap);
 
     const jobs = [];
     const seen = new Set();
-    let skip = 1; // ADP's $skip is one-based.
+    let skip = 1;
     let total = null;
-    // True only when the walk stopped because it ran out of page budget with
-    // known postings still unreached — the difference between "this is the
-    // whole board" and "this is as much of it as the cap allowed" (never set
-    // while ctxCap is finite: a probe's single-page cap is expected, not an
-    // incomplete-board condition). Tracked unconditionally, independent of
-    // whether meta.totalNumber was ever present, so a tenant that omits it
-    // still gets a truncation signal instead of a silent partial board.
     let cappedIncomplete = false;
 
     for (let page = 0; page < pageLimit; page++) {
@@ -386,10 +239,6 @@ export default {
       const listUrl = assertAdpUrl(buildListUrl(cid, ccId, skip));
       const json = await fetchJsonWithRetry(ctx, listUrl, { redirect: 'error' }, RETRY_POLICY);
 
-      // The endpoint documents a `jobRequisitions` array — a response that
-      // has neither that array nor a `meta` object at all is not "zero
-      // postings", it's a shape we don't recognize (surface it loudly rather
-      // than silently reporting an empty board forever).
       if (json && typeof json === 'object' && !Array.isArray(json.jobRequisitions) && json.meta === undefined) {
         throw new Error(`adp-workforcenow: unrecognized job-requisitions response for ${entry.name} — keys: ${Object.keys(json).join(', ') || '(none)'}`);
       }
@@ -397,31 +246,19 @@ export default {
       const { jobs: pageJobs, total: pageTotal, raw } = parseListPage(json, cfg);
       if (pageTotal !== null) total = pageTotal;
 
-      // An empty page — whether "no rows at all" or "every row on this page
-      // was unusable" — is the pagination stop condition either way; a
-      // response that never advances would otherwise loop until pageLimit.
       if (raw.length === 0) break;
 
       let fresh = 0;
       for (const job of pageJobs) {
-        const { _itemId, ...clean } = /** @type {any} */ (job);
+        const { _itemId, ...clean } = (job);
         if (seen.has(_itemId)) continue;
         seen.add(_itemId);
         fresh++;
         jobs.push(Object.assign(clean, { _itemId }));
       }
-      // No new ids this page → server ignored $skip (or we've looped). Stop,
-      // same guard bamboohr/csod/successfactors all use.
       if (fresh === 0) break;
 
-      skip += raw.length; // advance by rows actually returned, never PAGE_SIZE
-      // This was the last iteration the for-loop will run — if the board
-      // still has more (or an unknown amount, when meta.totalNumber was
-      // never present) left, the cap truncated it. A short page (fewer rows
-      // than PAGE_SIZE) is itself evidence the board ended naturally here —
-      // without that guard, a tenant with no meta.totalNumber whose last
-      // reachable page just happens to be short would be wrongly tagged
-      // truncated even though there was nothing left to fetch.
+      skip += raw.length;
       if (raw.length < PAGE_SIZE) break;
       if (page === pageLimit - 1) cappedIncomplete = true;
     }
@@ -432,19 +269,12 @@ export default {
       console.error(`⚠️  adp-workforcenow: ${entry.name} truncated at max_pages=${maxPages} (${jobsSummary}) — raise max_pages on this entry for more`);
     }
 
-    // Detail enrichment answers "what does this job say", not "is this
-    // endpoint alive" — skip it entirely while a health probe is running
-    // (ctx.maxPages set), same rule as smartrecruiters.mjs/vdab.mjs.
     const { fetchDetails, detailLimit } = parseAdpConfig(entry);
     const probing = ctxCap !== Infinity;
     if (fetchDetails && !probing) {
       const targets = jobs.slice(0, detailLimit);
-      // Sequential, not batched/concurrent: rate limiting on this API "was
-      // observed empirically but not fully characterized" per the source
-      // issue, so this stays as conservative as the spec's own
-      // "1 per tenant" starting suggestion until real data says otherwise.
       for (const target of targets) {
-        const job = /** @type {any} */ (target);
+        const job = (target);
         await sleep(INTER_PAGE_DELAY_MS, ctx);
         try {
           const detailUrl = assertAdpUrl(buildDetailUrl(job._itemId, cid, ccId));
@@ -452,20 +282,12 @@ export default {
           const description = htmlToText(detail?.requisitionDescription);
           if (description) job.description = description;
         } catch {
-          // Detail fetch is an enrichment only — keep the listing result
-          // (same fail-open contract as smartrecruiters.mjs).
         }
       }
     }
 
-    // _itemId drove dedup/detail lookups above; it's internal plumbing and
-    // must not leak into the pipeline's Job rows (mirrors smartrecruiters.mjs).
     const result = jobs.map(({ _itemId, ...job }) => job);
-    // The tag lives on the returned array (mirrors workday.mjs's
-    // workdayTruncated / workdayNoDateSkip pattern) — re-applied here because
-    // .map() above produces a
-    // fresh array that wouldn't otherwise carry it.
-    if (truncated) /** @type {any} */ (result).adpTruncated = true;
+    if (truncated) (result).adpTruncated = true;
     return result;
   },
 };

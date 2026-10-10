@@ -1,23 +1,9 @@
-/**
- * @typedef {{ type: "text", text: string } | { type: "tool", name: string } | { type: "status", label: string }} JobProgress
- * @typedef {{ status: "done", tokens?: number, costUsd?: number } | { status: "error", message: string }} JobCompletion
- */
-
-/**
- * Read the /api/run NDJSON protocol. A closed connection is not proof that the
- * worker saved its report or rendered its PDF: only the server's `done` event is.
- *
- * @param {ReadableStream<Uint8Array>} stream
- * @param {(event: JobProgress) => void} onProgress
- * @returns {Promise<JobCompletion>}
- */
 export async function readJobStream(stream, onProgress) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let ended = false;
 
-  /** @param {string} line @returns {JobCompletion | null} */
   const consume = (line) => {
     if (!line.trim()) return null;
     let event;
@@ -39,7 +25,6 @@ export async function readJobStream(stream, onProgress) {
     if (event?.type === "text" && typeof event.text === "string") onProgress(event);
     else if (event?.type === "tool" && typeof event.name === "string") onProgress(event);
     else if (event?.type === "status" && typeof event.label === "string") onProgress(event);
-    // Keepalives and future non-terminal events do not confirm completion.
     return null;
   };
 
@@ -56,7 +41,6 @@ export async function readJobStream(stream, onProgress) {
         if (completion) return completion;
       }
       if (done) {
-        // A final record need not have a trailing newline.
         return consume(buffer) ?? {
           status: "error",
           message: "Connection ended before the server confirmed completion. Check the pipeline before retrying.",
@@ -69,8 +53,6 @@ export async function readJobStream(stream, onProgress) {
       message: error instanceof Error && error.name === "AbortError" ? "Interrupted. Check the pipeline before retrying." : "Connection error",
     };
   } finally {
-    // A terminal error can arrive while the worker is still streaming. Release
-    // the response instead of leaving an unread body and its reader behind.
     if (!ended) await reader.cancel().catch(() => {});
     reader.releaseLock();
   }

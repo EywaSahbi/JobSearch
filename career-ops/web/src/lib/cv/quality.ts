@@ -1,7 +1,3 @@
-// Client-safe (no node). Deterministic "is this CV good enough to score?" signal —
-// ZERO tokens. Advisory only: it drives a green-check vs amber hint, NEVER blocks
-// saving (the minimal-CV principle: even a rough parse is enough for a first score).
-
 export type CvReadiness = { scoreable: boolean; words: number; hasExperience: boolean; hasSkills: boolean; hint?: string };
 
 export function cvReadiness(md: string): CvReadiness {
@@ -15,12 +11,9 @@ export function cvReadiness(md: string): CvReadiness {
   return { scoreable, words, hasExperience, hasSkills, hint };
 }
 
-// ── CV ingest stream markers (parallel to the <<act:>>/<<offer:>> envelopes) ──
 export type CvSeed = { title?: string; roles?: string[]; location?: string };
 export type CvIngestResult = { markdown: string; seed: CvSeed | null; error: string | null; trace: string };
 
-/** Parse the full accumulated ingest stream text into its parts. Tolerant: a
- *  still-streaming buffer just yields partial markdown + the pre-start trace. */
 export function parseCvStream(buf: string): CvIngestResult {
   const errM = buf.match(/<<cv:error>>\s*(\{[^}]*\})/);
   if (errM) {
@@ -28,7 +21,6 @@ export function parseCvStream(buf: string): CvIngestResult {
     try {
       reason = JSON.parse(errM[1]).reason || reason;
     } catch {
-      /* keep default */
     }
     return { markdown: "", seed: null, error: reason, trace: buf.split("<<cv:error>>")[0].trim() };
   }
@@ -52,7 +44,6 @@ export function parseCvStream(buf: string): CvIngestResult {
         location: typeof j.location === "string" ? j.location : undefined,
       };
     } catch {
-      /* malformed seed → ignore */
     }
   }
   return { markdown, seed, error: null, trace };

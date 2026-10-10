@@ -1,65 +1,20 @@
 #!/usr/bin/env node
-/**
- * weekly-digest.mjs — Weekly Interview Digest for career-ops
- *
- * `interview/debrief` and `interview/practice` already write structured
- * session transcripts to `interview-prep/sessions/{company-slug}-{role-slug}-
- * {round}-{YYYY-MM-DD}.md` (schema documented in
- * `interview-prep/sessions/README.md`). Nothing aggregated them until now —
- * a candidate running multiple concurrent interview processes had to
- * manually cross-reference each file to see "which companies did I talk to
- * this week, and what's recurring across rounds." This is the first real
- * consumer of that schema.
- *
- * Zero-LLM by design: front-matter parsing, date-range filtering, and tag
- * counting only. No judgment calls — just mechanical rollup.
- *
- * Reads:
- *   - interview-prep/sessions/*.md — front matter (company/role/round/date/
- *     source) + `<!-- competency: tag[, tag...] -->` annotations
- *   - interview-prep/question-bank.md (optional, best-effort) — counts
- *     🔴-tagged lines whose nearest heading matches a company that has a
- *     session in range, as a mechanical (not schema-guaranteed) proxy for
- *     "recurring gap." question-bank.md has no fixed markdown schema (it's
- *     candidate-edited free text), so this is intentionally a loose textual
- *     match, not a strict parser — absent or unmatched entries degrade
- *     silently rather than erroring.
- *
- * Run: node weekly-digest.mjs                       (JSON to stdout)
- *      node weekly-digest.mjs --summary              (human-readable digest)
- *      node weekly-digest.mjs --from 2026-07-13 --to 2026-07-19
- *      node weekly-digest.mjs --dir path/to/sessions  (override sessions dir; test isolation)
- *      node weekly-digest.mjs --self-test
- *
- * Default range: the current ISO week (Monday–Sunday), matching the
- * `isoWeek` convention already used by `stats.mjs`'s scan-run trends.
- *
- * Issue #2129 — github.com/career-ops-hq/career-ops
- */
 
 import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
 
-// Only validateFlags: this module keeps its own flagValue (see below), so
-// importing the shared one too would shadow it.
 import { validateFlags } from './lib/cli-flags.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 
-// The USER's data root. interview-prep/ is USER_PATHS in update-system.mjs, so
-// resolving it from this file's directory meant that with a data root configured
-// the digest looked in the checkout, found nothing, and said "no session files
-// fall inside this range" — blaming the dates for a directory it never opened.
 const DATA_ROOT = getCareerOpsRoot();
 const DEFAULT_SESSIONS_DIR = join(DATA_ROOT, 'interview-prep', 'sessions');
 const DEFAULT_QUESTION_BANK_PATH = join(DATA_ROOT, 'interview-prep', 'question-bank.md');
 
 const ROUND_ENUM = ['screen', 'hiring-manager', 'technical', 'system-design', 'behavioral', 'onsite', 'final'];
-
-// ── Date helpers ────────────────────────────────────────────────────
 
 function isValidDateStr(s) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))) return false;
@@ -67,23 +22,10 @@ function isValidDateStr(s) {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/**
- * Current ISO week (Monday–Sunday) containing `now`, as {from, to} strings.
- * `now` is injectable so callers (and tests) never depend on wall-clock time
- * implicitly.
- *
- * WHICH day `now` falls on is read from the LOCAL calendar; the arithmetic that
- * follows stays anchored at UTC midnight. That is the split lib/local-today.mjs
- * documents, and both halves matter here. Reading getUTCDate() made a Sunday
- * evening in the Americas resolve to Monday, so "this week" was the week that
- * had not started yet: every session the user logged Mon–Sun fell outside
- * inRange() and the digest for the week just ended came back empty — which
- * reads as "a quiet week", not as a wrong window.
- */
 export function computeDefaultRange(now = new Date()) {
   const d = new Date(`${localToday(now)}T00:00:00Z`);
-  const dayIdx = (d.getUTCDay() + 6) % 7; // Mon=0 .. Sun=6
-  d.setUTCDate(d.getUTCDate() - dayIdx); // roll back to Monday
+  const dayIdx = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dayIdx);
   const from = d.toISOString().slice(0, 10);
   const end = new Date(d);
   end.setUTCDate(d.getUTCDate() + 6);
@@ -95,22 +37,7 @@ function inRange(dateStr, from, to) {
   return isValidDateStr(dateStr) && dateStr >= from && dateStr <= to;
 }
 
-/**
- * Value of a value-taking flag, accepting BOTH `--flag value` and `--flag=value`.
- *
- * `args.indexOf('--from')` is -1 for the `=` form, so a space-separated-only
- * lookup silently DISCARDS the bound the caller supplied and the digest then
- * reports a different week than the one that was asked for — the same silent
- * discard `computeWeeklyDigest` already refuses to perform for a half-supplied
- * range. company-history.mjs carries this same note and the same fix.
- *
- * @param {string[]} args - argv slice.
- * @param {string} flag - Flag name including leading dashes, e.g. '--from'.
- * @returns {string|undefined} The value, or undefined when the flag is absent.
- */
 export function flagValue(args, flag) {
-  // `--flag=value` first: indexOf() can't see it, so checking it second would
-  // let the space-separated lookup fall through and drop the value.
   const eq = args.find((a) => a.startsWith(`${flag}=`));
   if (eq) return eq.slice(flag.length + 1);
   const idx = args.indexOf(flag);
@@ -118,16 +45,6 @@ export function flagValue(args, flag) {
   return args[idx + 1];
 }
 
-// ── Session file parsing ────────────────────────────────────────────
-
-/**
- * Parse one session file's content: YAML front matter + competency tags
- * pulled from `<!-- competency: tag[, tag...] -->` comments in the body.
- * Returns null for a file with no parseable front matter (never throws —
- * a malformed or hand-edited session file must not crash the digest).
- *
- * @param {string} content - Raw session file text.
- */
 export function parseSessionFile(content) {
   const text = String(content ?? '').replace(/\r\n/g, '\n');
   const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
@@ -141,10 +58,6 @@ export function parseSessionFile(content) {
   if (typeof front !== 'object' || front === null) return null;
   const company = String(front.company ?? '').trim();
   const role = String(front.role ?? '').trim();
-  // js-yaml auto-parses an unquoted YYYY-MM-DD scalar into a JS Date (YAML
-  // 1.1 timestamp type) rather than leaving it a string — normalize back to
-  // YYYY-MM-DD before validating, or a well-formed date front-matter value
-  // would be silently rejected as invalid.
   const rawDate = front.date instanceof Date ? front.date.toISOString().slice(0, 10) : String(front.date ?? '').trim();
   if (!company || !role || !isValidDateStr(rawDate)) return null;
   const date = rawDate;
@@ -165,14 +78,6 @@ export function parseSessionFile(content) {
   return { company, role, date, round, source, interviewerRole, competencyTags };
 }
 
-/**
- * Load and parse every session file in `dir`. Non-.md files (README.md,
- * .gitkeep) and files that fail to parse are silently skipped — this
- * mirrors the "torn/malformed row never poisons the aggregate" convention
- * used throughout this codebase (e.g. detect-reposts.mjs, stats.mjs).
- *
- * @param {string} dir - Sessions directory path.
- */
 export function loadSessions(dir = DEFAULT_SESSIONS_DIR) {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md') && f.toLowerCase() !== 'readme.md');
@@ -190,23 +95,6 @@ export function loadSessions(dir = DEFAULT_SESSIONS_DIR) {
   return sessions;
 }
 
-// ── Question bank (best-effort, optional) ──────────────────────────
-
-/**
- * Best-effort scan of question-bank.md for 🔴-tagged lines, associated with
- * a company by nearest preceding markdown heading. question-bank.md has no
- * fixed schema (candidate-edited free text seeded by `interview/debrief`),
- * so this is intentionally loose: any line containing 🔴 is treated as a
- * gap entry, labelled with the line's own text (bullet/status markers
- * stripped), and attributed to whichever heading above it last matched one
- * of `companyNames` (case-insensitive substring match). Returns a Map of
- * lowercased company name -> array of gap-entry strings.
- *
- * @param {string} content - Raw question-bank.md text.
- * @param {string[]} companyNames - Company names to attribute gaps to (from
- *   in-range sessions only — gaps for companies outside the digest window
- *   are irrelevant to this report).
- */
 export function extractGapsByCompany(content, companyNames) {
   const byCompany = new Map();
   if (!content || !Array.isArray(companyNames) || companyNames.length === 0) return byCompany;
@@ -219,10 +107,6 @@ export function extractGapsByCompany(content, companyNames) {
       const headingText = line.replace(/^#{1,6}\s*/, '').toLowerCase();
       const found = lookup.find((c) => headingText.includes(c.lower));
       if (found) currentCompany = found.raw;
-      // A heading that doesn't match a known in-range company just means
-      // we're now inside an unrelated section — leave currentCompany as-is
-      // only if it's genuinely a sub-heading; safer to clear so an old
-      // company's gaps don't leak into a differently-headed section.
       else currentCompany = null;
       continue;
     }
@@ -235,14 +119,6 @@ export function extractGapsByCompany(content, companyNames) {
   return byCompany;
 }
 
-// ── Core rollup ─────────────────────────────────────────────────────
-
-/**
- * Build the digest for sessions already filtered to a date range.
- *
- * @param {Array} sessionsInRange - Result of loadSessions(), pre-filtered.
- * @param {Map<string,string[]>} gapsByCompany - Result of extractGapsByCompany().
- */
 export function buildDigest(sessionsInRange, gapsByCompany = new Map()) {
   const byCompany = new Map();
   const tagCounts = new Map();
@@ -259,11 +135,6 @@ export function buildDigest(sessionsInRange, gapsByCompany = new Map()) {
   const companies = [...byCompany.values()]
     .map((c) => ({
       ...c,
-      // Chronological order for rounds; a stable comparator (returns 0 on a
-      // genuine tie) matters so two rounds logged on the same date always
-      // sort the same way across runs/environments instead of drifting with
-      // whatever order the underlying sort implementation happens to visit
-      // them in. Round-type name is the deterministic tie-breaker.
       rounds: c.rounds.sort((a, b) => {
         if (a.date !== b.date) return a.date < b.date ? -1 : 1;
         return String(a.round || '').localeCompare(String(b.round || ''));
@@ -289,26 +160,12 @@ export function buildDigest(sessionsInRange, gapsByCompany = new Map()) {
   };
 }
 
-// ── Assembler ────────────────────────────────────────────────────────
-
-/**
- * Full digest for a date range, reading from disk.
- *
- * @param {{from?: string, to?: string, sessionsDir?: string, questionBankPath?: string}} opts
- */
 export function computeWeeklyDigest({
   from,
   to,
   sessionsDir = DEFAULT_SESSIONS_DIR,
   questionBankPath = DEFAULT_QUESTION_BANK_PATH,
 } = {}) {
-  // Range resolution has three cases, not two:
-  //   - neither --from nor --to given -> default current-week range (unchanged)
-  //   - exactly one of --from/--to given -> ambiguous, hard error (was:
-  //     silently fell back to the default range, which quietly discarded
-  //     the one bound the caller did supply)
-  //   - both given but from > to -> hard error (was: silently returned an
-  //     empty digest, indistinguishable from "no interviews this week")
   let range;
   if (from === undefined && to === undefined) {
     range = computeDefaultRange();
@@ -324,17 +181,7 @@ export function computeWeeklyDigest({
   const sessionsInRange = allSessions.filter((s) => inRange(s.date, range.from, range.to));
 
   const companyNames = [...new Set(sessionsInRange.map((s) => s.company))];
-  // "File exists" and "file has usable content" are independent questions —
-  // an existing-but-empty question-bank.md is a different state than a
-  // missing one, and the metadata (and printSummary's "present but
-  // unmatched" branch) needs to be able to tell them apart.
   const questionBankFound = existsSync(questionBankPath);
-  // existsSync() succeeding doesn't guarantee readFileSync() will: the path
-  // could be a directory, permissions could block the read, or the file
-  // could be deleted between the two calls (TOCTOU). Any of those is an
-  // optional-data problem, not a reason to abort the whole digest — degrade
-  // to "no usable content" the same way a missing file does, but keep
-  // questionBankFound as-is (it reflects existence, not readability).
   let qbContent = null;
   if (questionBankFound) {
     try {
@@ -347,10 +194,6 @@ export function computeWeeklyDigest({
 
   const digest = buildDigest(sessionsInRange, gapsByCompany);
 
-  // digest.companies is grouped by company+role (a company running two
-  // concurrent roles is two rollup rows) — that's correct for the rollup
-  // content itself, but the metadata count must dedupe to unique companies
-  // or a two-role company double-counts.
   const uniqueCompanyCount = new Set(sessionsInRange.map((s) => s.company.toLowerCase())).size;
 
   return {
@@ -365,8 +208,6 @@ export function computeWeeklyDigest({
     ...digest,
   };
 }
-
-// ── Summary mode ─────────────────────────────────────────────────────
 
 function printSummary(result) {
   const line = '━'.repeat(45);
@@ -413,8 +254,6 @@ function printSummary(result) {
   console.log('');
 }
 
-// ── Self-test ────────────────────────────────────────────────────────
-
 async function runSelfTest() {
   let pass = 0;
   let fail = 0;
@@ -422,14 +261,6 @@ async function runSelfTest() {
     if (cond) { pass += 1; } else { fail += 1; console.error(`  FAIL: ${label}`); }
   };
 
-  // computeDefaultRange: a known Wednesday (2026-07-22) should yield Mon
-  // 2026-07-20 .. Sun 2026-07-26.
-  //
-  // Built with the LOCAL Date constructor, not a Z instant. The range is the
-  // week containing the caller's own calendar day, so `new Date('...T00:00:00Z')`
-  // names a different day depending on where the suite runs and these three
-  // assertions would pass or fail by timezone rather than by behaviour. Local
-  // noon on a named date is that date everywhere.
   const localNoon = (y, m, d) => new Date(y, m - 1, d, 12, 0, 0);
   const wed = computeDefaultRange(localNoon(2026, 7, 22));
   check(wed.from === '2026-07-20' && wed.to === '2026-07-26', 'computeDefaultRange resolves the containing Mon-Sun week');
@@ -437,12 +268,6 @@ async function runSelfTest() {
   check(mon.from === '2026-07-20' && mon.to === '2026-07-26', 'computeDefaultRange handles Monday itself as the range start');
   const sun = computeDefaultRange(localNoon(2026, 7, 26));
   check(sun.from === '2026-07-20' && sun.to === '2026-07-26', 'computeDefaultRange handles Sunday itself as the range end');
-  // The two instants where reading getUTCDate() moves the answer a whole WEEK,
-  // rather than just a day: late on the local Sunday (west of Greenwich the UTC
-  // day is already Monday) and early on the local Monday (east of Greenwich it
-  // is still Sunday). One of the two fires in every non-UTC zone; in UTC both
-  // are no-ops, which is why tests/local-today-gates.test.mjs pins the same
-  // property under an explicit TZ.
   for (const [now, label] of [
     [new Date(2026, 6, 26, 23, 30, 0), 'Sunday 23:30 local'],
     [new Date(2026, 6, 20, 0, 30, 0), 'Monday 00:30 local'],
@@ -452,9 +277,6 @@ async function runSelfTest() {
       `computeDefaultRange contains the caller's own day (${label})`);
   }
 
-  // flagValue: both CLI spellings must reach the same value. The `=` form used
-  // to be invisible to indexOf(), so `--from=2020-01-01` silently produced the
-  // CURRENT week's digest instead of the requested one.
   check(flagValue(['--from', '2020-01-01'], '--from') === '2020-01-01', 'flagValue reads the space-separated form');
   check(flagValue(['--from=2020-01-01'], '--from') === '2020-01-01', 'flagValue reads the --flag=value form');
   check(flagValue(['--summary'], '--from') === undefined, 'flagValue returns undefined for an absent flag');
@@ -462,7 +284,6 @@ async function runSelfTest() {
   check(flagValue(['--dir=/tmp/x=y'], '--dir') === '/tmp/x=y', 'flagValue keeps later "=" characters in the value');
   check(flagValue(['--to=2020-01-07', '--from=2020-01-01'], '--from') === '2020-01-01', 'flagValue matches its own flag, not a similarly-shaped neighbour');
 
-  // parseSessionFile: well-formed session with two competency tags.
   const goodSession = [
     '---',
     'company: Acme Corp',
@@ -494,15 +315,12 @@ async function runSelfTest() {
     check(parsed.competencyTags.filter((t) => t === 'stakeholder-management').length === 2, 'repeated tag counted once per occurrence');
   }
 
-  // Malformed / missing front matter must not crash.
   check(parseSessionFile('no front matter here') === null, 'missing front matter returns null, not a crash');
   check(parseSessionFile('---\ncompany: Acme\n---\nbody') === null, 'front matter missing required fields (role/date) returns null');
   check(parseSessionFile(null) === null, 'null input returns null, not a crash');
 
-  // loadSessions: missing directory -> empty array, no throw.
   check(loadSessions('/definitely/does/not/exist/anywhere') .length === 0, 'missing sessions directory returns empty array');
 
-  // buildDigest: two companies, one shared competency tag appearing twice.
   const sessionsInRange = [
     { company: 'Acme Corp', role: 'Instructional Designer', date: '2026-07-21', round: 'behavioral', source: 'debrief', competencyTags: ['stakeholder-management'] },
     { company: 'Acme Corp', role: 'Instructional Designer', date: '2026-07-23', round: 'technical', source: 'debrief', competencyTags: ['curriculum-design'] },
@@ -516,11 +334,9 @@ async function runSelfTest() {
   check(digest.recurringCompetencies.some((t) => t.tag === 'stakeholder-management' && t.count === 2), 'competency tag recurring across two different companies is surfaced');
   check(!digest.recurringCompetencies.some((t) => t.tag === 'curriculum-design'), 'a tag seen only once is not flagged as recurring');
 
-  // Empty input -> empty digest, no crash.
   const emptyDigest = buildDigest([]);
   check(emptyDigest.companies.length === 0 && emptyDigest.recurringCompetencies.length === 0, 'empty session list returns an empty, non-crashing digest');
 
-  // extractGapsByCompany: heading-based attribution, unrelated headings excluded.
   const qb = [
     '# Question Bank',
     '',
@@ -541,9 +357,6 @@ async function runSelfTest() {
   check(extractGapsByCompany('', ['Acme Corp']).size === 0, 'empty question-bank content returns an empty map');
   check(extractGapsByCompany(qb, []).size === 0, 'no company names to match against returns an empty map');
 
-  // computeWeeklyDigest end-to-end against a synthetic fixture directory —
-  // never real personal session data, which is gitignored and typically
-  // absent/empty on a fresh checkout.
   const tmpBase = process.env.TEMP || process.env.TMPDIR || '/tmp';
   const tmpDir = mkdtempSync(join(tmpBase, 'weekly-digest-selftest-'));
   try {
@@ -560,13 +373,10 @@ async function runSelfTest() {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  // Missing sessions directory entirely -> graceful zero-result contract.
   const missingDirResult = computeWeeklyDigest({ from: '2026-07-20', to: '2026-07-26', sessionsDir: '/definitely/does/not/exist/sessions', questionBankPath: '/definitely/does/not/exist/question-bank.md' });
   check(missingDirResult.metadata.sessionsDirFound === false, 'missing sessions directory is reported, not an error');
   check(missingDirResult.metadata.sessionsInRange === 0, 'missing sessions directory yields zero sessions, exit 0 contract');
 
-  // Finding 1: companiesInRange counts unique companies, not company+role
-  // groups — a company running two concurrent roles must not double-count.
   const twoRoleSessions = [
     { company: 'Acme Corp', role: 'Instructional Designer', date: '2026-07-21', round: 'behavioral', source: 'debrief', competencyTags: [] },
     { company: 'Acme Corp', role: 'LXD', date: '2026-07-22', round: 'screen', source: 'debrief', competencyTags: [] },
@@ -576,11 +386,6 @@ async function runSelfTest() {
   const uniqueCompanyCount = new Set(twoRoleSessions.map((s) => s.company.toLowerCase())).size;
   check(uniqueCompanyCount === 1, 'unique-company count collapses a two-role company to one');
 
-  // Same check, but through the real production code path — computeWeeklyDigest
-  // reads sessions from disk, so re-derive the fixture as on-disk files and
-  // assert against the actual returned metadata.companiesInRange, not a
-  // locally-reimplemented Set expression that could drift from production
-  // logic without this test ever catching it.
   const tmpTwoRoleDir = mkdtempSync(join(tmpBase, 'weekly-digest-selftest-tworole-'));
   try {
     writeFileSync(
@@ -603,9 +408,6 @@ async function runSelfTest() {
     rmSync(tmpTwoRoleDir, { recursive: true, force: true });
   }
 
-  // Finding 4: same-date rounds sort deterministically (comparator returns
-  // 0 on a genuine tie, with round-name as tie-breaker) instead of both
-  // orderings being "valid" under an unstable comparator.
   const sameDateSessions = [
     { company: 'Gamma Inc', role: 'EdTech Specialist', date: '2026-07-21', round: 'technical', source: 'debrief', competencyTags: [] },
     { company: 'Gamma Inc', role: 'EdTech Specialist', date: '2026-07-21', round: 'behavioral', source: 'debrief', competencyTags: [] },
@@ -615,9 +417,6 @@ async function runSelfTest() {
   check(!!gamma && gamma.rounds.length === 2, 'Gamma Inc rolls up both same-date rounds');
   check(!!gamma && gamma.rounds[0].round === 'behavioral' && gamma.rounds[1].round === 'technical', 'same-date rounds break ties alphabetically by round name, deterministically');
 
-  // Finding 2: question-bank.md that exists but is empty is a distinct
-  // state from "file doesn't exist at all" — questionBankFound must track
-  // existsSync(), not content truthiness.
   const tmpQbDir = mkdtempSync(join(tmpBase, 'weekly-digest-selftest-qb-'));
   try {
     writeFileSync(join(tmpQbDir, 'acme-corp-instructional-designer-behavioral-2026-07-21.md'), goodSession);
@@ -633,11 +432,6 @@ async function runSelfTest() {
     rmSync(tmpQbDir, { recursive: true, force: true });
   }
 
-  // CodeRabbit follow-up: a question-bank path that exists() but fails to
-  // read() (unreadable file, TOCTOU delete race, or — as reproduced here —
-  // a directory instead of a file, which makes readFileSync() throw EISDIR)
-  // must degrade the same way a missing file does: no thrown exception, no
-  // gaps, but questionBankFound stays true because existsSync() is true.
   const tmpQbDirAsPath = mkdtempSync(join(tmpBase, 'weekly-digest-selftest-qbdir-'));
   try {
     const unreadableQbDir = mkdtempSync(join(tmpQbDirAsPath, 'question-bank-'));
@@ -649,9 +443,6 @@ async function runSelfTest() {
     rmSync(tmpQbDirAsPath, { recursive: true, force: true });
   }
 
-  // Finding 3: exactly one of --from/--to supplied, or from > to, must be a
-  // hard error — not a silent fallback to the default range or an empty
-  // digest indistinguishable from "no interviews this week."
   let threwFromOnly = false;
   try {
     computeWeeklyDigest({ from: '2026-07-20', sessionsDir: '/definitely/does/not/exist/sessions' });
@@ -688,8 +479,6 @@ async function runSelfTest() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-// ── CLI ──────────────────────────────────────────────────────────────
-
 const KNOWN_FLAGS = ['--from', '--to', '--dir', '--summary', '--self-test', '--help', '-h'];
 const VALUE_FLAGS = ['--from', '--to', '--dir'];
 
@@ -708,18 +497,6 @@ than silently widened.`;
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
 
-  // The script had no --help and no unrecognized-flag check at all, so a
-  // mistyped --dir was ignored and the digest silently rolled up
-  // interview-prep/sessions instead of the directory that was asked for —
-  // the same silent discard #2402 already fixed here for the `--from=` form
-  // (#2919). Inside the main-module guard so importers are unaffected.
-  // requireOperand: --from/--to already reject a swallowed flag indirectly
-  // (isValidDateStr fails on e.g. "--dir" below), but --dir has no validation
-  // at all — `--dir --from 2020-01-01` would silently scan a directory
-  // literally named "--from" at exit 0 (#3087). Opting in here closes that
-  // gap; it only changes the --from/--to message in the same edge case, from
-  // "Invalid --from/--to date" to "requires a value" — still a clear, non-zero
-  // exit either way.
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
 
   if (args.includes('--self-test')) {
@@ -732,10 +509,6 @@ if (isMainModule(import.meta.url)) {
   const dirValue = flagValue(args, '--dir');
   const sessionsDir = dirValue ? dirValue : DEFAULT_SESSIONS_DIR;
 
-  // `!== undefined`, not truthiness: an explicitly EMPTY bound (`--from=`) is a
-  // malformed date the caller typed, not an absent flag. Treating it as absent
-  // let '' through as a range bound, and `dateStr >= ''` is true for every
-  // session — silently widening the window instead of reporting the mistake.
   if ((from !== undefined && !isValidDateStr(from)) || (to !== undefined && !isValidDateStr(to))) {
     console.error('  Invalid --from/--to date — expected YYYY-MM-DD');
     process.exit(1);

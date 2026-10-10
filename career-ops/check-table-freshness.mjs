@@ -1,54 +1,4 @@
 #!/usr/bin/env node
-/**
- * check-table-freshness.mjs — Staleness validator for jurisdiction data tables
- *
- * The jurisdiction-compliance tables (umbrella #2026) decay on a schedule:
- * minimum wages adjust annually, pre-announced legal changes land on known
- * dates. Every table row carries an `as_of` verification date, and rate-style
- * rows carry `next_effective` for pre-announced changes. This script is the
- * watchdog for those fields — zero LLM, zero network, zero writes.
- *
- * Discovery is schema-agnostic: any `templates/*.yml` (non-recursive) whose
- * parsed YAML contains at least one object row with an `as_of` field is a
- * jurisdiction table. Rows may sit in a top-level array or in an array under
- * any top-level key (e.g. `covenants:`). Files without `as_of` rows
- * (states.yml, portals.example.yml, benchmarks.yml) are silently skipped, so
- * new tables are picked up automatically with no per-table registration.
- *
- * Finding types:
- *   - `expired` (hard): the row has a `next_effective` date, today >=
- *     next_effective, and the row was not re-verified on or after that date
- *     (as_of < next_effective) — the pre-announced change has arrived and the
- *     table hasn't been updated.
- *   - `review-due` (soft): `as_of` is older than the threshold (default 12
- *     months; `--max-age-months` or config/profile.yml
- *     `table_freshness.max_age_months` overrides) — nobody has re-verified
- *     the row in a legal cycle.
- *
- * Malformed or missing dates produce a warning entry and the row is skipped —
- * never a crash (a row missing its mandatory `as_of` inside a qualifying
- * row-set warns too; it does not silently vanish from validation). All date
- * math is UTC-midnight calendar math (no time-of-day drift). Each finding
- * copies the row's `sources` so whoever picks it up knows exactly where to
- * re-verify.
- *
- * Thresholds are strict positive integers: an invalid --max-age-months value
- * is a usage error (exit 1, fail-fast — never a silent fallback); an invalid
- * config table_freshness.max_age_months is reported as a warning and the
- * default applies.
- *
- * Exit codes (CI-friendly): 1 if any `expired` finding or on invalid usage
- * (bad --max-age-months / --today), 0 otherwise — `review-due` alone never
- * fails the run.
- *
- * Run: node check-table-freshness.mjs                    (JSON to stdout)
- *      node check-table-freshness.mjs --summary          (human-readable table)
- *      node check-table-freshness.mjs --max-age-months 6 (override review threshold)
- *      node check-table-freshness.mjs --today 2026-10-02 (deterministic date for tests)
- *      node check-table-freshness.mjs --self-test
- *
- * Issue #2036 — github.com/career-ops-hq/career-ops
- */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -65,15 +15,10 @@ const DATA_ROOT = getCareerOpsRoot();
 const TEMPLATES_DIR = join(CAREER_OPS, 'templates');
 const DEFAULT_MAX_AGE_MONTHS = 12;
 
-// --- CLI args ---
 const args = process.argv.slice(2);
 
-// --help fell through to a full freshness scan and printed the report (#2855).
-// Handled via lib/cli-flags.mjs's validateFlags() (#2775), which also rejects
-// unrecognized flags before --help so `--help --bogus` still errors.
 const KNOWN_FLAGS = ['--summary', '--self-test', '--max-age-months', '--today', '--help', '-h'];
 
-// Both take their value as the next argv token.
 const VALUE_FLAGS = ['--max-age-months', '--today'];
 
 const USAGE = `Usage:
@@ -91,10 +36,6 @@ const selfTestMode = args.includes('--self-test');
 const maxAgeRaw = flagValue(args, '--max-age-months') ?? null;
 const todayFlag = flagValue(args, '--today') ?? null;
 
-// Strict positive-integer parser for freshness thresholds. parseInt would
-// accept "6months" and truncate 6.5 to 6 — a threshold must be an exact whole
-// number of months, so anything else is rejected outright (null). Accepts
-// number values too (YAML config yields real numbers, not strings).
 export function parsePositiveInt(value) {
   if (typeof value === 'number') {
     return Number.isInteger(value) && value > 0 ? value : null;
@@ -105,12 +46,8 @@ export function parsePositiveInt(value) {
   return n > 0 ? n : null;
 }
 
-// --- Date helpers (UTC-midnight calendar math — no time-of-day drift) ---
 const isoDay = (date) => date.toISOString().slice(0, 10);
 
-// Shift a UTC-midnight date by whole calendar months, clamping the day to the
-// target month's length (2026-03-31 minus 1 month is 2026-02-28, never a
-// rollover into March).
 export function addMonthsUTC(date, deltaMonths) {
   const y = date.getUTCFullYear();
   const m = date.getUTCMonth();
@@ -119,25 +56,6 @@ export function addMonthsUTC(date, deltaMonths) {
   return new Date(Date.UTC(y, m + deltaMonths, Math.min(d, daysInTarget)));
 }
 
-// --- Row extraction ---
-// Given a parsed YAML document of any shape, find its jurisdiction row-sets.
-// Two shapes qualify, both keyed off the same signal — at least one member
-// carries `as_of`:
-//   1. Arrays (top-level, or under any top-level key) whose items are object
-//      rows, e.g. `rows: [{ jurisdiction: "CA-ON", as_of: ... }, ...]`.
-//   2. Mappings under a top-level key whose VALUES are themselves object
-//      rows, e.g. `jurisdictions: { CA-ON: { as_of: ..., ... }, US-CO: {...} }`
-//      (a mapping-shaped table keyed by jurisdiction code rather than an
-//      array of rows — the jurisdiction code is the map key rather than a
-//      `jurisdiction` field, so it is synthesized onto the row when the row
-//      doesn't already declare its own).
-// Once a row-set qualifies, EVERY row in it is returned — rows missing the
-// mandatory `as_of` are tagged `missingAsOf: true` so checkFreshness can warn
-// about them instead of letting them silently vanish from validation.
-// Row-sets with no `as_of` rows at all (states.yml's state list,
-// portals.example.yml's companies) never qualify, so unrelated templates
-// stay silently skipped. A file qualifies as a jurisdiction table iff this
-// returns at least one row.
 export function extractRows(doc) {
   const isObjectRow = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
   const arrays = [];
@@ -172,10 +90,6 @@ export function extractRows(doc) {
   return rows;
 }
 
-// --- Core check ---
-// tables: [{ file, doc }] — parsed YAML documents keyed by file name.
-// Returns { tablesScanned, rowsChecked, findings, warnings }. Pure function
-// over already-parsed data so the self-test runs entirely on its own fixtures.
 export function checkFreshness(tables, todayDate, maxAgeMonths = DEFAULT_MAX_AGE_MONTHS) {
   const reviewCutoff = addMonthsUTC(todayDate, -maxAgeMonths);
   const findings = [];
@@ -185,7 +99,7 @@ export function checkFreshness(tables, todayDate, maxAgeMonths = DEFAULT_MAX_AGE
 
   for (const { file, doc } of tables) {
     const rows = extractRows(doc);
-    if (rows.length === 0) continue; // not a jurisdiction table — silently skipped
+    if (rows.length === 0) continue;
     tablesScanned += 1;
 
     for (const { row, container, index, missingAsOf } of rows) {
@@ -225,9 +139,6 @@ export function checkFreshness(tables, todayDate, maxAgeMonths = DEFAULT_MAX_AGE
 
       rowsChecked += 1;
 
-      // expired: the pre-announced change date has arrived (today >= next_effective)
-      // and the row was NOT re-verified on or after it (as_of < next_effective) —
-      // i.e. the table still describes the pre-change state.
       if (nextEffective !== null && todayDate >= nextEffective && asOf < nextEffective) {
         findings.push({
           type: 'expired', file, jurisdiction, field: 'next_effective',
@@ -236,7 +147,6 @@ export function checkFreshness(tables, todayDate, maxAgeMonths = DEFAULT_MAX_AGE
         });
       }
 
-      // review-due: nobody has re-verified the row in maxAgeMonths.
       if (asOf < reviewCutoff) {
         findings.push({
           type: 'review-due', file, jurisdiction, field: 'as_of',
@@ -252,7 +162,6 @@ export function checkFreshness(tables, todayDate, maxAgeMonths = DEFAULT_MAX_AGE
 
 export const hasExpired = (findings) => findings.some(f => f.type === 'expired');
 
-// --- Discovery (templates/*.yml, non-recursive) ---
 function loadTables(dir = TEMPLATES_DIR) {
   if (!existsSync(dir)) return { tables: [], parseWarnings: [] };
   const tables = [];
@@ -261,8 +170,6 @@ function loadTables(dir = TEMPLATES_DIR) {
     if (!/\.ya?ml$/i.test(file)) continue;
     let doc;
     try {
-      // CRLF-safe: normalize line endings before parsing so Windows checkouts
-      // and LF checkouts see byte-identical documents.
       doc = yaml.load(readFileSync(join(dir, file), 'utf-8').replace(/\r\n/g, '\n'));
     } catch (e) {
       parseWarnings.push({
@@ -276,11 +183,6 @@ function loadTables(dir = TEMPLATES_DIR) {
   return { tables, parseWarnings };
 }
 
-// --- Config (mirrors salary-gap.mjs's profile read: optional, never fatal) ---
-// Returns { months, warning }. A missing profile or absent key is a non-event
-// (both null). A PRESENT but invalid table_freshness.max_age_months is never
-// partially parsed or silently swallowed: months stays null (default applies)
-// and a warning entry reports the rejected value.
 function loadConfigMaxAge() {
   const profilePath = join(DATA_ROOT, 'config/profile.yml');
   if (!existsSync(profilePath)) return { months: null, warning: null };
@@ -302,11 +204,10 @@ function loadConfigMaxAge() {
     }
     return { months, warning: null };
   } catch {
-    return { months: null, warning: null }; // unreadable profile is a non-event here; doctor.mjs owns that complaint
+    return { months: null, warning: null };
   }
 }
 
-// --- Summary mode ---
 function printSummary(result, todayStr, maxAgeMonths) {
   const { tablesScanned, rowsChecked, findings, warnings } = result;
   console.log(`\n${'='.repeat(78)}`);
@@ -349,7 +250,6 @@ function printSummary(result, todayStr, maxAgeMonths) {
   }
 }
 
-// --- Self-test (fixtures only — never reads the real templates for findings) ---
 function runSelfTest() {
   let pass = 0;
   let fail = 0;
@@ -360,7 +260,6 @@ function runSelfTest() {
   const today = parseDate('2026-07-01');
   check(today !== null, 'fixture today parses');
 
-  // Fictional jurisdictions only (XX-TEST / YY-TEST, Acme-style sources).
   const NESTED_TABLE = yaml.load([
     'covenants:',
     '  # expired: next_effective passed, row not re-verified since',
@@ -417,12 +316,6 @@ function runSelfTest() {
     'notes: "no as_of anywhere"',
   ].join('\n'));
 
-  // Mapping-shaped row-set: a top-level key whose value is an OBJECT keyed
-  // by jurisdiction code, not an array. The jurisdiction code is the map
-  // key, not a `jurisdiction` field on the row — extractRows must
-  // synthesize it. (This shape has no real-world table consumer at present
-  // — kept as generic, self-tested discovery support for any future
-  // mapping-keyed jurisdiction table.)
   const MAPPING_TABLE = yaml.load([
     'jurisdictions:',
     '  QQ-TEST:',
@@ -441,7 +334,6 @@ function runSelfTest() {
   ];
   const result = checkFreshness(tables, today, DEFAULT_MAX_AGE_MONTHS);
 
-  // Discovery: all qualifying table shapes found, non-table ignored.
   check(result.tablesScanned === 3, `all qualifying table shapes discovered, non-table skipped (got ${result.tablesScanned})`);
   check(extractRows(NESTED_TABLE).length === 8, 'nested-under-key shape: all rows in the qualifying row-set extracted (incl. the missing-as_of one)');
   check(extractRows(TOP_LEVEL_ARRAY_TABLE).length === 1, 'top-level-array shape: as_of row extracted');
@@ -453,28 +345,24 @@ function runSelfTest() {
     'mapping-shaped row jurisdiction matches its map key');
   check(result.rowsChecked === 8, `8 rows checked (2 malformed + 1 missing as_of skipped), got ${result.rowsChecked}`);
 
-  // expired
   const expired = result.findings.filter(f => f.type === 'expired');
   check(expired.length === 1 && expired[0].jurisdiction === 'XX-TEST',
     'expired: past next_effective without re-verification is flagged');
   check(Array.isArray(expired[0]?.sources) && expired[0].sources[0].includes('xx-test'),
     'expired finding copies the row sources for re-verification');
 
-  // review-due
   const reviewDue = result.findings.filter(f => f.type === 'review-due');
   check(reviewDue.length === 1 && reviewDue[0].jurisdiction === 'YY-TEST',
     'review-due: as_of older than 12 months is flagged');
   check(reviewDue[0]?.sources === 'https://example.com/yy-test-register',
     'review-due finding copies a scalar sources field as-is');
 
-  // no false positives
   const flagged = new Set(result.findings.map(f => f.jurisdiction));
   check(!flagged.has('ZZ-TEST'), 'fresh row produces no finding');
   check(!flagged.has('WW-TEST'), 'future next_effective produces no finding');
   check(!flagged.has('VV-TEST'), 'row re-verified on/after next_effective is NOT expired');
   check(!flagged.has('SS-TEST'), 'fresh top-level-array row produces no finding');
 
-  // warnings
   check(result.warnings.length === 3, `3 warnings (2 malformed dates + 1 missing as_of), got ${result.warnings.length}`);
   check(result.warnings.some(w => w.jurisdiction === 'UU-TEST' && w.field === 'as_of'),
     'malformed as_of produces a warning and skips the row');
@@ -484,13 +372,10 @@ function runSelfTest() {
     'row missing as_of inside a qualifying row-set produces a warning, not a silent skip');
   check(!flagged.has('UU-TEST') && !flagged.has('TT-TEST') && !flagged.has('RR-TEST'), 'skipped rows never produce findings');
 
-  // exit-code semantics: expired -> 1, review-due alone -> 0
   check(hasExpired(result.findings) === true, 'expired finding present -> exit 1 path');
   check(hasExpired(result.findings.filter(f => f.type !== 'expired')) === false,
     'review-due alone -> exit 0 path (CI-friendly)');
 
-  // mapping-shaped row-set: freshness logic (not just extraction) applies —
-  // a stale as_of on a keyed jurisdiction row is still flagged review-due.
   const mappingStale = checkFreshness([{
     file: 'mapping-stale.yml',
     doc: { jurisdictions: { 'OO-TEST': { rule: 'test stale mapping row', as_of: '2024-01-01' } } },
@@ -498,32 +383,27 @@ function runSelfTest() {
   check(mappingStale.findings.some(f => f.type === 'review-due' && f.jurisdiction === 'OO-TEST'),
     'mapping-shaped row with stale as_of is flagged review-due (freshness logic, not just extraction, covers this shape)');
 
-  // boundary: today exactly == next_effective counts as expired
   const boundary = checkFreshness([{
     file: 'boundary.yml',
     doc: { rows: [{ jurisdiction: 'XX-TEST', as_of: '2026-01-01', next_effective: '2026-07-01' }] },
   }], today, DEFAULT_MAX_AGE_MONTHS);
   check(boundary.findings.some(f => f.type === 'expired'), 'today == next_effective counts as expired (today >= next_effective)');
 
-  // boundary: as_of exactly maxAgeMonths ago is NOT review-due (strictly older only)
   const exactAge = checkFreshness([{
     file: 'exact-age.yml',
     doc: { rows: [{ jurisdiction: 'XX-TEST', as_of: '2025-07-01' }] },
   }], today, DEFAULT_MAX_AGE_MONTHS);
   check(exactAge.findings.length === 0, 'as_of exactly 12 months ago is not yet review-due');
 
-  // UTC calendar math: month-end clamping, no rollover
   check(isoDay(addMonthsUTC(parseDate('2026-03-31'), -1)) === '2026-02-28',
     'addMonthsUTC clamps 2026-03-31 minus 1 month to 2026-02-28');
   check(isoDay(addMonthsUTC(parseDate('2024-03-31'), -1)) === '2024-02-29',
     'addMonthsUTC clamps to leap-day in leap years');
 
-  // date parsing is strict
   check(parseDate('2026-02-30') === null, 'impossible calendar date rejected');
   check(parseDate('2026-6-1') === null, 'non-padded date rejected (tables use quoted YYYY-MM-DD)');
   check(parseDate(20260601) === null, 'non-string date value rejected');
 
-  // threshold parsing is strict: positive integers only, never partial parses
   check(parsePositiveInt('6') === 6, 'parsePositiveInt accepts "6"');
   check(parsePositiveInt(' 12 ') === 12, 'parsePositiveInt tolerates surrounding whitespace');
   check(parsePositiveInt(6) === 6, 'parsePositiveInt accepts a YAML integer');
@@ -535,17 +415,15 @@ function runSelfTest() {
   check(parsePositiveInt('') === null, 'parsePositiveInt rejects empty string');
   check(parsePositiveInt(null) === null, 'parsePositiveInt rejects null/missing value');
 
-  // empty input: no tables -> clean empty result, exit 0 path
   const empty = checkFreshness([], today, DEFAULT_MAX_AGE_MONTHS);
   check(empty.tablesScanned === 0 && empty.findings.length === 0 && !hasExpired(empty.findings),
     'no jurisdiction tables -> empty result, exit 0 (the designed empty-main case)');
 
-  // Real repo templates must never false-positive as jurisdiction tables.
   for (const file of ['states.yml', 'portals.example.yml', 'benchmarks.yml']) {
     const p = join(TEMPLATES_DIR, file);
-    if (!existsSync(p)) continue; // template set can evolve; only pin what ships
+    if (!existsSync(p)) continue;
     let doc = null;
-    try { doc = yaml.load(readFileSync(p, 'utf-8').replace(/\r\n/g, '\n')); } catch { /* parse error = not a table either */ }
+    try { doc = yaml.load(readFileSync(p, 'utf-8').replace(/\r\n/g, '\n')); } catch { }
     check(extractRows(doc).length === 0, `existing template ${file} does not qualify as a jurisdiction table`);
   }
 
@@ -553,7 +431,6 @@ function runSelfTest() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-// --- Run (CLI only; guarded so the module is safely importable for tests) ---
 if (isMainModule(import.meta.url)) {
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS });
   if (selfTestMode) {
@@ -568,16 +445,9 @@ if (isMainModule(import.meta.url)) {
       process.exit(1);
     }
   } else {
-    // LOCAL day. `expired` exits 1, so the UTC day failed CI a day early for
-    // anyone west of Greenwich and passed a stale table a day late for anyone
-    // east of it (#3070). --today still overrides for deterministic runs.
     todayDate = parseDate(localToday());
   }
 
-  // Precedence: --max-age-months flag > config table_freshness.max_age_months > default 12.
-  // An explicitly passed flag must be a strictly positive integer — anything
-  // else is a usage error, not a silent fall-through to config/default
-  // (fail-fast on bad flag values, same as scan-ats-full.mjs).
   const configWarnings = [];
   let maxAgeMonths;
   if (maxAgeRaw !== null) {

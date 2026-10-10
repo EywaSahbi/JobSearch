@@ -1,43 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * session-activity.mjs - advisory "another session may already be on this"
- * signal for concurrent career-ops sessions (#4532).
- *
- * reserve-report-num.mjs already makes report-number allocation collision-SAFE
- * (two sessions can never claim the same number) via O_CREAT|O_EXCL sentinel
- * files. But nothing makes a session collision-AWARE: two sessions can each
- * independently pick up the same tracker row / report / URL and do fully
- * redundant (or conflicting) work, with the collision only surfacing after
- * the fact when merge-tracker.mjs or a status write has to reconcile it.
- * #4506/#4507 was exactly this: two sessions evaluated the same report and
- * each wrote a batch/tracker-additions/*.tsv for it under a differently
- * spelled company name, so the report-number match (which requires the
- * company to also agree, #912) missed it and a duplicate row got appended.
- *
- * This module is deliberately advisory, not a hard lock: it never blocks or
- * refuses an operation, and it never replaces the correctness-critical locks
- * (acquireTrackerLock, reserve-report-num.mjs's atomic slot claims). Its only
- * job is to let a caller ask "is anyone already active on this key?" before
- * starting work, and to answer honestly, so a session can choose to warn the
- * user instead of silently duplicating work another session already started.
- * The TTL is a ceiling on advisory claims even while their recorded PID is
- * alive: a PID can be reused after its original process exits. This can expire
- * a genuinely long-running claim, which is acceptable for a warning-only
- * signal; correctness-critical work must continue to use its own hard lock.
- *
- * Sentinels live at {activityDir}/{sha1(key)}.json rather than being named
- * from the key directly, so an arbitrary key (a full URL, a company+role
- * string) never has to be filesystem-safe. The stored payload keeps the
- * original key for a human-readable message.
- *
- * Usage:
- *   node session-activity.mjs claim <key> [--label text] [--ttl-ms N]
- *   node session-activity.mjs check <key>
- *   node session-activity.mjs release <key> --token <token>
- *   node session-activity.mjs gc
- */
-
 import {
   existsSync, mkdirSync, readFileSync, readdirSync,
   statSync, unlinkSync, writeFileSync,
@@ -87,10 +49,6 @@ function processIsAlive(pid) {
 
 function isStale(entry, path, ttlMs) {
   if (!entry) return true;
-  // PID liveness cannot establish process identity: after the original owner
-  // exits, its PID may be reused and keep an advisory claim alive forever.
-  // TTL is therefore a ceiling over liveness, as well as the fallback when
-  // there is no usable PID.
   try {
     if (Date.now() - statSync(path).mtimeMs > ttlMs) return true;
   } catch {
@@ -103,11 +61,6 @@ function isStale(entry, path, ttlMs) {
   return false;
 }
 
-/**
- * Report whether `key` currently has a live claim, without taking one.
- *
- * @returns {{active: boolean, owner: object|null}}
- */
 export function checkActivity(key, options = {}) {
   const activityDir = activityDirFor(options);
   const path = sentinelPath(activityDir, key);
@@ -119,13 +72,6 @@ export function checkActivity(key, options = {}) {
   return { active: true, owner: entry };
 }
 
-/**
- * Claim `key` as active. Never blocks: if another live claim already exists,
- * returns it instead of throwing, so the caller can decide how to proceed
- * (this is advisory, not a hard lock — see module header).
- *
- * @returns {{claimed: boolean, owner: object|null, token: string|null}}
- */
 export function claimActivity(key, options = {}) {
   const activityDir = activityDirFor(options);
   const path = sentinelPath(activityDir, key);
@@ -136,7 +82,6 @@ export function claimActivity(key, options = {}) {
     return { claimed: false, owner: existing, token: null };
   }
   if (existing) {
-    // Stale (dead pid or past TTL) — safe to reclaim.
     try { unlinkSync(path); } catch (err) { if (err?.code !== 'ENOENT') throw err; }
   }
 
@@ -154,13 +99,10 @@ export function claimActivity(key, options = {}) {
     return { claimed: true, owner: entry, token };
   } catch (err) {
     if (err?.code !== 'EEXIST') throw err;
-    // Lost the race to another session claiming the same key at the same
-    // instant — report their claim rather than erroring.
     return { claimed: false, owner: readSentinel(path), token: null };
   }
 }
 
-/** Release a claim this caller owns (matched by token, unless force: true). */
 export function releaseActivity(key, options = {}) {
   const activityDir = activityDirFor(options);
   const path = sentinelPath(activityDir, key);
@@ -177,7 +119,6 @@ export function releaseActivity(key, options = {}) {
   }
 }
 
-/** Remove sentinels past their TTL or process-bound claims whose PID is dead. */
 export function gcStaleActivity(options = {}) {
   const activityDir = activityDirFor(options);
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
@@ -193,7 +134,6 @@ export function gcStaleActivity(options = {}) {
   return removed;
 }
 
-/** Human-readable advisory line for a `check`/failed-`claim` owner, or null if none. */
 export function describeActiveOwner(owner) {
   if (!owner) return null;
   const started = owner.claimed_at ? new Date(owner.claimed_at) : null;

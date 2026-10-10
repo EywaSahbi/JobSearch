@@ -39,9 +39,6 @@ function KeywordField({
   onChange: (v: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
-  // Split only on UNAMBIGUOUS item separators (comma / newline / semicolon) — never
-  // bare spaces, which are legitimate inside multi-word entries ("AI platform",
-  // "New York", "Costa Rica"). A space-only paste stays one chip on purpose (#1147).
   const commit = (text: string) => {
     const parts = text.split(/[,\n;\t\r]+/);
     const next = cleanChips([...values, ...parts]);
@@ -79,9 +76,6 @@ function KeywordField({
           e.preventDefault();
           const text = e.clipboardData.getData("text");
           const merged = draft + text;
-          // Only commit to chips when the paste contains item separators.
-          // A plain-text paste (e.g. pasting "-EMEA" after typing "Remote")
-          // stays in the input field so the user can keep editing.
           if (/[,;\n\t\r]/.test(text)) commit(merged);
           else setDraft(merged);
         }}

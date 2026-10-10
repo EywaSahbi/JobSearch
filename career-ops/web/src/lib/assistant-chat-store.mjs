@@ -35,7 +35,6 @@ export function listChats(root) {
         chats.push(summary);
       }
     } catch (err) {
-      // Isolate damaged documents, but do not disguise filesystem failures.
       if (!(err instanceof ChatError)) throw err;
       errors.push({ id, error: err.message });
     }
@@ -50,7 +49,7 @@ function withLock(root, id, operation) {
   catch (err) { if (err.code === 'EEXIST') throw new ChatError('Conversation is busy; retry saving', 409); throw err; }
   try { return operation(file); }
   finally {
-    try { closeSync(fd); } catch { /* best effort */ }
+    try { closeSync(fd); } catch { }
     try { unlinkSync(`${file}.lock`); } catch (err) { if (err.code !== 'ENOENT') console.error('chat lock release failed', err); }
   }
 }

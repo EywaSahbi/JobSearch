@@ -1,41 +1,4 @@
 #!/usr/bin/env node
-/**
- * validate-profile.mjs — structural check for config/profile.yml.
- *
- * profile.yml steers scoring targets, output language, spend tier, CV format
- * and location policy, and nothing checked its shape. `doctor.mjs` checks that
- * the file EXISTS; every reader then does `profile?.language?.output` and takes
- * the fallback when the key is missing — which is indistinguishable from the
- * key being misspelled. A profile reading
- *
- *     langauge:
- *       output: ja
- *     spend_teir: premium
- *
- * parses cleanly, validates nowhere, and silently produces English output at
- * the default tier. The user's only signal is noticing the wrong language in
- * finished work.
- *
- * WARN, never FAIL. career-ops is meant to work out of the box and an unknown
- * key is not a broken install — it is almost always a typo, and the right
- * response is to name it, not to refuse to run. `portals.yml` gets
- * validate-portals.mjs and the plugin registry gets validate-plugin-registry.mjs;
- * this is the same family for the one file that had none.
- *
- * The known-key set is DERIVED from config/profile.example.yml rather than
- * hardcoded, so a key added to the example is understood here on the same
- * commit. Keys the code reads but the example does not document are listed
- * explicitly below, each naming its reader — a hardcoded list can only ever
- * chase reality, and that list is short and auditable.
- *
- * Usage:
- *   node validate-profile.mjs [--profile <path>] [--json] [--self-test]
- *
- * Exit codes:
- *   0  clean, or findings (they are warnings)
- *   1  usage error
- *   2  the profile exists and does not parse
- */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -51,30 +14,11 @@ export const EXAMPLE_PATH = join(CODE_ROOT, 'config', 'profile.example.yml');
 export const DEFAULT_PROFILE_PATH = process.env.CAREER_OPS_PROFILE
   || join(DATA_ROOT, 'config', 'profile.yml');
 
-/**
- * Top-level keys the code reads that config/profile.example.yml does not show.
- *
- * Each is a real reader, so treating them as unknown would warn on a correct
- * profile. They are listed here rather than added to the example silently
- * because the example is the file a user learns the schema from — see the
- * `undocumented` finding below, which reports the gap instead of hiding it.
- */
 export const UNDOCUMENTED_KEYS = {
   rejection_latency: 'rejection-latency.mjs (courtesy_days)',
   table_freshness: 'check-table-freshness.mjs (max_age_months)',
 };
 
-/**
- * Top-level keys from the shipped example — the documented schema.
- *
- * Optional sections ship commented out (`# style:`, `# page_format: letter`),
- * so parsing alone misses them, and a profile that set one was told the setting
- * had no effect while theme-style.mjs / lib/page-format.mjs were reading it.
- * Each one is written `# key:` at column 0 with a single space. A key nested in
- * such a block is indented past the `#`, and no prose line in the example opens
- * with a bare lowercase word and a colon, so neither is taken for a top-level
- * key: that would accept `margin:` at the top level, where nothing reads it.
- */
 export function knownKeysFromExample(exampleText) {
   const text = String(exampleText ?? '');
   const doc = yaml.load(text) || {};
@@ -83,12 +27,6 @@ export function knownKeysFromExample(exampleText) {
   return [...new Set([...Object.keys(doc), ...commented])];
 }
 
-/**
- * Edit distance, capped — only used to turn "unknown key" into "did you mean".
- * A typo is the case this check exists for, so naming the intended key is most
- * of its value; without it the user is told `langauge` is unknown and still has
- * to spot the transposition themselves.
- */
 export function nearestKey(key, candidates, maxDistance = 3) {
   let best = null;
   let bestD = Infinity;
@@ -113,20 +51,8 @@ function editDistance(a, b) {
   return prev[b.length];
 }
 
-/**
- * @param {string} profileText - Raw profile.yml.
- * @param {string} exampleText - Raw config/profile.example.yml.
- * @returns {{findings: object[], parsed: object|null}}
- */
 export function validateProfile(profileText, exampleText) {
   const findings = [];
-  // Emptiness is decided from the TEXT, before parsing, because the parsers
-  // disagree about it: js-yaml 4 returns undefined for an empty or comment-only
-  // document, js-yaml 5 throws "expected a document, but the input is empty".
-  // package.json asks for ^5.3.0 and there is no root lockfile, so which major a
-  // given checkout has is not fixed — inferring "empty" from what the parser
-  // does would report a blank profile as malformed on one and not the other.
-  // The identical hazard bit #3593 in plugins.mjs; same answer here.
   const hasContent = String(profileText ?? '').split('\n').some((line) => {
     const t = line.trim();
     return t !== '' && !t.startsWith('#');
@@ -146,8 +72,6 @@ export function validateProfile(profileText, exampleText) {
       }],
     };
   }
-  // An empty or comment-only profile is a legitimate starting state, not an
-  // error — doctor's existence check is what covers "you have not set this up".
   if (parsed == null) return { parsed: null, findings };
   if (typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {
@@ -173,8 +97,6 @@ export function validateProfile(profileText, exampleText) {
     });
   }
 
-  // Reported, not silently tolerated: a key the code reads and the example does
-  // not show is a schema a user cannot learn from the file they are pointed at.
   for (const [key, reader] of Object.entries(UNDOCUMENTED_KEYS)) {
     if (key in parsed && !documented.includes(key)) {
       findings.push({
@@ -189,7 +111,6 @@ export function validateProfile(profileText, exampleText) {
   return { parsed, findings };
 }
 
-// --- self-test ---------------------------------------------------------
 function runSelfTest() {
   let pass = 0; let fail = 0;
   const check = (cond, label) => { if (cond) { pass++; } else { fail++; console.error(`  ✗ ${label}`); } };
@@ -212,13 +133,9 @@ function runSelfTest() {
   check(validateProfile('\tbroken: tab\n', EXAMPLE).findings[0]?.code === 'unparseable', 'malformed YAML is reported as unparseable');
   check(validateProfile('just a string\n', EXAMPLE).findings[0]?.code === 'not-a-mapping', 'a scalar profile is reported');
 
-  // Derivation, not a hardcoded list: a key added to the example is accepted
-  // here with no edit to this file.
   const widened = validateProfile('brand_new_section:\n  x: 1\n', `${EXAMPLE}brand_new_section:\n  x: 0\n`);
   check(widened.findings.length === 0, 'a key added to the example is understood without editing this file');
 
-  // Optional sections ship commented out, and are still documented. A key
-  // nested in one, or a prose comment, is not a top-level key.
   const COMMENTED = `${EXAMPLE}# Paper size: "letter" or "a4".\n# page_format: letter\n# style:\n#   accent_color: "#2563eb"\n`;
   check(validateProfile('page_format: a4\nstyle:\n  accent_color: "#000"\n', COMMENTED).findings.length === 0, 'a key the example ships commented out is known');
   check(knownKeysFromExample(COMMENTED).join() === 'candidate,language,spend_tier,cv,page_format,style', 'prose and nested commented keys are not top-level keys');

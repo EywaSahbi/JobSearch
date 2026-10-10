@@ -5,11 +5,6 @@ import { Send, Lock } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { useApply } from "@/components/apply/apply-provider";
 
-// The "Apply" CTA. Brand fill only when the score is at/above the apply line
-// and legitimacy is not caution (#4206). Enabled ONLY when the tailored CV
-// for THIS offer is ready (the tracker's PDF column is ✅, or a pdf worker for
-// this #n just finished). On click it opens the apply form-proxy for the offer
-// (where the user reviews and submits it themselves — never auto-submit).
 export function ApplyButton({
   n,
   url,
@@ -47,11 +42,6 @@ export function ApplyButton({
     <button
       type="button"
       onClick={() => {
-        // n + from ride along so the Apply page can mark this row Applied,
-        // return the user to the page they left, and resolve THIS report's own
-        // tailored CV rather than the newest one for the company. Read straight
-        // off the handler's own location: usePathname() drops the query and
-        // hash, which is where the list filter and the row anchor live.
         const { pathname, search, hash } = window.location;
         apply.open(url!, { prefill: true, company, n, from: `${pathname}${search}${hash}` });
         router.push("/apply");

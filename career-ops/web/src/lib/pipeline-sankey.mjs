@@ -1,21 +1,4 @@
-/**
- * Pipeline Sankey graph + layout (pure, no fs).
- *
- * Snapshot of current tracker status, with status-log overlays so a later
- * Rejected/Discarded does not erase Interview/Offer/Hired that already happened.
- * The cumulative headline tiles also recover these stages from the ledger.
- *
- * Status folding goes through canonStatus (status-alias.mjs) — the same map
- * Analytics stage bars and cumulative tiles use — so "Oferta" / "mülakat"
- * count as Offer / Interview here too.
- */
-
 import { canonStatus } from "./status-alias.mjs";
-
-/** @typedef {{ n: string|number, status: string }} SankeyApp */
-/** @typedef {{ num: number, from: string, to: string }} SankeyLogRow */
-/** @typedef {{ id: string, label: string, rank: number, tone: string, value: number }} SankeyNode */
-/** @typedef {{ source: string, target: string, value: number }} SankeyLink */
 
 export const NODE_DEFS = [
   { id: "tracked", label: "Tracked", rank: 0, tone: "neutral" },
@@ -37,10 +20,6 @@ export const NODE_DEFS = [
 
 const ADVANCED = new Set(["INTERVIEW", "OFFER", "HIRED"]);
 
-// Discarded (withdrawn, or the posting closed) is not by itself a proven
-// submission: the core counts it in neither `submitted` nor `decided`
-// (modes/patterns.md). A Discarded row stays under Submitted only when the
-// status log shows it reached one of these; otherwise it leaves from Tracked.
 const SUBMITTED_OR_LATER = new Set(["APPLIED", "RESPONDED", "INTERVIEW", "OFFER", "HIRED", "REJECTED"]);
 
 const LEAVES = [
@@ -58,32 +37,15 @@ const LEAVES = [
   "discardedInterview",
 ];
 
-/**
- * Canonical status token via the shared alias table.
- * Trailing dates come off first (states.yml forbids them; real trackers
- * still carry "Interview 2026-08-20") so canonStatus sees an exact key —
- * same strip awaiting.mjs uses before folding.
- * @param {string} raw
- * @returns {string}
- */
 export function statusToken(raw) {
   const base = String(raw ?? "")
     .replace(/\s+\d{4}-\d{2}-\d{2}\s*$/, "")
     .trim();
   const c = canonStatus(base);
-  // Pass-through uppercases the raw input, so markdown bold that foldStatus
-  // already stripped for alias lookup can survive on English stage names
-  // ("**Rejected**" → "**REJECTED**"). Leaf equality needs a clean token;
-  // Analytics stage bars use .includes() and tolerate the bold.
   const cleaned = c.replace(/\*\*/g, "").trim();
   return cleaned.split(/[\s/]/)[0] || "EVALUATED";
 }
 
-/**
- * Parse data/status-log.tsv. Skips a header row (non-numeric col 0).
- * @param {string} tsv
- * @returns {Array<{num: number, date: string, from: string, to: string, source: string, note: string}>}
- */
 export function parseStatusLog(tsv) {
   const rows = [];
   for (const line of String(tsv ?? "").split(/\r?\n/)) {
@@ -102,11 +64,6 @@ export function parseStatusLog(tsv) {
   return rows;
 }
 
-/**
- * @param {number} num
- * @param {SankeyLogRow[]} log
- * @returns {boolean}
- */
 function logReachedAdvanced(num, log) {
   for (const row of log) {
     if (row.num !== num) continue;
@@ -115,11 +72,6 @@ function logReachedAdvanced(num, log) {
   return false;
 }
 
-/**
- * @param {number} num
- * @param {SankeyLogRow[]} log
- * @returns {boolean}
- */
 function logReachedSubmitted(num, log) {
   return log.some(
     (row) =>
@@ -128,12 +80,6 @@ function logReachedSubmitted(num, log) {
   );
 }
 
-/**
- * Exclusive leaf for one tracker row.
- * @param {SankeyApp} app
- * @param {SankeyLogRow[]} log
- * @returns {string}
- */
 export function classifyLeaf(app, log) {
   const num = Number(app.n);
   const status = statusToken(app.status);
@@ -154,11 +100,6 @@ export function classifyLeaf(app, log) {
   return "evaluated";
 }
 
-/**
- * @param {SankeyApp[]} apps
- * @param {SankeyLogRow[]} [log]
- * @returns {{ nodes: SankeyNode[], links: SankeyLink[], total: number }}
- */
 export function buildPipelineSankey(apps, log = []) {
   const rows = Array.isArray(apps) ? apps : [];
   const ledger = Array.isArray(log) ? log : [];
@@ -218,11 +159,6 @@ export function buildPipelineSankey(apps, log = []) {
   return { nodes, links, total: rows.length };
 }
 
-/**
- * Horizontal Sankey positions + ribbon paths. Empty nodes already dropped.
- * @param {{ nodes: SankeyNode[], links: SankeyLink[] }} graph
- * @param {{ width?: number, height?: number, padding?: { top: number, right: number, bottom: number, left: number }, nodeWidth?: number, nodeGap?: number }} [opts]
- */
 export function layoutSankey(graph, opts = {}) {
   const width = opts.width ?? 920;
   const height = opts.height ?? 420;

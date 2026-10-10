@@ -1,21 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * reserve-report-num.mjs - shared atomic report-number allocator.
- *
- * The CLI and every evaluator use the exported API below. Reservations account
- * for report files, reservation sentinels, tracker row IDs, and report links in
- * the tracker. The tracker scan and sentinel creation run under the same lock
- * as tracker writers, while O_CREAT|O_EXCL keeps claims atomic across processes.
- *
- * Usage:
- *   node reserve-report-num.mjs
- *   node reserve-report-num.mjs --count 8
- *   node reserve-report-num.mjs --release 035
- *   node reserve-report-num.mjs --release 042-049
- *   node reserve-report-num.mjs --gc
- */
-
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
   statSync, unlinkSync, writeFileSync,
@@ -38,7 +22,6 @@ const MAX_RETRIES = 50;
 const MAX_COUNT = 50;
 const RESERVATION_TOKEN = Symbol('career-ops-report-reservation-token');
 
-/** Format a report ID with a minimum width of three digits. */
 export function formatReportNumber(num) {
   if (!Number.isSafeInteger(num) || num < 1) {
     throw new TypeError(`Report number must be a positive integer, got ${num}`);
@@ -64,10 +47,6 @@ function batchStateFileFor(options = {}) {
     || join(options.rootDir || ROOT, 'batch/batch-state.tsv'));
 }
 
-// Mirrors merge-tracker.mjs's loadFailedReportNumbers: a report number the
-// batch runner itself recorded as "failed" must not be handed out again, or
-// the two scripts disagree by construction — this script re-issues the
-// number, then merge-tracker.mjs refuses to merge a tracker line for it.
 function occupiedFromFailedBatchState(batchStateFile) {
   const failed = new Set();
   if (!existsSync(batchStateFile)) return failed;
@@ -78,9 +57,6 @@ function occupiedFromFailedBatchState(batchStateFile) {
     const status = cols[2];
     const reportNum = cols[5];
     if (status === 'failed' && reportNum && reportNum !== '-') {
-      // Digits only, positive, safe: parseInt would accept "12abc" and
-      // 9007199254740992, and an unsafe number in the occupied set makes
-      // reserveReportNumbers throw "No safe report-number range remains".
       const n = /^\d+$/.test(reportNum) ? Number(reportNum) : NaN;
       if (Number.isSafeInteger(n) && n > 0) failed.add(n);
     }
@@ -88,15 +64,6 @@ function occupiedFromFailedBatchState(batchStateFile) {
   return failed;
 }
 
-// A bare date file is not a report. `scan-ats-full.mjs --md-out reports/` writes
-// its digest as `reports/YYYY-MM-DD.md`, which matches `/^(\d+)-/` and is read
-// as report #2026 — pushing every later reservation to 2027+, silently and
-// permanently.
-//
-// Deliberately narrow: report filenames in the wild are not all
-// `NNN-slug-DATE.md` (`1001-taken.md` and `NNN-RESERVED.md` are both real), so
-// requiring a trailing date would drop legitimate occupancy. Exclude only names
-// that are *entirely* a date. See tests/reserve-report-num.test.mjs.
 const BARE_DATE_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
 function occupiedFromReports(reportsDir) {
@@ -191,13 +158,6 @@ function processIsAlive(pid) {
   }
 }
 
-/**
- * Reserve one or more contiguous report IDs.
- *
- * @param {number} [count=1] Number of IDs to reserve (1-50).
- * @param {object} [options] Path and lock overrides.
- * @returns {Promise<number[]>} Reserved numeric IDs.
- */
 export async function reserveReportNumbers(count = 1, options = {}) {
   if (!Number.isInteger(count) || count < 1 || count > MAX_COUNT) {
     throw new RangeError(`Reservation count must be an integer from 1 to ${MAX_COUNT}`);
@@ -252,11 +212,6 @@ export async function reserveReportNumbers(count = 1, options = {}) {
   throw new Error(`Could not claim ${count} report slot(s) after ${MAX_RETRIES} retries`);
 }
 
-/**
- * Release reservation sentinels after report creation or on failure.
- * Only the array returned by reserveReportNumbers owns its sentinels. The CLI
- * uses force mode as an explicit administrative cleanup path.
- */
 export async function releaseReportNumbers(numbers, options = {}) {
   const reportsDir = reportsDirFor(options);
   const values = Array.isArray(numbers) ? numbers : [numbers];
@@ -288,7 +243,6 @@ export async function releaseReportNumbers(numbers, options = {}) {
   }
 }
 
-/** Remove reservation sentinels older than the configured TTL. */
 export async function gcStaleReportReservations(options = {}) {
   const reportsDir = reportsDirFor(options);
   if (!existsSync(reportsDir)) return 0;

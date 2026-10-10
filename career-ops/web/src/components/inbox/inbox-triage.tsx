@@ -19,17 +19,11 @@ const HIDDEN_KEY = "career-ops:hidden";
 const CONFIG_KEY = "career-ops:config";
 const BATCH = 20;
 
-// The inbox as a TRIAGE surface: Abundance → Triage → Shortlist → Opt-in Score.
-// Default is a small fresh batch (never the full wall); free facets + Save/Skip narrow
-// it; only "Score shortlist" spends tokens. 🔴 The shell is agnostic to what makes a
-// role relevant — order is freshness with a single documented plug point.
 export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const router = useRouter();
   const { jobs, startJob } = useJobs();
-  // Serialize skip/undo per URL so a fast Undo cannot lose the race to Skip.
   const skipChain = useRef(new Map<string, Promise<void>>());
 
-  // facets
   const [within, setWithin] = useState<number | null>(null);
   const [sources, setSources] = useState<Set<AtsSource>>(() => new Set());
   const [seniorities, setSeniorities] = useState<Set<Seniority>>(() => new Set());
@@ -37,7 +31,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const [kw, setKw] = useState("");
   const [showAll, setShowAll] = useState(false);
 
-  // persisted triage state + ephemeral selection/undo
   const [shortlist, setShortlist] = useState<ShortItem[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -59,19 +52,15 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
       const c = localStorage.getItem(CONFIG_KEY);
       setHasCli(!!(c && JSON.parse(c).cliId));
     } catch {
-      /* ignore */
     }
     setLoaded(true);
-    // First SSR inbox only — later refreshes prune via the inbox effect below.
   }, []);
   useEffect(() => {
-    if (loaded) try { localStorage.setItem(SHORTLIST_KEY, JSON.stringify(shortlist)); } catch { /* quota */ }
+    if (loaded) try { localStorage.setItem(SHORTLIST_KEY, JSON.stringify(shortlist)); } catch { }
   }, [shortlist, loaded]);
   useEffect(() => {
-    if (loaded) try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden)); } catch { /* quota */ }
+    if (loaded) try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden)); } catch { }
   }, [hidden, loaded]);
-  // After SSR refresh, pipeline.md [x] rows are already gone from `inbox`.
-  // Drop them from the localStorage cache so "N hidden" does not linger.
   useEffect(() => {
     const pending = new Set(inbox.map((j) => j.url));
     setHidden((h) => {
@@ -79,18 +68,14 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
       return next.length === h.length ? h : next;
     });
   }, [inbox]);
-  // auto-dismiss the undo toast
   useEffect(() => {
     if (!undo) return;
     const t = setTimeout(() => setUndo(null), 5000);
     return () => clearTimeout(t);
   }, [undo]);
 
-  // stable "now" for freshness (per mount)
   const now = useMemo(() => Date.now(), []);
 
-  // Dedupe by URL — pipeline.md can list the same posting twice; it's one job, so it
-  // triages once (and Save/Skip/score, all keyed by URL, act on it coherently).
   const enriched = useMemo(() => {
     const seen = new Set<string>();
     const out: { job: InboxJob; source: AtsSource | null; seniority: Seniority | null; age: number | null }[] = [];
@@ -102,7 +87,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     return out;
   }, [inbox, now]);
 
-  // EVALUADA lookup: the latest evaluate worker per posting URL (running → badge).
   const scoreByUrl = useMemo(() => {
     const best = new Map<string, (typeof jobs)[number]>();
     for (const j of jobs) {
@@ -117,7 +101,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     return m;
   }, [jobs]);
 
-  // facet options — only surface what's actually present in the (non-hidden) data
   const availSources = useMemo(() => {
     const set = new Set<AtsSource>();
     for (const e of enriched) if (e.source && !hidden.includes(e.job.url)) set.add(e.source);
@@ -143,9 +126,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     [enriched, hidden, within, sources, seniorities, locQ, kw],
   );
 
-  // 🔴 SINGLE ORDER PLUG POINT — freshness only (newest first_seen first; unknown last).
-  // A smarter ranker replaces ONLY this comparator; facets/triage/shortlist/score never
-  // touch relevance. This is the whole firewall in one line.
   const ordered = useMemo(() => [...filtered].sort((a, b) => (a.age ?? Infinity) - (b.age ?? Infinity)), [filtered]);
 
   const anyFacet = within != null || sources.size > 0 || seniorities.size > 0 || locQ.trim() !== "" || kw.trim() !== "";
@@ -219,11 +199,9 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
     for (const it of shortlist) {
       startJob({ title: `Score · ${it.company}`, subtitle: it.role, kind: "evaluate", input: it.url, page: "/pipeline", batchId });
     }
-    setShortlist([]); // sent — the rows flip to Scoring… → badge via scoreByUrl
+    setShortlist([]);
   };
 
-  // The parent (PipelineView) renders the rich empty-inbox card; here we always
-  // have ≥1 raw posting.
   if (inbox.length === 0) return null;
 
   return (
@@ -247,7 +225,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         onClear={() => { setWithin(null); setSources(new Set()); setSeniorities(new Set()); setLocQ(""); setKw(""); }}
       />
 
-      {/* batch header: fresh slice by default, or the full filtered set */}
       <div className="mt-4 flex items-baseline justify-between gap-3">
         <p className="text-sm font-medium text-foreground">
           {capped ? "Fresh — worth a look" : anyFacet ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : "All roles"}
@@ -259,7 +236,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         )}
       </div>
 
-      {/* multi-select action bar */}
       {selected.size > 0 && (
         <div className="mt-2 flex items-center gap-3 rounded-lg border border-brand/30 bg-brand-soft px-3 py-2 text-sm">
           <span className="font-medium text-brand tabular-nums">{selected.size} selected</span>
@@ -296,7 +272,6 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         </div>
       )}
 
-      {/* "See all N" — only when the fresh batch is capping a larger list */}
       {capped && ordered.length > BATCH && (
         <button
           type="button"
@@ -307,12 +282,10 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
         </button>
       )}
 
-      {/* empty-shortlist guidance (only once there's nothing saved) */}
       {shortlist.length === 0 && (
         <p className="mt-4 text-center text-xs text-faint">Save roles worth a look, then score them together — one token spend.</p>
       )}
 
-      {/* undo toast (sits above the tray) */}
       {undo && (
         <div className={cn("fixed inset-x-0 z-40 flex justify-center px-4", shortlist.length > 0 ? "bottom-24 sm:bottom-24" : "bottom-6")}>
           <div className="inline-flex items-center gap-3 rounded-full border border-border bg-surface px-4 py-2 text-sm shadow-lg">

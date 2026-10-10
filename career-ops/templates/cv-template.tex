@@ -1,8 +1,5 @@
-%-------------------------
-% Career-Ops LaTeX CV Template
 % Based on: Gabriel Sison / sb2nov resume template
 % License: MIT
-%------------------------
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Random Stuff %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \documentclass[letterpaper,11pt]{article}
@@ -23,11 +20,10 @@
 \setlength{\columnsep}{-1pt}
 \input{glyphtounicode}
 \pagestyle{fancy}
-\fancyhf{} % clear all header and footer fields
+\fancyhf{}
 \fancyfoot{}
 \renewcommand{\headrulewidth}{0pt}
 \renewcommand{\footrulewidth}{0pt}
-% Adjust margins
 \addtolength{\oddsidemargin}{-0.6in}
 \addtolength{\evensidemargin}{-0.5in}
 \addtolength{\textwidth}{1.19in}
@@ -37,11 +33,9 @@
 \raggedbottom
 \raggedright
 \setlength{\tabcolsep}{0in}
-% Sections formatting
 \titleformat{\section}{
   \vspace{-7pt}\scshape\raggedright\large\bfseries
 }{}{0em}{}[\color{black}\titlerule \vspace{0pt}]
-% Ensure that generate pdf is machine readable/ATS parsable
 \pdfgentounicode=1
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Commands  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -80,18 +74,11 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Heading  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{document}
     \begin{center}
-        % NAME
         {\Huge\scshape {{NAME}}}
-        % SUBHEADING
         \\ {{CONTACT_LINE}}\\
         \small
-        % EMAIL
-        % EMAIL_URL already carries its scheme: sanitizeUrl() prefixes bare
-        % addresses with mailto:, so the template must not add a second one.
         \href{{{EMAIL_URL}}}{\raisebox{-0.2\height}\faEnvelope\  \underline{{{EMAIL_DISPLAY}}}} ~
-        % LINKEDIN
         \href{{{LINKEDIN_URL}}}{\raisebox{-0.2\height}\faLinkedin\ \underline{{{LINKEDIN_DISPLAY}}}}  ~
-        % GITHUB
         \href{{{GITHUB_URL}}}{\raisebox{-0.2\height}\faGithub\ \underline{{{GITHUB_DISPLAY}}}}
     \end{center}
 

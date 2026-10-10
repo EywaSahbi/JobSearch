@@ -40,7 +40,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
 
   const readiness = md ? cvReadiness(md) : null;
 
-  // Stream the ingest, parsing markers live.
   const runStream = useCallback(async (init: RequestInit) => {
     setPhase("parsing");
     setTrace("Reading your CV…");
@@ -96,8 +95,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       setPhase("error");
       return;
     }
-    // Pasted text is already readable. Same path as a .md/.txt drop — no CLI.
-    // (PDF/DOCX still need a CLI below.)
     const id = cliId();
     if (!id) {
       setSeed(null);
@@ -109,7 +106,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
   };
 
   const ingestFile = (file: File) => {
-    // .md/.txt/.markdown fast path — plain text, NO CLI needed, instant.
     if (/\.(md|markdown|txt)$/i.test(file.name)) {
       file
         .text()
@@ -129,7 +125,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
         });
       return;
     }
-    // PDF/other → the user's CLI parses it. Needs a configured CLI.
     const id = cliId();
     if (!id) {
       setErr("needs-cli");
@@ -155,7 +150,7 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setSaveErr(d.error || "Couldn't save your CV — try again.");
-        setPhase("review"); // keep the parsed CV so they don't lose it
+        setPhase("review");
         return;
       }
     } catch {
@@ -164,18 +159,12 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
       return;
     }
     onSaved?.();
-    // WOW #1 — land in the Explorer with the CV-derived filters in the URL + run=1,
-    // so the Explorer auto-fires the FREE scan itself (robust, no push/replaceState race).
-    // GENEROUS first scan so it never comes back empty (that would kill the wow): roles
-    // only + a wide 30-day window; location stays a refinement for the deepen step, NOT a
-    // hard exclude (allow=[] passes everything). Recall over precision for the first reveal.
     const roles = seed?.roles?.length ? seed.roles : seed?.title ? [seed.title] : [];
     const f = { ...DEFAULT_FILTERS, ats: [...DEFAULT_FILTERS.ats], positive: roles, sinceDays: 30 };
     const qs = filtersToParams(f);
     router.push(`/explore?${qs}${qs ? "&" : ""}run=1`);
   };
 
-  // ── INPUT ──
   if (phase === "input" || phase === "error") {
     return (
       <div className="space-y-3">
@@ -244,7 +233,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
     );
   }
 
-  // ── PARSING (the 10s bridge) ──
   if (phase === "parsing") {
     return (
       <div className="rounded-2xl border border-border bg-surface/60 p-6 backdrop-blur-sm">
@@ -261,7 +249,6 @@ export function CvIngest({ onSaved }: { onSaved?: () => void }) {
     );
   }
 
-  // ── REVIEW (propose → confirm) ──
   return (
     <div className="rounded-2xl border border-border bg-surface/60 p-4 backdrop-blur-sm md:p-5">
       <style>{STYLE}</style>

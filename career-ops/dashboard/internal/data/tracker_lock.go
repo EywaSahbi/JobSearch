@@ -84,8 +84,6 @@ func pathWithin(path, parent string) bool {
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative))
 }
 
-// trackerLockDirFor mirrors tracker-utils.mjs exactly so Go and Node writers
-// contend on the same lock directory for the same canonical tracker path.
 func trackerLockDirFor(trackerPath string) (string, error) {
 	canonicalTracker, err := canonicalPath(trackerPath)
 	if err != nil {

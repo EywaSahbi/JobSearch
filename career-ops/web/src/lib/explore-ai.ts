@@ -1,9 +1,3 @@
-// Client-safe (NO node imports) tolerant streaming parser for the AI-search
-// `<<offer:{...}>>` envelopes emitted by modes/discover.md. Modeled on the
-// assistant console's <<act:>> envelope parsing, factored out so the grammar
-// can't drift. The load-bearing requirement: an envelope (or its opener) split
-// across stream chunk boundaries must BUFFER, never flush as garbage or drop.
-
 import type { DiscoveredOffer } from "./explore";
 import { pendingOpenerLen } from "./stream-parse.mjs";
 import { normalizeUrl } from "./core/url-key.mjs";
@@ -16,17 +10,6 @@ export type AiTraceChunk =
   | { kind: "narration"; text: string }
   | { kind: "malformed"; raw: string };
 
-/**
- * Normalize a URL for dedup. Delegates to the parity-tested normalizeUrl
- * mirror (url-key.mjs) instead of host+pathname — a bare host+path key
- * discarded the query string unconditionally, so two DIFFERENT postings that
- * share a path and differ only by a functional query id (e.g. Greenhouse's
- * `?gh_jid=`) collapsed onto one key and every opening after the first at
- * that host+path was silently dropped from AI Discover results.
- *
- * Can return '' for an unparseable / non-http(s) input — callers must treat
- * that as NO KEY, never as a value that matches another ''.
- */
 export function canon(u: string): string {
   return normalizeUrl(u);
 }
@@ -43,7 +26,7 @@ function toOffer(raw: unknown): DiscoveredOffer | null {
     company: str(o.company),
     title: str(o.title),
     location: str(o.location),
-    postedAt: "", // AI gives only a human postedHint, never a trustworthy date
+    postedAt: "",
     ats: str(o.ats) || "other",
     source: "ai-search",
     verification: "unconfirmed",
@@ -65,11 +48,6 @@ export function makeAiStreamParser(opts?: { knownUrls?: Set<string> }) {
       for (;;) {
         const open = buf.indexOf(OPEN);
         if (open === -1) {
-          // No opener in view. Flush as narration — but hold back the longest
-          // trailing run that could be the start of a split opener ("<<offe…"),
-          // so an offer whose marker straddles a chunk boundary is never dropped
-          // as garbage (#2290). A fixed-length tail check missed the shorter
-          // partial openers ("<<", "<<off") preceded by other text.
           const hold = pendingOpenerLen(buf, OPEN);
           const text = hold ? buf.slice(0, buf.length - hold) : buf;
           if (text.trim()) out.push({ kind: "narration", text });
@@ -80,7 +58,6 @@ export function makeAiStreamParser(opts?: { knownUrls?: Set<string> }) {
         if (before.trim()) out.push({ kind: "narration", text: before });
         const close = buf.indexOf(CLOSE, open + OPEN.length);
         if (close === -1) {
-          // Envelope still streaming — keep from the opener onward and wait.
           buf = buf.slice(open);
           break;
         }
@@ -97,15 +74,12 @@ export function makeAiStreamParser(opts?: { knownUrls?: Set<string> }) {
           continue;
         }
         const key = canon(offer.url);
-        // '' means NO KEY (an unparseable-but-regex-passing url) — never treat
-        // two such offers as duplicates of EACH OTHER just because both are ''.
-        if (key && (seen.has(key) || known.has(key))) continue; // intra-run + known dedup
+        if (key && (seen.has(key) || known.has(key))) continue;
         if (key) seen.add(key);
         out.push({ kind: "offer", offer });
       }
       return out;
     },
-    /** Emit any trailing buffered narration when the stream ends. */
     flush(): AiTraceChunk[] {
       const text = buf;
       buf = "";

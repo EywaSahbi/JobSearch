@@ -1,19 +1,4 @@
 #!/usr/bin/env node
-/**
- * golden-budget-analysis.mjs — Static token budget analysis for golden cases
- *
- * For each golden case at multiple budget tiers + CV lengths, computes:
- *   1. Token count with full context (--no-compress)
- *   2. Token count with compressed context (default)
- *   3. Which sections would be trimmed
- *   4. Whether any P0 section would be affected (should NEVER happen)
- *
- * Zero API calls — purely static analysis of the compression logic against
- * the actual _shared.md and golden case JDs.
- *
- * Usage:
- *   node lib/golden-budget-analysis.mjs
- */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -28,9 +13,6 @@ if (!existsSync(GOLDEN_DIR)) {
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// Load context files
-// ---------------------------------------------------------------------------
 function readFile(path, label) {
   if (!existsSync(path)) {
     console.warn(`  ⚠️  ${label} not found: ${path}`);
@@ -46,9 +28,6 @@ const p0Keys = Object.entries(SECTION_PRIORITY)
   .filter(([, p]) => p === 0)
   .map(([k]) => k);
 
-// ---------------------------------------------------------------------------
-// Synthetic CVs — a real cv.md is 500-3000 lines of markdown.
-// ---------------------------------------------------------------------------
 const CV_BLURB = [
   '',
   '### Head of AI — TechCorp (2022-Present)',
@@ -96,34 +75,20 @@ function makeCV(repeatBlurb) {
   return header.concat(...Array(repeatBlurb).fill(CV_BLURB).flat()).join('\n');
 }
 
-// Short CV — ~38 lines, ~1.7K chars (concise, well-edited)
 const CV_SHORT = makeCV(1);
-// Long CV — ~170 lines, ~7.8K chars (detailed, many projects & publications)
 const CV_LONG  = makeCV(5);
 
-// ---------------------------------------------------------------------------
-// Scenarios
-// ---------------------------------------------------------------------------
 const SCENARIOS = {
-  // 1. Most common case: Gemini Flash free tier → no need to compress at all.
-  //    _shared + oferta + short CV + JD ≈ 16K tokens, budget = 120K.
   'Gemini Flash, short CV — baseline (no compression needed)':
     { cv: CV_SHORT, budget: 128000, margin: 8192 },
 
-  // 2. Realistic cost-saving: medium-context model, detailed CV.
-  //    Prompt ≈ 17K tokens, budget = 16K → saves ~7% by trimming P2.
   'Medium model, long CV — cost-saving mode (20K budget)':
     { cv: CV_LONG,  budget:  20000, margin: 4096 },
 
-  // 3. Survival mode: small local model, even a short CV overflows.
-  //    Prompt ≈ 16K tokens, budget = 6K → saves ~26%, P2+P1 trimmed.
   'Ollama 8K, short CV — survival mode (6K budget)':
     { cv: CV_SHORT, budget:   8000, margin: 2000 },
 };
 
-// ---------------------------------------------------------------------------
-// Analyze each golden case
-// ---------------------------------------------------------------------------
 const caseFiles = readdirSync(GOLDEN_DIR).filter(f => f.endsWith('.json'));
 
 for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) {
@@ -140,7 +105,6 @@ for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) 
   for (const file of caseFiles) {
     const tc = JSON.parse(readFileSync(join(GOLDEN_DIR, file), 'utf8'));
 
-    // Run with compression (default)
     const { budgetReport: compressedReport } = buildBudgetedPrompt({
       sharedContent,
       ofertaContent,
@@ -150,7 +114,6 @@ for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) 
       safetyMargin: margin,
     });
 
-    // Run without compression (--no-compress)
     const { budgetReport: fullReport } = buildBudgetedPrompt({
       sharedContent,
       ofertaContent,
@@ -166,7 +129,6 @@ for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) 
       ? Math.round((saved / fullReport.totalTokens) * 100)
       : 0;
 
-    // Safety check: are any P0 sections in the removed list?
     const p0Violated = compressedReport.removed.some(name => {
       const key = name.toLowerCase()
         .replace(/\s*\([^)]*\)\s*/g, ' ')
@@ -192,7 +154,6 @@ for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) 
     });
   }
 
-  // Per-case table
   console.log('Case                           | Archetype (label)         | Before  | After   | Saved |  % | Status');
   console.log('───────────────────────────────┼───────────────────────────┼─────────┼─────────┼───────┼────┼───────');
 
@@ -210,7 +171,6 @@ for (const [scenarioName, { cv, budget, margin }] of Object.entries(SCENARIOS)) 
     console.log(`${id} | ${arch} | ${String(r.beforeTokens).padStart(7)} | ${String(r.afterTokens).padStart(7)} | ${savedStr} | ${pctStr} | ${status}`);
   }
 
-  // Summary
   const avgSavedPct = results.length > 0
     ? Math.round(results.reduce((s, r) => s + r.savedPct, 0) / results.length)
     : 0;

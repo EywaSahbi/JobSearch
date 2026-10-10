@@ -14,16 +14,11 @@ import (
 	"time"
 )
 
-// pendingRepairs remembers Applied saves that returned a partial-success error,
-// so only an explicit retry of the same row asks set-status.mjs to repair the
-// missing lifecycle records. A routine Applied save never requests repair.
 var (
 	pendingRepairsMu sync.Mutex
 	pendingRepairs   = map[string]struct{ ledger, followup bool }{}
 )
 
-// Scripts belong to the checkout, even when --path points at a data-only root.
-// The executable fallback also supports launching the built TUI from elsewhere.
 func statusWriterScript() (string, error) {
 	roots := []string{getRepoRoot()}
 	if executable, err := os.Executable(); err == nil {
@@ -60,8 +55,6 @@ func runStatusWriter(dataRoot, report, status, note string) error {
 	args := []string{script, "--report-link", report, status, "--json"}
 	repairKey := tracker + "\x00" + report
 	if strings.EqualFold(status, "applied") {
-		// Only a retry after a partial Applied save may repair missing
-		// lifecycle observations even though the tracker is already Applied.
 		pendingRepairsMu.Lock()
 		pending := pendingRepairs[repairKey]
 		pendingRepairsMu.Unlock()
@@ -87,8 +80,6 @@ func runStatusWriter(dataRoot, report, status, note string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", args...)
 	cmd.Dir = filepath.Dir(script)
-	// Pass the exact reader target, including legacy/relative overrides, rather
-	// than letting the child's cwd or inherited root choose a different tracker.
 	boundedWait := func(name string) string {
 		wait := envMilliseconds(name, 10*time.Second)
 		if wait > 10*time.Second {
@@ -129,8 +120,6 @@ func runStatusWriter(dataRoot, report, status, note string) error {
 	if parseErr != nil || result.Changed == nil || result.NewStatus == "" {
 		return fmt.Errorf("set-status.mjs returned no valid result; reload to check whether the change was applied")
 	}
-	// The CLI treats these as non-fatal after the tracker commit. Surface that
-	// partial success so a missing lifecycle record cannot disappear silently.
 	if result.StatusLogged != nil && !*result.StatusLogged {
 		markPending(true, false)
 		return fmt.Errorf("status saved, but status-log append failed: %s", strings.TrimSpace(stderr.String()))

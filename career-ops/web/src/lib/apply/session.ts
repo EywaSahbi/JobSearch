@@ -7,8 +7,6 @@ import { resolveCli } from "../clis";
 import { fencingReport } from "../cli-fencing.mjs";
 import { CAPS } from "../worker-capabilities.mjs";
 
-/** The frame with the most interactive controls — where the agentic interpreter
- *  should look when deterministic extraction found nothing usable. */
 async function richestControlFrame(page: Page): Promise<Frame> {
   let best = page.mainFrame();
   let bestN = -1;
@@ -22,16 +20,10 @@ async function richestControlFrame(page: Page): Promise<Frame> {
   return best;
 }
 
-/** Escape a value for use inside a double-quoted CSS attribute selector.
- *  Backslash FIRST, then quote — escaping only the quote would let a trailing
- *  backslash neutralize the closing quote (CodeQL js/incomplete-sanitization). */
 function cssAttr(v: string): string {
   return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-/** Navigate resiliently: a transient nav error / slow ATS shouldn't fail the
- *  whole apply. Up to 3 attempts with backoff; returns the navigation Response
- *  (status/headers feed the cheap status-block check). */
 async function gotoResilient(page: Page, url: string): Promise<Response | null> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -47,9 +39,6 @@ async function gotoResilient(page: Page, url: string): Promise<Response | null> 
   throw lastErr instanceof Error ? lastErr : new Error("could not open the page");
 }
 
-/** Distinguish a real APPLICATION form from a careers-listing / job-search form
- *  (a closed Greenhouse posting redirects to the board, whose keyword/department
- *  filters would otherwise look like a fillable form). */
 function looksLikeApplicationForm(form: ExtractedForm): boolean {
   const fs = form.fields;
   if (fs.length === 0) return false;
@@ -57,18 +46,15 @@ function looksLikeApplicationForm(form: ExtractedForm): boolean {
   const hasFile = fs.some((f) => f.type === "file");
   const hasEmail = fs.some((f) => f.type === "email" || /e-?mail/.test(lab(f)));
   const hasAppish = fs.some((f) => /first name|last name|full name|resume|résumé|\bcv\b|cover letter|phone|linkedin|github|why |portfolio|sponsorship|relocat/.test(lab(f)));
-  if (hasFile || hasEmail || hasAppish) return true; // clearly an application
+  if (hasFile || hasEmail || hasAppish) return true;
   const allSearch = fs.every(
     (f) => /search|buscar|filtr|keyword|palabra|department|departa|office|oficina|location|ubicaci|remote|category|categor/.test(lab(f)) || /filter|search|keyword/.test((f.nativeId || "").toLowerCase()),
   );
-  if (allSearch) return false; // a job-board search/filter form
-  if (fs.length <= 3 && fs.every((f) => !f.required)) return false; // too sparse + all optional = not an app form
+  if (allSearch) return false;
+  if (fs.length <= 3 && fs.every((f) => !f.required)) return false;
   return true;
 }
 
-/** ATS forms are often embedded in an <iframe> on a company career site
- *  (greenhouse/lever/smartrecruiters embeds), sometimes cross-origin — the main
- *  frame then has 0 fields. Extract from EVERY frame and keep the richest one. */
 async function pickFormFrame(page: Page): Promise<{ frame: Frame; form: ExtractedForm }> {
   let best: { frame: Frame; form: ExtractedForm } = {
     frame: page.mainFrame(),
@@ -79,17 +65,12 @@ async function pickFormFrame(page: Page): Promise<{ frame: Frame; form: Extracte
       const form = await extractForm(fr);
       if (form.fields.length > best.form.fields.length) best = { frame: fr, form };
     } catch {
-      /* detached / cross-origin restriction → skip */
     }
   }
-  // Prefer the main frame's title (the posting title) when an iframe won the form.
   if (best.frame !== page.mainFrame() && !best.form.title) best.form.title = await page.title().catch(() => best.form.title);
   return best;
 }
 
-/** Enrich generically-extracted fields with an ATS's published schema (clean
- *  labels, correct types, real options) — Greenhouse renders react-select
- *  widgets whose options aren't in the DOM. Matched by native id/name, then label. */
 async function enrichFromAts(url: string, fields: ApplyField[]): Promise<void> {
   const gh = parseGreenhouse(url);
   if (!gh) return;
@@ -109,10 +90,6 @@ async function enrichFromAts(url: string, fields: ApplyField[]): Promise<void> {
   }
 }
 
-// A persistent apply SESSION keeps one real-form page open (headed-but-off-screen)
-// so we can: extract → (user verifies pre-filled answers) → FILL the real form →
-// bringToFront() for the human to submit it themselves. Headed (channel:chrome) =
-// the user's own Chrome on their residential IP (best ATS success); never submits.
 type Session = { id: string; url: string; title: string; fields: ApplyField[]; context: BrowserContext; page: Page; frame: Frame; createdAt: number; formShot?: string };
 
 declare global {
@@ -133,11 +110,9 @@ async function headedBrowser(): Promise<Browser> {
     nb = await chromium.launch({
       channel: "chrome",
       headless: false,
-      args: ["--window-position=-3200,-3200", "--window-size=1280,940"], // off-screen during fill; moved on-screen at handoff
+      args: ["--window-position=-3200,-3200", "--window-size=1280,940"],
     });
   } catch {
-    // No system Google Chrome → fall back to Playwright's bundled Chromium if
-    // present; otherwise a clear, actionable error.
     try {
       nb = await chromium.launch({ headless: false, args: ["--window-position=-3200,-3200", "--window-size=1280,940"] });
     } catch {
@@ -148,8 +123,6 @@ async function headedBrowser(): Promise<Browser> {
   return nb;
 }
 
-/** Close the headed Chrome once no sessions have been active for a while, so we
- *  don't leak a browser process. Re-armed on every prune/close; cancelled on open. */
 function scheduleIdleClose() {
   if (globalThis.__coIdleTimer) clearTimeout(globalThis.__coIdleTimer);
   globalThis.__coIdleTimer = setTimeout(() => {
@@ -166,8 +139,6 @@ function prune() {
   for (const [id, s] of SESSIONS) if (now - s.createdAt > 15 * 60_000) void closeSession(id);
 }
 
-/** Bounded scroll pass to trigger lazy/virtualized forms that only render their
- *  fields once scrolled into view, then return to the top. */
 async function nudgeScroll(page: Page): Promise<void> {
   for (let i = 1; i <= 3; i++) {
     await page.evaluate((y) => window.scrollTo(0, y), i * 1200).catch(() => {});
@@ -178,51 +149,38 @@ async function nudgeScroll(page: Page): Promise<void> {
 
 export async function openSession(url: string, cliId?: string, forceAgent?: boolean, noApplyBtn?: boolean): Promise<{ id: string; title: string; fields: ApplyField[]; shots: string[]; issues: ApplyIssue[]; needsDrive?: boolean }> {
   prune();
-  if (globalThis.__coIdleTimer) clearTimeout(globalThis.__coIdleTimer); // someone's active
+  if (globalThis.__coIdleTimer) clearTimeout(globalThis.__coIdleTimer);
   const browser = await headedBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  context.setDefaultTimeout(8000); // no single action hangs the whole open/fill
+  context.setDefaultTimeout(8000);
   const page = await context.newPage();
   const abort = async (msg: string): Promise<never> => {
     await context.close().catch(() => {});
     if (SESSIONS.size === 0) scheduleIdleClose();
     throw new Error(msg);
   };
-  // Capture the real form as we read it → a "behind the scenes" progress strip
-  // that proves we genuinely opened + parsed THEIR form (not magic). The last
-  // shot doubles as a subtle blurred backdrop behind the clean proxy.
   const shots: string[] = [];
   const snap = async () => {
     try {
       const b = await page.screenshot({ type: "jpeg", quality: 42 });
       shots.push(`data:image/jpeg;base64,${b.toString("base64")}`);
     } catch {
-      /* ignore */
     }
   };
-  // 1) Navigate (resilient) → cheapest hard-block check on the Response status.
   const resp = await gotoResilient(page, url);
-  await snap(); // first paint
+  await snap();
   const sBlock = statusBlock(resp?.status(), resp ? resp.headers() : {});
   if (sBlock) return abort(sBlock.message);
 
-  // 2) Clear any cookie/consent overlay that hides the form (never a hard block).
   const consentIssues = await dismissConsent(page);
 
-  // 3) Wait for real form controls to render (SPA hydrate) in ANY frame (embedded
-  //    forms), then settle. More reliable than a fixed sleep.
   const formSel = 'form input, form textarea, input[type=file], [role=combobox], [class*="application-form" i], #application_form';
   await Promise.race(page.frames().map((f) => f.waitForSelector(formSel, { timeout: 12_000 }).catch(() => null))).catch(() => {});
   await page.waitForTimeout(1200);
-  await dropNewTabs(page); // make any "Apply" link/popup navigate in OUR tab
-  await snap(); // settled
+  await dropNewTabs(page);
+  await snap();
 
-  // 4) Extract from the richest frame; if nothing yet, try (a) a scroll pass to
-  //    trigger lazy/virtualized fields, then (b) clicking an "Apply" button (SPA;
-  //    never a submit) — re-settling and re-extracting after each.
   let { frame, form } = await pickFormFrame(page);
-  // "no usable form yet" = 0 fields OR only non-application fields (e.g. a search
-  // box on a job-description page) — both should trigger the recovery, not just 0.
   if (!looksLikeApplicationForm(form)) {
     await nudgeScroll(page);
     await page.waitForTimeout(400);
@@ -235,18 +193,11 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     ({ frame, form } = await pickFormFrame(page));
     await snap();
   }
-  await enrichFromAts(url, form.fields); // clean labels + real options for known ATS (Greenhouse)
+  await enrichFromAts(url, form.fields);
   await snap();
 
   let aiInterpreted = false;
-  // Whether the user's CLI was actually LAUNCHED over the form, as reported by
-  // the interpreter. Kept apart from aiInterpreted: a launched agent can come
-  // back empty, and the fencing notice below is about the launch, not about the
-  // result. A missing CLI, an empty form or a fencing refusal (the throw the
-  // catch below absorbs) never launched anything, so no notice is owed.
   let agentSpawned = false;
-  // Opt-in: ALWAYS interpret with AI (max robustness, ignores the deterministic
-  // result) — for users who'd rather pay tokens than risk a heuristic miss.
   if (forceAgent && cliId) {
     const aiFrame = await richestControlFrame(page);
     const ai = await interpretFormWithAgent(aiFrame, cliId, form.title || (await page.title().catch(() => ""))).catch(() => ({ fields: [] as ApplyField[], spawned: false }));
@@ -260,16 +211,8 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     }
   }
 
-  // 5) Deterministic extraction found no usable APPLICATION form. Classify WHY
-  //    first — then run the AGENTIC FALLBACK only for the genuinely AMBIGUOUS
-  //    "no-form" case (controls are present but our heuristics produced nothing).
-  //    A challenge/login/listing/expired/Workday page has no form to interpret,
-  //    so we abort directly with the right message (no wasted AI run).
   if (!aiInterpreted && !looksLikeApplicationForm(form)) {
     const why = await classifyEmpty(page, url);
-    // Driveable (controls present, not a hard block) + we have an agent → KEEP the
-    // session open and hand off to the STREAMED drive route, so the user watches
-    // the agent reach the form live (/api/apply/drive). Otherwise abort.
     if (cliId && why.code === "no-form") {
       const id = `apply-${crypto.randomUUID()}`;
       const title = form.title || (await page.title().catch(() => "")) || "Application";
@@ -279,21 +222,12 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     return abort(why.message);
   }
 
-  // 6) Soft issues the user should know about — surfaced, never silent.
   const [cap, multi] = await Promise.all([captchaWarning(page), multiStepInfo(page)]);
   const unlabeled = form.fields.filter((f) => !(f.label || "").trim()).length;
   const issues: ApplyIssue[] = [...consentIssues];
   if (cap) issues.push(cap);
   if (multi) issues.push(multi);
   if (aiInterpreted) issues.push({ level: "info", code: "ai-interpreted", message: "This form had an uncommon layout, so AI read its fields live — give them an extra check before submitting." });
-  // agentInterpretForm just ran the user's chosen CLI over this form. If that
-  // runtime has no verified fencing mechanism it read the page with its default
-  // access, and the user should know — agent-interpret.ts has no stream of its
-  // own, so the notice belongs here, where its callers already surface soft
-  // issues (#2507). warn, not info: this is "proceeded, but look". Keyed on the
-  // LAUNCH the interpreter reports, not on aiInterpreted: an empty
-  // interpretation still ran the agent, and an interpreter that never launched
-  // it (no CLI, no controls, refused argv) owes no warning.
   const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: CAPS.localReadOnly }) : null;
   if (interpretFencing?.notice) issues.push({ level: "warn", code: "cli-unfenced", message: interpretFencing.notice });
   if (unlabeled > 0) issues.push({ level: "warn", code: "unlabeled-fields", message: `${unlabeled} field${unlabeled > 1 ? "s" : ""} couldn't be labelled cleanly — double-check ${unlabeled > 1 ? "them" : "it"} before submitting.` });
@@ -307,8 +241,6 @@ export function getSession(id: string): Session | undefined {
   return SESSIONS.get(id);
 }
 
-/** Open a bare headed page on a URL (for the agentic drive loop / validation),
- *  without the full extract pipeline. Caller must close the context. */
 export async function newDrivePage(url: string): Promise<{ page: Page; context: BrowserContext }> {
   if (globalThis.__coIdleTimer) clearTimeout(globalThis.__coIdleTimer);
   const browser = await headedBrowser();
@@ -321,7 +253,6 @@ export async function newDrivePage(url: string): Promise<{ page: Page; context: 
   return { page, context };
 }
 
-/** Extract+enrich the current page (used after the drive loop reaches a form). */
 export async function extractCurrent(page: Page, url: string): Promise<{ frame: Frame; form: ExtractedForm }> {
   const r = await pickFormFrame(page);
   await enrichFromAts(url, r.form.fields);
@@ -332,16 +263,13 @@ export function isApplicationFormFn(form: ExtractedForm): boolean {
   return looksLikeApplicationForm(form);
 }
 
-/** After the streamed drive loop reaches a form, extract+enrich it (Tier-3
- *  interpret as a last resort), UPDATE the open session, and return the fields +
- *  issues. Returns null if no real application form materialised. */
 export async function finalizeDrivenSession(id: string, cliId?: string): Promise<{ title: string; fields: ApplyField[]; issues: ApplyIssue[] } | null> {
   const s = SESSIONS.get(id);
   if (!s) return null;
   let { frame, form } = await pickFormFrame(s.page);
   await enrichFromAts(s.url, form.fields);
   let aiInterpreted = false;
-  let agentSpawned = false; // see openSession: launch, not result
+  let agentSpawned = false;
   if (!looksLikeApplicationForm(form) && cliId) {
     const aiFrame = await richestControlFrame(s.page);
     const ai = await interpretFormWithAgent(aiFrame, cliId, form.title || s.title).catch(() => ({ fields: [] as ApplyField[], spawned: false }));
@@ -359,14 +287,6 @@ export async function finalizeDrivenSession(id: string, cliId?: string): Promise
   if (form.title) s.title = form.title;
   const issues: ApplyIssue[] = [{ level: "info", code: "ai-navigated", message: "AI navigated to reach this application form on your machine — review the fields before submitting." }];
   if (aiInterpreted) issues.push({ level: "info", code: "ai-interpreted", message: "AI also read the fields live (uncommon layout) — give them an extra check." });
-  // agentInterpretForm just ran the user's chosen CLI over this form. If that
-  // runtime has no verified fencing mechanism it read the page with its default
-  // access, and the user should know — agent-interpret.ts has no stream of its
-  // own, so the notice belongs here, where its callers already surface soft
-  // issues (#2507). warn, not info: this is "proceeded, but look". Keyed on the
-  // LAUNCH the interpreter reports, not on aiInterpreted: an empty
-  // interpretation still ran the agent, and an interpreter that never launched
-  // it (no CLI, no controls, refused argv) owes no warning.
   const interpretFencing = agentSpawned && cliId ? fencingReport({ cliId, cliName: resolveCli(cliId)?.spec.name ?? cliId, capabilities: CAPS.localReadOnly }) : null;
   if (interpretFencing?.notice) issues.push({ level: "warn", code: "cli-unfenced", message: interpretFencing.notice });
   const cap = await captchaWarning(s.page);
@@ -383,15 +303,10 @@ export async function closeSession(id: string): Promise<void> {
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 
-/** True for a file field that wants the candidate's résumé/CV (vs. cover letter,
- *  portfolio, or a generic attachment we leave for the user). */
 function isResumeField(f: ApplyField): boolean {
   return f.type === "file" && /resume|résumé|\bcv\b|curriculum|lebenslauf|currículum/i.test(f.label || "");
 }
 
-/** Fill the real form with verified answers, screenshotting after each field.
- *  Attaches the tailored CV PDF to résumé/CV file fields (cvPath). NEVER clicks a
- *  submit/apply control — only fills/selects/checks/attaches. */
 export async function fillSession(
   id: string,
   answers: Record<string, string>,
@@ -402,9 +317,6 @@ export async function fillSession(
   if (!s) throw new Error("apply session not found (it may have expired)");
   const byId = new Map(fieldsMeta.map((f) => [f.id, f]));
   const steps: FillStep[] = [];
-  // Belt-and-suspenders: if filling ever navigates the page (i.e. something got
-  // submitted), the URL path changes. We never submit by construction, but we
-  // report it so the caller can flag it instead of silently "succeeding".
   const startPath = (() => {
     try {
       return new URL(s.frame.url()).pathname;
@@ -422,10 +334,6 @@ export async function fillSession(
     }
   };
 
-  // 1) Attach the tailored CV to every résumé/CV file field (even with no text
-  //    answer). The real <input type=file> was tagged data-co-field at extract
-  //    time; setInputFiles works even when the ATS visually hides it behind a
-  //    dropzone. Other file fields (cover letter, portfolio) are left to the user.
   if (cvPath) {
     for (const meta of fieldsMeta) {
       if (!isResumeField(meta)) continue;
@@ -434,7 +342,6 @@ export async function fillSession(
         await s.frame.locator(`[data-co-field="${cssAttr(meta.id)}"]`).first().setInputFiles(cvPath);
         ok = true;
       } catch {
-        // fallback: any file input inside the same field container
         try {
           await s.frame.locator(`input[type=file]`).first().setInputFiles(cvPath);
           ok = true;
@@ -450,10 +357,7 @@ export async function fillSession(
     const meta = byId.get(fid);
     const value = (raw ?? "").toString();
     if (!meta || value === "") continue;
-    if (meta.type === "file") continue; // handled above (CV) — never auto-fill other uploads
-    // Defense-in-depth: NEVER auto-tick a legal consent/agreement checkbox — the
-    // human must affirmatively accept. (The planner already flags these
-    // needs_confirmation; this guarantees it even if it slips.)
+    if (meta.type === "file") continue;
     if (meta.type === "checkbox" && /\b(i (have )?read|i agree|i consent|i accept|consent to|privacy notice|terms|gdpr|data protection)\b/i.test(meta.label || "")) {
       steps.push({ fieldId: fid, label: `${meta.label} — you confirm`, ok: false, thumb: undefined });
       continue;
@@ -463,8 +367,6 @@ export async function fillSession(
     try {
       const loc = s.frame.locator(`[data-co-field="${cssAttr(fid)}"]`).first();
       if (meta.combobox) {
-        // react-select: open, type to filter, CLICK the matching option. We never
-        // press Enter — in a form, Enter can submit. Clicking an option can't.
         await loc.scrollIntoViewIfNeeded().catch(() => {});
         await loc.click();
         await s.page.waitForTimeout(150);
@@ -478,8 +380,6 @@ export async function fillSession(
         if (await exact.count()) {
           await exact.click();
         } else {
-          // fall back to the first option that contains the typed text; else give
-          // up (Escape closes the menu) — leave it for the human, never submit.
           const partial = s.frame.locator(menu).filter({ hasText: new RegExp(esc, "i") }).first();
           if (await partial.count()) await partial.click();
           else {
@@ -498,8 +398,6 @@ export async function fillSession(
           await loc.setChecked(want, { timeout: 3000 });
           done = true;
         } catch {
-          // custom-styled checkbox with a hidden real <input> → click its label
-          // (native toggle + React onChange) or force as a last resort.
           if ((await loc.isChecked().catch(() => false)) === want) {
             done = true;
           } else {
@@ -513,7 +411,6 @@ export async function fillSession(
                 await loc.check({ force: true });
                 done = true;
               } catch {
-                /* leave for the user */
               }
             }
           }
@@ -544,15 +441,10 @@ export async function fillSession(
       return s.frame.url();
     }
   })();
-  // Read the real form back: did every answer actually land? any validation
-  // error? — so we warn the user about silent divergence before the handoff.
   const issues = await verifyFill(s.frame, fieldsMeta, answers).catch(() => [] as ApplyIssue[]);
   return { steps, navigated: endPath !== startPath, issues };
 }
 
-/** Hand the real (now pre-filled) form to the HUMAN to review + submit. The
- *  window was kept OFF-SCREEN during fill, so bringToFront alone wouldn't make it
- *  visible — we reposition it on-screen via CDP first. We never submit. */
 export async function handoffSession(id: string): Promise<void> {
   const s = SESSIONS.get(id);
   if (!s) throw new Error("apply session not found");
@@ -565,7 +457,6 @@ export async function handoffSession(id: string): Promise<void> {
     });
     await cdp.detach().catch(() => {});
   } catch {
-    /* CDP unavailable → bringToFront still raises it */
   }
   await s.page.bringToFront().catch(() => {});
 }

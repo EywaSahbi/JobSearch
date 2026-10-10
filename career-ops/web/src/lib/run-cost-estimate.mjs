@@ -13,10 +13,6 @@ function median(values) {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-/**
- * Estimate a future run from the user's own recent completed runs of that kind.
- * A median keeps one unusually large agent run from inflating every later warning.
- */
 export function estimateRunCost(jobs, kind, count = 1) {
   const runCount = Number.isSafeInteger(count) && count > 0 ? count : 1;
   const samples = (Array.isArray(jobs) ? jobs : [])

@@ -1,14 +1,4 @@
 #!/usr/bin/env node
-// @ts-check
-// plugin-install.mjs — clone/scaffold/validate community plugins. Lives at repo
-// ROOT (not under plugins/) because it uses node:child_process to run git, which
-// test-all's plugin deny-list forbids inside plugins/. Imported by plugins.mjs.
-//
-// Security (the clone-time-RCE class): git is spawned via execFileSync with an
-// ARRAY argv (never a shell string), the URL is strict-allowlisted to
-// https://github.com/<owner>/<repo>, alternate transports are disabled
-// (protocol.ext/file allow=never), and the EXACT commit SHA is fetched + checked
-// out (a moved tag or force-push cannot substitute different code).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, cpSync, readdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
@@ -25,7 +15,6 @@ const NAME_RE = /^career-ops-plugin-([a-z0-9][a-z0-9-]*)$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const MIN_FILES = ['manifest.json', 'index.mjs', 'README.md', 'LICENSE'];
 
-/** Normalize `owner/repo` | full URL into a validated github URL + the plugin id. */
 export function parseRepoArg(arg) {
   let url = arg;
   if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(arg)) url = `https://github.com/${arg}`;
@@ -37,7 +26,6 @@ export function parseRepoArg(arg) {
   return { url, id: m[1] };
 }
 
-/** Clone the EXACT pinned SHA into a fresh temp dir. Returns the temp dir path. */
 export function safeClone(url, sha) {
   if (!SHA_RE.test(sha || '')) throw new Error(`a 40-hex commit --sha is required (got ${JSON.stringify(sha)})`);
   const dir = mkdtempSync(path.join(tmpdir(), 'co-plugin-'));
@@ -47,7 +35,7 @@ export function safeClone(url, sha) {
     git('-C', dir, 'remote', 'add', 'origin', '--', url);
     git('-C', dir, 'fetch', '--depth', '1', '--no-tags', '-q', 'origin', sha);
     git('-C', dir, 'checkout', '-q', 'FETCH_HEAD');
-    rmSync(path.join(dir, '.git'), { recursive: true, force: true }); // drop VCS metadata (and any hooks)
+    rmSync(path.join(dir, '.git'), { recursive: true, force: true });
     return dir;
   } catch (err) {
     rmSync(dir, { recursive: true, force: true });
@@ -55,7 +43,6 @@ export function safeClone(url, sha) {
   }
 }
 
-/** Check the minimum file set + a valid manifest whose id matches `expectId`. */
 export function validateInstall(dir, expectId) {
   const problems = [];
   for (const f of MIN_FILES) if (!existsSync(path.join(dir, f))) problems.push(`missing required file: ${f}`);
@@ -63,9 +50,8 @@ export function validateInstall(dir, expectId) {
   let parsed;
   try { parsed = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')); }
   catch (e) { return { ok: false, problems: [`manifest.json invalid JSON: ${e.message}`], manifest: null }; }
-  // validateManifest wants the dir to BE the plugin dir + the basename to equal id.
   const tmpNamed = path.join(path.dirname(dir), expectId);
-  if (dir !== tmpNamed) { try { renameSync(dir, tmpNamed); dir = tmpNamed; } catch { /* validate in place using expectId */ } }
+  if (dir !== tmpNamed) { try { renameSync(dir, tmpNamed); dir = tmpNamed; } catch { } }
   const manifest = validateManifest(parsed, dir, expectId);
   if (!manifest) return { ok: false, problems: ['manifest failed validation (see ⚠️ above)'], manifest: null, dir };
   const audit = auditPlugin(dir);
@@ -73,11 +59,6 @@ export function validateInstall(dir, expectId) {
   return { ok: true, problems: [], manifest, dir };
 }
 
-/**
- * Install a community plugin from a github repo at a pinned SHA into
- * plugins.local/<id>. Returns { id, manifest, integrity, dir } WITHOUT enabling
- * it (the caller runs the consent gate). Throws on any validation failure.
- */
 export function installFromRepo(root, { url, sha }) {
   const { url: safeUrl, id } = parseRepoArg(url);
   const dest = path.join(root, 'plugins.local', id);
@@ -97,12 +78,6 @@ export function installFromRepo(root, { url, sha }) {
   return { id, manifest: { ...result.manifest, dir: dest }, integrity: tree.integrity, files: tree.files, repo: safeUrl, sha };
 }
 
-/**
- * Clone + statically validate a registry entry WITHOUT installing it (used by
- * the registry-validate CI). Executes NO plugin code — manifest is parsed, the
- * audit is static. Returns problems (empty = clean).
- * @returns {string[]}
- */
 export function auditRegistryEntry(url, sha, expectId) {
   let parsed;
   try { parsed = parseRepoArg(url); } catch (e) { return [e.message]; }
@@ -112,11 +87,10 @@ export function auditRegistryEntry(url, sha, expectId) {
   let result;
   try { result = validateInstall(dir, parsed.id); }
   catch (e) { rmSync(dir, { recursive: true, force: true }); return [e.message]; }
-  try { rmSync(result.dir || dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { rmSync(result.dir || dir, { recursive: true, force: true }); } catch { }
   return result.ok ? [] : result.problems;
 }
 
-/** Scaffold a new local plugin from plugins/_template/. */
 export function scaffoldNew(root, name) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`plugin name must match [a-z0-9-] (got "${name}")`);
   const tpl = path.join(root, 'plugins', '_template');
@@ -125,7 +99,6 @@ export function scaffoldNew(root, name) {
   if (existsSync(dest)) throw new Error(`plugins.local/${name} already exists`);
   mkdirSync(path.join(root, 'plugins.local'), { recursive: true });
   cpSync(tpl, dest, { recursive: true });
-  // Substitute {{NAME}} placeholders in shipped text files.
   const sub = (p) => { if (existsSync(p)) writeFileSync(p, readFileSync(p, 'utf8').replaceAll('{{NAME}}', name), 'utf8'); };
   for (const f of readdirSync(dest, { withFileTypes: true })) {
     if (f.isFile()) sub(path.join(dest, f.name));
@@ -133,19 +106,6 @@ export function scaffoldNew(root, name) {
   if (existsSync(path.join(dest, 'test'))) for (const f of readdirSync(path.join(dest, 'test'))) sub(path.join(dest, 'test', f));
   return dest;
 }
-
-// ── CLI flags + help ────────────────────────────────────────────────
-//
-// This file is a library first: plugins.mjs owns the user-facing `new`/`add`
-// commands and calls the exports above. But docs/SCRIPTS.md lists `node
-// plugin-install.mjs` as a runnable command, so it is reachable directly — and
-// every direct invocation printed nothing and exited 0, `--help` and a typo'd
-// flag included. That is the silent-success shape lib/cli-flags.mjs exists to
-// end (#2775): nothing told you the install/scaffold commands live elsewhere.
-//
-// KNOWN_FLAGS is exactly --help/-h because that is every flag this file parses.
-// --sha and --confirm are plugins.mjs's flags, not this script's, so they are
-// pointed at rather than claimed here.
 
 const KNOWN_FLAGS = ['--help', '-h'];
 
@@ -170,19 +130,13 @@ else requires --sha. See docs/PLUGINS.md.`;
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
 
-  // Unrecognized flags exit 1 naming the flag; --help/-h print USAGE and exit 0.
   validateFlags(args, KNOWN_FLAGS, USAGE);
 
-  // Anything left is a non-flag operand (a repo, a plugin name) aimed at a
-  // command this file does not have. Exiting 0 in silence is how you end up
-  // believing a plugin was installed, so say where the command lives instead.
   if (args.length > 0) {
     console.error(`Error: plugin-install.mjs takes no arguments (got: ${args.join(' ')}). Its commands live on plugins.mjs.`);
     console.error(USAGE);
     process.exit(1);
   }
 
-  // Bare `node plugin-install.mjs`, the form docs/SCRIPTS.md documents: there is
-  // no work to do here, so print where the work is rather than nothing at all.
   console.log(USAGE);
 }

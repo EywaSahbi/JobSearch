@@ -5,16 +5,12 @@ import { Loader2, Pin, PinOff, X } from "lucide-react";
 import { localISODate, type CadenceEntry } from "@/lib/followups";
 import { cn } from "@/lib/cn";
 
-/** Local today + N days, as YYYY-MM-DD. */
 function plusDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
   return localISODate(d);
 }
 
-// Pin a custom NEXT follow-up date for one application — overrides the
-// computed cadence (even revives a cold one) until a follow-up is logged after
-// the pin, which resumes the normal schedule. POST/DELETE /api/followups/override.
 export function NextDateDialog({
   entry,
   onClose,

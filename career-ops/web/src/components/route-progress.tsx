@@ -7,19 +7,12 @@ type ProgressState = "idle" | "loading" | "done";
 
 const START_EVENT = "career-ops:route-progress:start";
 
-/** Start the navigation indicator before a route transition begins. */
 export function startRouteProgress() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(START_EVENT));
   }
 }
 
-/**
- * App Router does not expose the old router event API. This small client
- * indicator listens for internal link clicks and completes when the committed
- * pathname or query string changes, while route-level `loading.tsx` supplies
- * the detailed skeleton underneath it.
- */
 export function RouteProgress() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -34,7 +27,6 @@ export function RouteProgress() {
       window.clearTimeout(doneTimer.current);
       window.clearTimeout(safetyTimer.current);
       setState("loading");
-      // Same-route clicks and cancelled navigations must not leave a bar stuck.
       safetyTimer.current = window.setTimeout(() => setState("idle"), 8000);
     };
 

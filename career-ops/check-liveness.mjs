@@ -1,24 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * check-liveness.mjs — Playwright job link liveness checker
- *
- * Tests whether job posting URLs are still active or have expired.
- * Uses the same detection logic as scan.md step 7.5.
- * Zero Claude API tokens. Two rungs: a free public-API check first
- * (liveness-api.mjs, no browser), then Playwright for everything else.
- *
- * An `expired` verdict is recorded back into data/scan-history.tsv as a
- * `skipped_expired` row, so a posting confirmed dead once stops resurfacing
- * (#3891). See recordExpiredVerdicts below for why that is default-on.
- *
- * Usage:
- *   node check-liveness.mjs <url1> [url2] ...
- *   node check-liveness.mjs --file urls.txt
- *
- * Exit code: 0 if all active, 1 if any expired or uncertain
- */
-
 import { chromium } from 'playwright';
 import { readFile } from 'fs/promises';
 import {
@@ -43,53 +24,11 @@ const USAGE = `Usage:
   node check-liveness.mjs --help                  # print this usage block and exit
   node check-liveness.mjs -h                      # alias for --help`;
 
-/**
- * Is this run allowed to record its verdicts?
- *
- * Default-ON, opt-OUT. An opt-IN flag would be the bug wearing a fix: the
- * scheduled routines pass no flags, so a gated recording never runs from the
- * one caller that produces most of these verdicts — which is precisely how the
- * expensive `expired` result came to be computed and discarded (#3891).
- * `--no-record` covers the real need for the opposite: a read-only spot check
- * that leaves no trace.
- *
- * @param {string[]} args - process.argv.slice(2).
- * @returns {boolean}
- */
 export function recordingEnabled(args = []) {
   return !args.includes('--no-record');
 }
 
-/**
- * Write the run's `expired` verdicts into data/scan-history.tsv.
- *
- * Everything about WHICH rows get written is decided by planExpiredHistoryRows
- * (only expired, only URLs the history knows, once each); this is the effect.
- * A history file that does not exist yet means no URL is known, so there is
- * nothing to retire and nothing to create.
- *
- * The row is stamped with localToday(), like every other scan-history writer:
- * a UTC day is the wrong day for most of the world for part of every day.
- *
- * The read and the append share ONE critical section. What to append is decided
- * by what the file already says, so reading outside the lock is a check-then-act:
- * a scanner appending the same `skipped_expired` row in between would leave two
- * death certificates for one posting. The lock is not reentrant, hence
- * `alreadyLocked` on the append rather than a second acquisition.
- *
- * @param {{url: string, result: string}[]} verdicts
- * @returns {Promise<number>} How many rows were written.
- */
 export async function recordExpiredVerdicts(verdicts) {
-  // This one check is deliberately OUTSIDE the lock, unlike the read below.
-  // No history means no URL is known, so there is nothing to retire and no
-  // reason to pay for a lock — and locking it would buy nothing, because the
-  // scenario it looks like it prevents is not preventable. A scanner that
-  // creates the file and surfaces this URL a microsecond after the check is
-  // indistinguishable from one that does it a second after the whole function
-  // returns: either way the posting was discovered after the verdict, and the
-  // next sweep is what covers it. (The file is created by atomicWriteFile,
-  // which renames into place, so this can never see a half-written history.)
   if (!existsSync(SCAN_HISTORY_PATH)) return 0;
   return withPipelineLock(SCAN_HISTORY_PATH, async () => {
     const rows = planExpiredHistoryRows(
@@ -110,13 +49,7 @@ async function main() {
     return;
   }
 
-  // Portals like pracuj.pl serve a Cloudflare anti-bot wall to headless Chromium.
-  // On a challenge we retry once in a headed browser (which clears it); pass
-  // --no-fallback to stay fully headless (e.g. on a machine with no display).
   const noFallback = args.includes('--no-fallback');
-  // --throttle or --throttle=<ms>: wait base..2*base ms (jittered) between checks
-  // to stay under rate-based WAF limits. pracuj.pl's Cloudflare flags the session
-  // after ~2 rapid hits, so a bulk run needs spacing. Default base 5000ms.
   const throttleArg = args.find((a) => a === '--throttle' || a.startsWith('--throttle='));
   const throttleBaseMs = throttleArg ? (Number(throttleArg.split('=')[1]) || 5000) : 0;
   const record = recordingEnabled(args);
@@ -143,8 +76,6 @@ async function main() {
   ].filter(Boolean);
   console.log(`Checking ${urls.length} URL(s)...${notes.length ? ` (${notes.join(', ')})` : ''}\n`);
 
-  // Lazy browser: the API rung resolves ATS postings with no browser at all, so we
-  // only launch Playwright if a URL actually needs the fallback.
   let browser = null, page = null, headed = null;
   async function ensureBrowser() {
     if (browser) return;
@@ -156,18 +87,15 @@ async function main() {
   let active = 0, expired = 0, uncertain = 0, viaApi = 0;
   const verdicts = [];
 
-  // Sequential — project rule: never Playwright in parallel
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
     let result, reason, code, usedBrowser = false;
 
-    // Rung 1: zero-token ATS API check. A conclusive active/expired wins; otherwise fall through.
     const api = await checkLivenessViaApi(url);
     if (api) {
       ({ result, reason, code } = api);
       viaApi++;
     } else {
-      // Rung 2: Playwright — handles non-ATS pages and inconclusive API results.
       await ensureBrowser();
       const getHeadedPage = headed ? () => headed.get() : undefined;
       ({ result, reason, code } = await checkUrlLivenessWithFallback(page, url, { getHeadedPage }));
@@ -182,7 +110,6 @@ async function main() {
     else uncertain++;
     verdicts.push({ url, result, code });
 
-    // Throttle only matters between browser checks (the API is cheap, not WAF-rate-limited).
     const wait = usedBrowser && i < urls.length - 1 ? jitteredDelayMs(throttleBaseMs) : 0;
     if (wait) await sleep(wait);
   }
@@ -192,9 +119,6 @@ async function main() {
 
   console.log(`\nResults: ${active} active  ${expired} expired  ${uncertain} uncertain  (${viaApi} via API, no browser)`);
 
-  // Close the loop: the verdict is the expensive part of this run and it used
-  // to die with the process. `--no-record` leaves no trace, so the write is
-  // skipped entirely rather than computed and thrown away.
   if (record) {
     const recorded = await recordExpiredVerdicts(verdicts);
     if (recorded > 0) console.log(`Recorded ${recorded} expired posting(s) in ${SCAN_HISTORY_PATH}`);
@@ -203,8 +127,6 @@ async function main() {
   if (expired > 0 || uncertain > 0) process.exitCode = 1;
 }
 
-// Only run main() when invoked directly (`node check-liveness.mjs`), not when
-// imported — the arg parsing above would otherwise read an importing test's argv.
 if (isMainModule(import.meta.url)) {
   main().catch(err => {
     console.error('Fatal:', err.message);

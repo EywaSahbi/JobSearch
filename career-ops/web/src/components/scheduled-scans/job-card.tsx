@@ -69,7 +69,6 @@ export function JobCard({
   return (
     <div className="co-rise group flex min-w-0 flex-col justify-between h-full gap-2.5 rounded-xl border border-border bg-surface/40 p-3.5 text-left transition-all hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-sm">
       <div className="space-y-2.5">
-        {/* Top Header: Logo + Title + 3-Dots Menu */}
         <div className="flex items-start gap-3">
           <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-brand-soft text-sm font-semibold text-brand">
             {letter}
@@ -84,7 +83,6 @@ export function JobCard({
             </p>
           </div>
 
-          {/* 3-Dots Dropdown Menu */}
           <div className="relative shrink-0" ref={menuRef}>
             <button
               type="button"
@@ -127,7 +125,6 @@ export function JobCard({
           </div>
         </div>
 
-        {/* Engine & Status Badges */}
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
           <span
             className={cn(
@@ -152,7 +149,6 @@ export function JobCard({
           </span>
         </div>
 
-        {/* Keywords clamped to max 2 lines */}
         {positiveList.length > 0 && (
           <div className="max-h-12 overflow-hidden flex flex-wrap items-center gap-1.5 text-[11px]">
             <span className="text-faint shrink-0">matched:</span>
@@ -164,7 +160,6 @@ export function JobCard({
           </div>
         )}
 
-        {/* Last Run & Status Message */}
         <div className="text-[12px]">
           {job.lastError ? (
             <p className="flex items-start gap-1.5 text-rose-500">
@@ -184,7 +179,6 @@ export function JobCard({
         </div>
       </div>
 
-      {/* Action Buttons Row pinned to bottom */}
       <div className="mt-auto pt-2 flex items-center gap-2 border-t border-border/40">
         <button
           type="button"

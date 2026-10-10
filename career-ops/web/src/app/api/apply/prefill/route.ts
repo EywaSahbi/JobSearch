@@ -13,11 +13,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 320;
 
-// AI pre-fill (STREAMING NDJSON). The user's BYO CLI (read-only PLANNER — no
-// browser access) drafts an answer per field from cv.md / profile / the job's
-// report. We stream a live diagnostic log of every step (spawn, heartbeats,
-// exit code/signal, parse outcome) so a stuck/empty prefill is observable on the
-// page AND written to <root>/.career-ops-web/apply-prefill.log for debugging.
 export async function POST(req: Request) {
   let body: { sessionId?: string; cliId?: string; company?: string; application?: string };
   try {
@@ -26,8 +21,6 @@ export async function POST(req: Request) {
     return Response.json({ error: "bad json" }, { status: 400 });
   }
   const { sessionId, cliId: requestedCliId, company, application } = body;
-  // Same two identifiers the fill route takes, validated the same way: they
-  // reach a filesystem resolver, so a non-string is refused before it gets there.
   if (company !== undefined && typeof company !== "string") {
     return Response.json({ error: "company must be a string" }, { status: 400 });
   }
@@ -40,7 +33,6 @@ export async function POST(req: Request) {
   try {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
   } catch {
-    /* ignore */
   }
 
   const stream = new ReadableStream<Uint8Array>({
@@ -49,7 +41,6 @@ export async function POST(req: Request) {
         try {
           controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
         } catch {
-          /* client gone */
         }
       };
       const log = (m: string) => {
@@ -58,16 +49,8 @@ export async function POST(req: Request) {
         try {
           fs.appendFileSync(logPath, `${new Date(t0 + el).toISOString()} [+${(el / 1000).toFixed(1)}s] ${m}\n`);
         } catch {
-          /* ignore */
         }
       };
-      // Idempotent, like the `closed` guard the sibling routes carry. fail() closes
-      // the controller, and there is more than one path to it: a fencing refusal
-      // reports through fail() and then resolves with an empty buffer, which the
-      // empty-output branch below reports through fail() a second time. Closing an
-      // already-closed controller throws "Invalid state", and that throw escapes
-      // the async start() as an unhandled rejection — a worse failure than the one
-      // being reported.
       let failed = false;
       const fail = (m: string, raw?: string) => {
         if (failed) return;
@@ -79,7 +62,6 @@ export async function POST(req: Request) {
       try {
         fs.appendFileSync(logPath, `\n===== prefill ${new Date(t0).toISOString()} session=${sessionId} cli=${requestedCliId} =====\n`);
       } catch {
-        /* ignore */
       }
 
       const s = sessionId ? getSession(sessionId) : undefined;
@@ -87,15 +69,11 @@ export async function POST(req: Request) {
       const resolved = requestedCliId ? resolveCliOrFallback(requestedCliId) : null;
       if (!resolved) return fail(cliUnavailableError(requestedCliId ?? "").error);
       const { spec, binPath } = resolved;
-      // The CLI actually running: the planner's fencing and argv are keyed on it.
       const cliId = spec.id;
       const substitution = cliSubstitutionNotice(resolved);
       if (substitution) log(substitution);
 
       const mem = readMemory().trim();
-      // Draft from the SAME tailored CV the fill route uploads to this form,
-      // resolved through the one shared call so the answers and the resume
-      // stapled to them cannot describe different documents.
       const cvPath = await resolveSessionCv({ company, application, title: s.title });
       const cvSource = cvPath ? applyCvSource(careerOpsRoot(), cvPath) : null;
       const prompt = buildAnswerPrompt({ title: s.title, fields: s.fields, memory: mem, cvSource });
@@ -114,9 +92,6 @@ export async function POST(req: Request) {
         log,
       });
 
-      // Fencing refused to start the planner (#2507): runPlanner already logged
-      // the reason; report it as THE error, before the empty-output branch below
-      // turns it into an unrelated "produced no output".
       if (result.refused) return fail(result.refused);
 
       log(`Planner exited code=${result.code} signal=${result.signal} · ${result.buf.length} chars total`);

@@ -1,47 +1,10 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// beesite (milch & zucker GJB) provider — the search backend behind branded
-// portals like jobs.mercedes-benz.com. The SPA calls a public, no-auth JSON
-// endpoint on the tenant's *.app.beesite.de host:
-//
-//   GET {origin}/search?data={URL-encoded JSON}
-//   data = {"LanguageCode":"EN",
-//           "SearchParameters":{"FirstItem":1,"CountItem":100,
-//             "Sort":[{"Criterion":"PublicationStartDate","Direction":"DESC"}],
-//             "MatchedObjectDescriptor":[…field list…]},
-//           "SearchCriteria":[…optional facet filters…]}
-//   → {"SearchResult":{"SearchResultCount":N,"SearchResultCountAll":TOTAL,
-//        "SearchResultItems":[{"MatchedObjectId":"200325",
-//          "MatchedObjectDescriptor":{"PositionID":"mer0003yhd",
-//            "PositionTitle":…,"PositionURI":"https://jobs.mercedes-benz.com/…",
-//            "PositionLocation":[{"CityName":"Bremen"}],
-//            "PublicationStartDate":"2026-07-04"}}]}}
-//
-// PositionURI is the BRANDED job page (jobs.mercedes-benz.com/…), so listings
-// link straight to the public posting. FirstItem is 1-based; requesting past
-// the end returns an empty item list. We sort newest-first so a bounded walk
-// (max_pages / MAX_JOBS) keeps the most recent postings.
-//
-// Facet criteria use tenant-internal numeric term codes (Mercedes: country
-// 329 = Germany, discoverable via MatchedObjectDescriptor "Facet:…" queries).
-// A portals.yml entry can pin them via:
-//   beesite:
-//     searchCriteria:
-//       - { CriterionName: PositionLocation.Country, CriterionValue: [329] }
-
-// Titles arrive HTML-escaped, so the tag strip below is not enough on its own:
-// an undecoded "R&amp;D Engineer" fails the user's own title_filter positive
-// "r&d" and is silently dropped, and a negative like "sales & marketing" never
-// vetoes "Sales &amp; Marketing Lead". Shared decoder, same as softgarden and
-// radancy (#2487, #2921).
 import { decodeEntities } from './_html-entities.mjs';
 import { sleep } from './_http.mjs';
 
-const PAGE_SIZE = 100; // verified: the endpoint happily serves 100+/page
-const MAX_PAGES = 40; // safety cap on request count (40*100 = 4000 postings)
-const MAX_JOBS = 1000; // cap total postings pulled (newest-first sort)
-const PAGE_DELAY_MS = 150; // polite pacing between page requests
+const PAGE_SIZE = 100;
+const MAX_PAGES = 40;
+const MAX_JOBS = 1000;
+const PAGE_DELAY_MS = 150;
 
 const DESCRIPTOR = [
   'PositionID',
@@ -51,7 +14,6 @@ const DESCRIPTOR = [
   'PublicationStartDate',
 ];
 
-/** @param {import('./_types.js').PortalEntry} entry */
 export function resolveConfig(entry) {
   const raw = entry.api || entry.careers_url || '';
   let u;
@@ -71,7 +33,6 @@ export function resolveConfig(entry) {
   };
 }
 
-/** Build the ?data= payload for one page. @param {any} cfg @param {number} firstItem */
 export function buildSearchUrl(cfg, firstItem) {
   const data = {
     LanguageCode: cfg.languageCode,
@@ -86,8 +47,6 @@ export function buildSearchUrl(cfg, firstItem) {
   return `${cfg.searchApi}?data=${encodeURIComponent(JSON.stringify(data))}`;
 }
 
-// "2026-07-04" → epoch ms (UTC for determinism).
-/** @param {unknown} raw @returns {number | undefined} */
 export function parseBeesiteDate(raw) {
   const m = typeof raw === 'string' ? raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
   if (!m) return undefined;
@@ -98,11 +57,6 @@ export function parseBeesiteDate(raw) {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
-/**
- * Map one search response to raw {id, title, url, location, postedAt} records.
- * @param {any} json
- * @returns {{total: number|null, rows: Array<{id:string,title:string,url:string,location:string,postedAt?:number}>}}
- */
 export function parseSearchResult(json) {
   const sr = json?.SearchResult;
   const total = typeof sr?.SearchResultCountAll === 'number' ? sr.SearchResultCountAll : null;
@@ -132,14 +86,12 @@ export function parseSearchResult(json) {
   return { total, rows };
 }
 
-/** Resolve the page cap: positive integer `max_pages`, else default. */
 function resolveMaxPages(entry) {
   const v = entry?.max_pages;
   if (Number.isInteger(v) && v > 0) return Math.min(v, MAX_PAGES);
   return MAX_PAGES;
 }
 
-/** @type {Provider} */
 export default {
   id: 'beesite',
 
@@ -166,7 +118,7 @@ export default {
       });
       const { total: pageTotal, rows } = parseSearchResult(json);
       if (total === null) total = pageTotal;
-      if (rows.length === 0) break; // past the last page
+      if (rows.length === 0) break;
 
       let fresh = 0;
       for (const row of rows) {
@@ -178,7 +130,7 @@ export default {
         jobs.push(job);
         if (jobs.length >= MAX_JOBS) break;
       }
-      if (fresh === 0) break; // server ignored FirstItem (or we've looped)
+      if (fresh === 0) break;
       if (jobs.length >= MAX_JOBS) break;
       if (total !== null && (page + 1) * PAGE_SIZE >= total) break;
     }

@@ -1,22 +1,6 @@
-// @ts-check
-/** @typedef {import('./_types.js').Provider} Provider */
-
-// join.com provider — reads jobs from Next.js __NEXT_DATA__ embedded in HTML.
-// Auto-detects from careers_url matching join.com/companies/<slug>.
-// No API key needed — data is SSR-rendered in the page HTML.
-
-// Safety cap on pagination — applied regardless of what the page's own
-// __NEXT_DATA__ reports as pagination.pageCount, so a board that grows (or a
-// payload that reports a wrong pageCount) can't drive this into an unbounded
-// fetch loop; nothing wraps the provider call with a timeout of its own.
-// Every known tenant is a single company's careers page, so 50 pages is
-// generous headroom; override with `max_pages` on the portal entry for a
-// tenant that genuinely exceeds it.
 const DEFAULT_MAX_PAGES = 50;
-// Hard ceiling even for an explicit override.
 const MAX_PAGES_CAP = 200;
 
-/** Resolve the page cap: a positive integer `max_pages` on the entry, capped. */
 function resolveMaxPages(entry) {
   const v = entry?.max_pages;
   if (Number.isInteger(v) && v > 0) return Math.min(v, MAX_PAGES_CAP);
@@ -38,7 +22,6 @@ export function extractNextData(html) {
   try { return JSON.parse(match[1]); } catch { return null; }
 }
 
-/** @type {Provider} */
 export default {
   id: 'join',
 
@@ -53,9 +36,6 @@ export default {
     const baseUrl = `https://join.com/companies/${slug}`;
     const allItems = [];
 
-    // redirect:'error' prevents SSRF via server-side redirects; baseUrl is
-    // always reconstructed as https://join.com/... so the host is pinned
-    // regardless of the original careers_url.
     const firstHtml = await ctx.fetchText(baseUrl, { redirect: 'error' });
     const firstData = extractNextData(firstHtml);
     const state = firstData?.props?.pageProps?.initialState;
@@ -65,12 +45,6 @@ export default {
     if (!Array.isArray(firstJobs)) throw new Error('join: __NEXT_DATA__ not found or unexpected structure');
     allItems.push(...firstJobs);
 
-    // Honor a context page cap — verify-portals' liveness probe sets
-    // `ctx.maxPages: 1` so it only needs to know a board is live, not its
-    // full count (mirrors providers/workday.mjs). No effect on real scans,
-    // which don't set ctx.maxPages. Kept separate from `maxPages` below so
-    // the "raise max_pages" warning only fires when the entry-level cap is
-    // what actually truncated the board, not the health-check probe.
     const ctxMaxPages = Number(ctx?.maxPages);
     const ctxCap = ctxMaxPages > 0 ? ctxMaxPages : Infinity;
     const reportedPageCount = state.jobs?.pagination?.pageCount || 0;
