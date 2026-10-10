@@ -8,6 +8,10 @@ Optionen für beide Varianten:
     --hours 24                   # nur Jobs der letzten 24 Stunden
     --fast                       # ohne LinkedIn-Beschreibungen (schneller)
     --sites indeed linkedin      # nur bestimmte Boards
+
+In der Ansicht legt "An career-ops senden" (Taste C) einen Job samt Stellentext
+in die Inbox von career-ops (Ordner career-ops/, siehe career_ops.py). Dort
+bewertet "/career-ops pipeline" alles, was in der Inbox liegt.
 """
 import argparse
 import hashlib
@@ -22,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from jobspy import scrape_jobs
+
+import career_ops
 
 # ---- Einstellungen (anpassen) --------------------------------------------
 SEARCH_TERMS = [
@@ -62,6 +68,8 @@ OUTPUT_DIR = ROOT / "output"
 DB_FILE = OUTPUT_DIR / "jobs.json"
 JS_FILE = OUTPUT_DIR / "jobs.js"
 VIEWER = ROOT / "viewer.html"
+# Hierhin schickt die Ansicht Jobs zum Bewerten ("An career-ops senden").
+CAREER_OPS_DIR = ROOT / "career-ops"
 
 NO_CITY = {"north rhine-westphalia", "nordrhein-westfalen", "nw", "germany", "deutschland", "de"}
 INTERVALS = {"yearly": "Jahr", "monthly": "Monat", "weekly": "Woche", "daily": "Tag", "hourly": "Stunde"}
@@ -303,6 +311,7 @@ def start_scrape(args):
 
 class Handler(BaseHTTPRequestHandler):
     args = None
+    career_ops_dir = CAREER_OPS_DIR
     files = {
         "/": (VIEWER, "text/html"),
         "/viewer.html": (VIEWER, "text/html"),
@@ -329,6 +338,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(403)
         if path == "/api/status":
             return self.reply(json.dumps(STATE).encode("utf-8"), "application/json")
+        if path == "/api/career-ops":
+            return self.reply_career_ops()
         file, content_type = self.files.get(path, (None, None))
         if file is None or not file.exists():
             return self.send_error(404)
@@ -337,10 +348,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.is_local():
             return self.send_error(403)
+        if self.path == "/api/career-ops":
+            return self.send_to_career_ops()
         if self.path != "/api/scrape":
             return self.send_error(404)
         start_scrape(self.args)
         self.reply(json.dumps(STATE).encode("utf-8"), "application/json")
+
+    def reply_career_ops(self, **result):
+        root = self.career_ops_dir
+        ready = career_ops.is_ready(root)
+        state = {"ready": ready, "sent": sorted(career_ops.sent_ids(root)) if ready else [], **result}
+        self.reply(json.dumps(state).encode("utf-8"), "application/json")
+
+    def send_to_career_ops(self):
+        try:
+            jobs = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))["jobs"]
+        except (ValueError, KeyError, TypeError):
+            jobs = None
+        if not isinstance(jobs, list):
+            return self.send_error(400)
+        new, error = [], None
+        if career_ops.is_ready(self.career_ops_dir):
+            try:
+                new = career_ops.send(self.career_ops_dir, jobs, datetime.now().date().isoformat())
+            except OSError as exc:
+                error = str(exc) or type(exc).__name__
+        self.reply_career_ops(new=new, error=error)
 
     def log_message(self, *args):
         pass

@@ -133,7 +133,8 @@ kbd {
 
 /* ---- Liste ---- */
 #list-pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
-#count { padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+#count { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 37px; padding: 4px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+#send-all { height: 28px; font-size: 12.5px; }
 #list { flex: 1; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 .item {
   display: block;
@@ -203,6 +204,7 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
 .btn.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.btn:disabled { cursor: default; }
 .desc { font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
 .desc h4 { margin: 22px 0 6px; font-size: 15.5px; }
 .desc p { margin: 0 0 12px; }
@@ -300,6 +302,8 @@ function saveMarks() {
   write('jobs-marks-v1', marks);
 }
 const snapshot = ({ _date, _hay, _sites, ...job }) => job;
+// was schon in der Inbox von career-ops liegt, weiß nur der lokale Server
+let careerOps = { ready: false, sent: new Set() };
 
 // ---- Daten ----
 const jobs = DATA.jobs.slice();
@@ -404,6 +408,7 @@ function itemHtml(j) {
     `<span>${esc([relDate(j._date), ...j._sites.map((s) => SITES[s] || s)].filter(Boolean).join(' · '))}</span>`,
     j.first_seen === DATA.generated && !m.seen ? '<span class="tag new">Neu</span>' : '',
     m.s === 'applied' ? '<span class="tag done">Beworben</span>' : '',
+    careerOps.sent.has(j.id) ? '<span class="tag">career-ops</span>' : '',
     j.is_remote ? '<span class="tag">Remote</span>' : '',
     j.salary ? `<span class="tag">${esc(j.salary)}</span>` : '',
   ].join('');
@@ -419,7 +424,9 @@ function renderList() {
   const cutoff = f.days ? localDate(new Date(Date.now() - f.days * 864e5)) : '';
   visible = jobs.filter((j) => inTab(j, f.tab) && passes(j, null, words, cutoff)).sort(sorters[f.sort] || sorters.date);
 
-  $('#count').textContent = `${visible.length} ${visible.length === 1 ? 'Job' : 'Jobs'}`;
+  const unsent = f.tab === 'saved' ? visible.filter((j) => !careerOps.sent.has(j.id)).length : 0;
+  $('#count').innerHTML = `<span>${visible.length} ${visible.length === 1 ? 'Job' : 'Jobs'}</span>`
+    + (unsent ? `<button type="button" class="btn" id="send-all">Alle an career-ops senden (${unsent})</button>` : '');
   if (!DATA.generated && !jobs.length) {
     $('#list').innerHTML = '<li class="empty"><strong>Noch keine Daten</strong>Oben auf „Neu scrapen“ klicken.</li>';
   } else if (!visible.length) {
@@ -466,7 +473,7 @@ function renderFilters() {
     <h2>Sonstiges</h2>
     <label class="opt"><input type="checkbox" id="remote"${f.remote ? ' checked' : ''}><span>Nur Remote</span></label>
     ${active ? '<button type="button" class="btn" id="reset">Filter zurücksetzen</button>' : ''}
-    <p class="keys"><kbd>↑</kbd> <kbd>↓</kbd> blättern · <kbd>O</kbd> öffnen<br><kbd>S</kbd> merken · <kbd>B</kbd> beworben<br><kbd>X</kbd> ausblenden · <kbd>/</kbd> suchen</p>`;
+    <p class="keys"><kbd>↑</kbd> <kbd>↓</kbd> blättern · <kbd>O</kbd> öffnen<br><kbd>S</kbd> merken · <kbd>B</kbd> beworben<br><kbd>X</kbd> ausblenden · <kbd>/</kbd> suchen<br><kbd>C</kbd> an career-ops senden</p>`;
 
   if (focusKey) {
     const again = [...document.querySelectorAll('#filters input, #filters button')]
@@ -483,6 +490,7 @@ function renderDetail() {
     return;
   }
   const s = status(j);
+  const sent = careerOps.sent.has(j.id);
   const links = Object.entries(j.links || {}).map(([site, url], i) =>
     `<a class="btn${i ? '' : ' primary'}" href="${safeUrl(url)}" target="_blank" rel="noopener">${i ? '' : 'Anzeige öffnen · '}${esc(SITES[site] || site)} ↗</a>`).join('');
   const types = String(j.job_type || '').split(',').map((t) => TYPES[t.trim()] || t.trim()).filter(Boolean);
@@ -506,6 +514,7 @@ function renderDetail() {
       ${toggle('saved', '★ Gemerkt', '☆ Merken')}
       ${toggle('applied', '✓ Beworben', 'Als beworben markieren')}
       ${toggle('hidden', 'Wieder einblenden', 'Ausblenden')}
+      <button type="button" class="btn" data-act="send" aria-pressed="${sent}"${sent ? ' disabled' : ''}>${sent ? '✓ An career-ops gesendet' : 'An career-ops senden'}</button>
     </div>
     <div class="desc">${j.description ? md(j.description) : '<p class="empty">Für diesen Job wurde keine Beschreibung geladen. Über „Anzeige öffnen“ geht es zur Originalseite.</p>'}</div>
   </div>`;
@@ -569,7 +578,12 @@ $('#list').addEventListener('click', (e) => {
 $('#detail').addEventListener('click', (e) => {
   if (e.target.closest('#back')) { document.body.classList.remove('show-detail'); return; }
   const act = e.target.closest('[data-act]');
-  if (act) setStatus(act.dataset.act);
+  if (!act) return;
+  if (act.dataset.act === 'send') sendSelected();
+  else setStatus(act.dataset.act);
+});
+$('#count').addEventListener('click', (e) => {
+  if (e.target.closest('#send-all')) sendJobs(visible.filter((j) => !careerOps.sent.has(j.id)));
 });
 $('#filters').addEventListener('click', (e) => {
   const tab = e.target.closest('[data-tab]');
@@ -612,6 +626,7 @@ document.addEventListener('keydown', (e) => {
     s: () => setStatus('saved'),
     b: () => setStatus('applied'),
     x: () => setStatus('hidden'),
+    c: sendSelected,
     o: () => { const j = byId.get(selected); const url = j && Object.values(j.links || {})[0]; if (/^https?:\/\//i.test(url || '')) window.open(url, '_blank', 'noopener'); },
     '/': () => $('#q').focus(),
     Escape: () => document.body.classList.remove('show-detail', 'show-filters'),
@@ -676,6 +691,42 @@ $('#scrape').addEventListener('click', async () => {
 $('#pdone').addEventListener('click', () => location.reload());
 if (SERVED) pollStatus(); // läuft schon ein Lauf (z. B. nach Neuladen), Balken wieder zeigen
 
+// ---- An career-ops senden: der Server legt Stellentext und Inbox-Zeile dort ab ----
+function setCareerOps(state) {
+  careerOps = { ready: state.ready, sent: new Set(state.sent) };
+  renderList();
+  renderDetail();
+}
+
+async function sendJobs(list) {
+  if (!list.length) return;
+  if (!SERVED) { showProgress(0, NO_SERVER, 'note'); return; }
+  let state;
+  try {
+    const res = await fetch('/api/career-ops', { method: 'POST', body: JSON.stringify({ jobs: list.map(snapshot) }) });
+    if (!res.ok) throw new Error(res.status);
+    state = await res.json();
+  } catch {
+    showProgress(0, 'Senden fehlgeschlagen. Bitte scraper.py neu starten.', 'note');
+    return;
+  }
+  setCareerOps(state);
+  if (!state.ready) showProgress(0, 'career-ops wurde nicht gefunden. Der Ordner „career-ops“ muss neben scraper.py liegen.', 'note');
+  else if (state.error) showProgress(0, `Senden fehlgeschlagen: ${state.error}`, 'note');
+  else showProgress(0, `${state.new.length} ${state.new.length === 1 ? 'Job' : 'Jobs'} an career-ops gesendet. Dort mit „/career-ops pipeline“ bewerten.`, 'note');
+}
+
+function sendSelected() {
+  const j = byId.get(selected);
+  if (j && !careerOps.sent.has(j.id)) sendJobs([j]);
+}
+
+async function loadCareerOps() {
+  try {
+    setCareerOps(await (await fetch('/api/career-ops', { cache: 'no-store' })).json());
+  } catch {} // älterer Server ohne diese Route: Knöpfe melden sich beim Klick
+}
+
 // ---- Start ----
 saveMarks();
 $('#sort').value = sorters[f.sort] ? f.sort : 'date';
@@ -689,6 +740,7 @@ update();
 let last = null;
 try { last = sessionStorage.getItem('jobs-selected'); } catch {}
 select(visible.some((j) => j.id === last) ? last : (visible[0] || {}).id, false);
+if (SERVED) loadCareerOps();
 })();
 </script>
 </body>
