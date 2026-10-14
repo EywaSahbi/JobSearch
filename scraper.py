@@ -13,6 +13,7 @@ from pathlib import Path
 from jobspy import scrape_jobs
 
 import career_ops
+import sources
 
 SEARCH_TERMS = [
     "Software Engineer",
@@ -25,11 +26,11 @@ SEARCH_TERMS = [
 LOCATIONS = ["Dortmund", "Essen", "Düsseldorf"]
 RADIUS_KM = 30
 COUNTRY = "Germany"
-SITES = ["indeed", "linkedin", "glassdoor"]
+SITES = ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone"]
 RESULTS_PER_SEARCH = 30
 HOURS_OLD = 168
 KEEP_DAYS = 45
-MAX_LINKEDIN_DETAILS = 200
+MAX_DETAILS = 200
 
 EXCLUDE_TITLE = [
     "*ausbildung*", "Auszubildende*", "Azubi*",
@@ -47,7 +48,7 @@ VIEWER = ROOT / "viewer.html"
 CAREER_OPS_DIR = ROOT / "career-ops"
 
 NO_CITY = {"north rhine-westphalia", "nordrhein-westfalen", "nw", "germany", "deutschland", "de"}
-INTERVALS = {"yearly": "Jahr", "monthly": "Monat", "weekly": "Woche", "daily": "Tag", "hourly": "Stunde"}
+INTERVALS = {"yearly": "year", "monthly": "month", "weekly": "week", "daily": "day", "hourly": "hour"}
 
 
 def title_pattern(words):
@@ -81,7 +82,7 @@ def salary_of(row):
     amounts = sorted({int(a) for a in (row.get("min_amount"), row.get("max_amount")) if a})
     if not amounts:
         return None
-    text = " – ".join(f"{a:,}".replace(",", ".") for a in amounts)
+    text = " – ".join(f"{a:,}" for a in amounts)
     text += f" {row.get('currency') or 'EUR'}"
     interval = INTERVALS.get(row.get("interval"))
     return f"{text} / {interval}" if interval else text
@@ -91,7 +92,7 @@ def to_record(row, term, now):
     city = city_of(row.get("location"))
     return {
         "id": job_id(row.get("title"), row.get("company"), city),
-        "title": row.get("title") or "(ohne Titel)",
+        "title": row.get("title") or "(untitled)",
         "company": row.get("company") or "",
         "city": city,
         "location": row.get("location") or "",
@@ -122,6 +123,8 @@ def merge(db, rec):
 
 
 def search(site, term, location, hours_old):
+    if site in sources.SEARCH:
+        return sources.SEARCH[site](term, location, RADIUS_KM, hours_old, RESULTS_PER_SEARCH)
     df = scrape_jobs(
         site_name=[site],
         search_term=term,
@@ -148,66 +151,94 @@ def scrape(db, sites, hours_old, now, progress=no_progress):
         for location in LOCATIONS:
             counts = []
             for site in sites:
-                progress("search", done, total, f"Suche: {term} · {location} ({site})")
+                progress("search", done, total, f"Searching: {term} · {location} ({site})")
                 done += 1
                 try:
                     rows = search(site, term, location, hours_old)
                 except Exception as exc:
-                    counts.append(f"{site}: Fehler ({str(exc)[:60]})")
+                    counts.append(f"{site}: error ({str(exc)[:60]})")
                     continue
                 wanted = [row for row in rows if not excluded(row.get("title"))]
                 dropped += len(rows) - len(wanted)
                 new += sum(merge(db, to_record(row, term, now)) for row in wanted)
                 counts.append(f"{site} {len(wanted)}")
             print(f"[{done:>2}/{total}] {term} · {location}: {', '.join(counts)}", flush=True)
-    print(f"{dropped} Treffer durch den Titelfilter verworfen")
+    print(f"{dropped} results dropped by the title filter")
     return new
 
 
-def fetch_linkedin_details(db, limit, progress=no_progress):
-    todo = [
-        j for j in db.values()
-        if "linkedin" in j["links"] and not j.get("description") and j.get("detail_tries", 0) < 2
-    ][:limit]
-    if not todo:
-        return
+def linkedin_loader():
     try:
         from jobspy.linkedin import LinkedIn
         from jobspy.model import ScraperInput, Site
         scraper = LinkedIn()
         scraper.scraper_input = ScraperInput(site_type=[Site.LINKEDIN])
     except Exception as exc:
-        print(f"LinkedIn-Beschreibungen übersprungen: {exc}")
+        print(f"Skipping LinkedIn descriptions: {exc}")
+        return None
+
+    def load(url):
+        match = re.search(r"(\d+)/?$", url)
+        details = scraper._fetch_details(match.group(1)) if match else {}
+        kinds = details.get("job_type")
+        return {
+            "description": details.get("description"),
+            "job_level": details.get("job_level"),
+            "job_type": kinds[0].value[0] if kinds else None,
+        }
+
+    return load
+
+
+def detail_loaders():
+    loaders = dict(sources.DETAILS)
+    linkedin = linkedin_loader()
+    if linkedin:
+        loaders["linkedin"] = linkedin
+    return loaders
+
+
+def fetch_details(db, loaders, limit, progress=no_progress, pause=0.4):
+    todo, counts = [], {}
+    for job in db.values():
+        if job.get("description") or job.get("detail_tries", 0) >= 2:
+            continue
+        site = next((name for name in loaders if name in job["links"]), None)
+        if site and counts.get(site, 0) < limit:
+            counts[site] = counts.get(site, 0) + 1
+            todo.append((site, job))
+    if not todo:
         return
 
-    print(f"Lade {len(todo)} LinkedIn-Beschreibungen ...", flush=True)
-    loaded = misses = 0
-    for i, job in enumerate(todo, 1):
-        progress("details", i - 1, len(todo), f"LinkedIn-Beschreibungen: {i} von {len(todo)}")
-        match = re.search(r"(\d+)/?$", job["links"]["linkedin"])
+    print(f"Loading {len(todo)} descriptions ...", flush=True)
+    loaded, streaks, blocked = 0, {}, set()
+    for i, (site, job) in enumerate(todo, 1):
+        progress("details", i - 1, len(todo), f"Descriptions: {i} of {len(todo)}")
+        if site in blocked:
+            continue
         try:
-            details = scraper._fetch_details(match.group(1)) if match else {}
+            fields = loaders[site](job["links"][site]) or {}
         except Exception:
-            details = {}
+            fields = {}
         job["detail_tries"] = job.get("detail_tries", 0) + 1
-        if details.get("description"):
-            misses = 0
+        if fields.get("description"):
             loaded += 1
-            job["description"] = details["description"]
-            job["job_level"] = job.get("job_level") or details.get("job_level")
-            if details.get("job_type") and not job.get("job_type"):
-                job["job_type"] = details["job_type"][0].value[0]
+            streaks[site] = []
+            for key in ("description", "job_level", "job_type"):
+                if fields.get(key) and not job.get(key):
+                    job[key] = fields[key]
         else:
-            misses += 1
-            if misses >= 5:
-                for skipped in todo[i - misses:i]:
+            streak = streaks.setdefault(site, [])
+            streak.append(job)
+            if len(streak) >= 5:
+                for skipped in streak:
                     skipped["detail_tries"] -= 1
-                print("  LinkedIn blockt gerade, Rest folgt beim nächsten Lauf.")
-                break
+                blocked.add(site)
+                print(f"  {site} is blocking right now, the rest follows on the next run.")
         if i % 25 == 0:
             print(f"  {i}/{len(todo)}", flush=True)
-        time.sleep(0.4)
-    print(f"  {loaded} Beschreibungen geladen")
+        time.sleep(pause)
+    print(f"  {loaded} descriptions loaded")
 
 
 def read_db():
@@ -239,9 +270,9 @@ def run_scrape(sites, hours_old, fast, progress=no_progress):
     new = scrape(db, sites, hours_old, now, progress)
     save(db, now)
     if not fast:
-        fetch_linkedin_details(db, MAX_LINKEDIN_DETAILS, progress)
+        fetch_details(db, detail_loaders(), MAX_DETAILS, progress)
         save(db, now)
-    print(f"{new} neue Jobs, {len(db)} insgesamt in {DB_FILE}", flush=True)
+    print(f"{new} new jobs, {len(db)} in total in {DB_FILE}", flush=True)
     return new, len(db)
 
 
@@ -253,7 +284,7 @@ def start_scrape(args):
     with STATE_LOCK:
         if STATE["running"]:
             return
-        STATE.update(running=True, percent=0, text="Starte …", new=None, total=None, error=None)
+        STATE.update(running=True, percent=0, text="Starting …", new=None, total=None, error=None)
 
     def progress(phase, done, total, text):
         share = done / total if total else 1
@@ -263,9 +294,9 @@ def start_scrape(args):
     def work():
         try:
             new, total = run_scrape(args.sites, args.hours, args.fast, progress)
-            STATE.update(new=new, total=total, percent=100, text="Fertig")
+            STATE.update(new=new, total=total, percent=100, text="Done")
         except Exception as exc:
-            print(f"Fehler beim Scrapen: {exc!r}", flush=True)
+            print(f"Scraping failed: {exc!r}", flush=True)
             STATE.update(error=str(exc) or type(exc).__name__)
         finally:
             STATE["running"] = False
@@ -353,7 +384,7 @@ def serve(args):
     try:
         server = Server(("127.0.0.1", PORT), Handler)
     except OSError:
-        print(f"Läuft schon: {url}")
+        print(f"Already running: {url}")
         if not args.no_open:
             webbrowser.open(url)
         return
@@ -361,7 +392,7 @@ def serve(args):
     db, generated = read_db()
     if generated:
         save(db, generated)
-    print(f"Ansicht: {url}  (Strg+C beendet)", flush=True)
+    print(f"Viewer: {url}  (Ctrl+C to quit)", flush=True)
     if not args.no_open:
         webbrowser.open(url)
     try:
@@ -372,13 +403,13 @@ def serve(args):
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    p = argparse.ArgumentParser(description="Jobs im Raum Dortmund scrapen")
-    p.add_argument("--scrape", action="store_true", help="nur im Terminal scrapen, ohne Ansicht")
-    p.add_argument("--hours", type=int, default=HOURS_OLD, help="nur Jobs der letzten N Stunden")
-    p.add_argument("--sites", nargs="+", default=SITES)
-    p.add_argument("--fast", action="store_true", help="LinkedIn-Beschreibungen nicht nachladen")
-    p.add_argument("--csv", action="store_true", help="mit --scrape: zusätzlich output/jobs.csv schreiben")
-    p.add_argument("--no-open", action="store_true", help="Browser nicht öffnen")
+    p = argparse.ArgumentParser(description="Scrape job boards and browse the results")
+    p.add_argument("--scrape", action="store_true", help="scrape in the terminal only, without the viewer")
+    p.add_argument("--hours", type=int, default=HOURS_OLD, help="only jobs posted in the last N hours")
+    p.add_argument("--sites", nargs="+", default=SITES, help="sources to query, default: all in SITES")
+    p.add_argument("--fast", action="store_true", help="do not load job descriptions after the search")
+    p.add_argument("--csv", action="store_true", help="with --scrape: also write output/jobs.csv")
+    p.add_argument("--no-open", action="store_true", help="do not open the browser")
     args = p.parse_args()
 
     if not args.scrape:

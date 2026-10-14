@@ -18,7 +18,7 @@ JOB = {
     "job_type": "fulltime",
     "job_level": None,
     "is_remote": False,
-    "salary": "50.000 – 60.000 EUR / Jahr",
+    "salary": "50,000 – 60,000 EUR / year",
     "description": "#### Deine Aufgaben\n\n- React\n- TypeScript",
     "links": {
         "indeed": "https://de.indeed.com/viewjob?jk=52849898160a8bc9",
@@ -51,11 +51,26 @@ class CareerOpsTest(unittest.TestCase):
         files = list((self.root / "jds").iterdir())
         self.assertEqual([f.name for f in files], [JD_NAME])
         text = files[0].read_text(encoding="utf-8")
+        self.assertIn("- Location: Dortmund, NW, Germany", text)
+        self.assertIn("- Posted: 2026-10-06", text)
+        self.assertIn("- Type: fulltime", text)
         self.assertIn("# Frontend / UX / UI Engineer (m/w/d) — ITS Informationstechnik Service GmbH", text)
         self.assertIn("- React\n- TypeScript", text)
         self.assertIn("https://de.indeed.com/viewjob?jk=52849898160a8bc9", text)
         self.assertIn("https://www.linkedin.com/jobs/view/4474054206", text)
-        self.assertIn("50.000 – 60.000 EUR / Jahr", text)
+        self.assertIn("50,000 – 60,000 EUR / year", text)
+
+    def test_links_of_every_source_are_named_in_the_jds_file(self):
+        links = {
+            "arbeitsagentur": "https://www.arbeitsagentur.de/jobsuche/jobdetail/10001-1-S",
+            "stepstone": "https://www.stepstone.de/stellenangebote--X--1-inline.html",
+        }
+
+        career_ops.send(self.root, [{**JOB, "links": links}], TODAY)
+
+        text = (self.root / "jds" / JD_NAME).read_text(encoding="utf-8")
+        self.assertIn("- Arbeitsagentur: https://www.arbeitsagentur.de/jobsuche/jobdetail/10001-1-S", text)
+        self.assertIn("- StepStone: https://www.stepstone.de/", text)
 
     def test_send_adds_a_pending_line_that_points_at_the_jds_file(self):
         career_ops.send(self.root, [JOB], TODAY)
@@ -88,9 +103,9 @@ class CareerOpsTest(unittest.TestCase):
     def test_job_without_company_description_and_links_is_still_sent(self):
         career_ops.send(self.root, [{"id": "aaaaaaaaaaaa", "title": "IT Support"}], TODAY)
 
-        self.assertEqual(self.pending_lines(), ["- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Firma unbekannt | IT Support"])
+        self.assertEqual(self.pending_lines(), ["- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Unknown company | IT Support"])
         text = (self.root / "jds" / "it-support-aaaaaaaaaaaa.md").read_text(encoding="utf-8")
-        self.assertIn("keine Beschreibung geladen", text)
+        self.assertIn("No description was loaded", text)
 
     def test_pipes_and_line_breaks_cannot_split_the_pending_line(self):
         job = {**JOB, "title": "DevOps | Cloud\nEngineer [m/w/d]", "company": "A|B"}
@@ -136,7 +151,7 @@ class CareerOpsTest(unittest.TestCase):
             "# Pipeline\n\n## Offen\n- [ ] https://example.com/a\n"
             f"- [ ] local:jds/{JD_NAME} | ITS Informationstechnik Service GmbH"
             " | Frontend / UX / UI Engineer (m/w/d) | Dortmund, NW, Germany | posted: 2026-10-06\n"
-            "- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Firma unbekannt | IT Support\n\n"
+            "- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Unknown company | IT Support\n\n"
             "## Verarbeitet\n- [x] #001 | https://example.com/b | Acme | Dev | 4.0/5 | PDF ✅\n",
         )
 
@@ -150,7 +165,7 @@ class CareerOpsTest(unittest.TestCase):
         self.assertEqual(
             self.pipeline(),
             "# Pipeline\n\n## Pending\n\n"
-            "- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Firma unbekannt | IT Support\n\n"
+            "- [ ] local:jds/it-support-aaaaaaaaaaaa.md | Unknown company | IT Support\n\n"
             "## Processed\n- [x] #001 | https://example.com/b\n",
         )
 

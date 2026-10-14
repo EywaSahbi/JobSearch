@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jobs · Raum Dortmund</title>
+<title>Job Search</title>
 <style>
 :root {
   --bg: #f5f4ef;
@@ -238,26 +238,26 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
 </head>
 <body>
 <header>
-  <button id="filter-toggle" class="ghost" type="button">Filter</button>
+  <button id="filter-toggle" class="ghost" type="button">Filters</button>
   <div class="brand"><h1>Jobs</h1><span id="meta"></span></div>
-  <input id="q" type="search" placeholder="Suche in Titel, Firma, Beschreibung …" aria-label="Suche">
-  <select id="sort" aria-label="Sortierung">
-    <option value="date">Neueste zuerst</option>
-    <option value="company">Firma A–Z</option>
-    <option value="title">Titel A–Z</option>
+  <input id="q" type="search" placeholder="Search title, company, description …" aria-label="Search">
+  <select id="sort" aria-label="Sort order">
+    <option value="date">Newest first</option>
+    <option value="company">Company A–Z</option>
+    <option value="title">Title A–Z</option>
   </select>
-  <button id="scrape" class="btn primary" type="button">Neu scrapen</button>
+  <button id="scrape" class="btn primary" type="button">Scrape now</button>
   <div id="progress" hidden>
     <span id="ptext" role="status"></span>
-    <div id="pbar" class="bar" role="progressbar" aria-label="Fortschritt" aria-valuemin="0" aria-valuemax="100"><div id="pfill" class="fill"></div></div>
+    <div id="pbar" class="bar" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><div id="pfill" class="fill"></div></div>
     <span id="ppct" class="n"></span>
-    <button id="pdone" class="btn" type="button" hidden>Jetzt anzeigen</button>
+    <button id="pdone" class="btn" type="button" hidden>Show results</button>
   </div>
 </header>
 
-<aside id="filters" aria-label="Filter"></aside>
+<aside id="filters" aria-label="Filters"></aside>
 
-<section id="list-pane" aria-label="Trefferliste">
+<section id="list-pane" aria-label="Results">
   <div id="count"></div>
   <ul id="list"></ul>
 </section>
@@ -277,9 +277,9 @@ const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? esc(u) : '#');
 const localDate = (d) => d.toLocaleDateString('sv');
 const TODAY = localDate(new Date());
 
-const SITES = { indeed: 'Indeed', linkedin: 'LinkedIn', glassdoor: 'Glassdoor' };
-const TYPES = { fulltime: 'Vollzeit', parttime: 'Teilzeit', internship: 'Praktikum', contract: 'Befristet', temporary: 'Zeitarbeit' };
-const TABS = [['open', 'Offen'], ['new', 'Neu im letzten Lauf'], ['saved', 'Gemerkt'], ['applied', 'Beworben'], ['hidden', 'Ausgeblendet']];
+const SITES = { indeed: 'Indeed', linkedin: 'LinkedIn', glassdoor: 'Glassdoor', arbeitsagentur: 'Arbeitsagentur', stepstone: 'StepStone' };
+const TYPES = { fulltime: 'Full-time', parttime: 'Part-time', internship: 'Internship', contract: 'Contract', temporary: 'Temporary' };
+const TABS = [['open', 'Open'], ['new', 'New in last run'], ['saved', 'Saved'], ['applied', 'Applied'], ['hidden', 'Hidden']];
 const PAGE = 300;
 
 function read(key, fallback) {
@@ -339,18 +339,18 @@ function passes(j, skip, words, cutoff) {
   return true;
 }
 const sorters = {
-  date: (a, b) => b._date.localeCompare(a._date) || (b.first_seen || '').localeCompare(a.first_seen || '') || a.title.localeCompare(b.title, 'de'),
-  company: (a, b) => a.company.localeCompare(b.company, 'de') || a.title.localeCompare(b.title, 'de'),
-  title: (a, b) => a.title.localeCompare(b.title, 'de') || a.company.localeCompare(b.company, 'de'),
+  date: (a, b) => b._date.localeCompare(a._date) || (b.first_seen || '').localeCompare(a.first_seen || '') || a.title.localeCompare(b.title),
+  company: (a, b) => a.company.localeCompare(b.company) || a.title.localeCompare(b.title),
+  title: (a, b) => a.title.localeCompare(b.title) || a.company.localeCompare(b.company),
 };
 
 function relDate(d) {
   if (!d) return '';
   const days = Math.round((new Date(TODAY) - new Date(d)) / 864e5);
-  if (days <= 0) return 'heute';
-  if (days === 1) return 'gestern';
-  if (days < 14) return `vor ${days} Tagen`;
-  return new Date(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days} days ago`;
+  return new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function md(src) {
@@ -393,15 +393,15 @@ function itemHtml(j) {
   const cls = ['item', j.id === selected ? 'sel' : '', m.seen ? '' : 'unseen'].join(' ');
   const meta = [
     `<span>${esc([relDate(j._date), ...j._sites.map((s) => SITES[s] || s)].filter(Boolean).join(' · '))}</span>`,
-    j.first_seen === DATA.generated && !m.seen ? '<span class="tag new">Neu</span>' : '',
-    m.s === 'applied' ? '<span class="tag done">Beworben</span>' : '',
+    j.first_seen === DATA.generated && !m.seen ? '<span class="tag new">New</span>' : '',
+    m.s === 'applied' ? '<span class="tag done">Applied</span>' : '',
     careerOps.sent.has(j.id) ? '<span class="tag">career-ops</span>' : '',
     j.is_remote ? '<span class="tag">Remote</span>' : '',
     j.salary ? `<span class="tag">${esc(j.salary)}</span>` : '',
   ].join('');
   return `<li><button type="button" class="${cls}" data-id="${esc(j.id)}">
-    <span class="item-title">${m.s === 'saved' ? '<span class="star" title="Gemerkt">★</span> ' : ''}${esc(j.title)}</span>
-    <span class="item-sub">${esc(j.company || 'Firma unbekannt')}${j.city ? ' · ' + esc(j.city) : ''}</span>
+    <span class="item-title">${m.s === 'saved' ? '<span class="star" title="Saved">★</span> ' : ''}${esc(j.title)}</span>
+    <span class="item-sub">${esc(j.company || 'Unknown company')}${j.city ? ' · ' + esc(j.city) : ''}</span>
     <span class="item-meta">${meta}</span>
   </button></li>`;
 }
@@ -412,14 +412,14 @@ function renderList() {
   visible = jobs.filter((j) => inTab(j, f.tab) && passes(j, null, words, cutoff)).sort(sorters[f.sort] || sorters.date);
 
   const unsent = f.tab === 'saved' ? visible.filter((j) => !careerOps.sent.has(j.id)).length : 0;
-  $('#count').innerHTML = `<span>${visible.length} ${visible.length === 1 ? 'Job' : 'Jobs'}</span>`
-    + (unsent ? `<button type="button" class="btn" id="send-all">Alle an career-ops senden (${unsent})</button>` : '');
+  $('#count').innerHTML = `<span>${visible.length} ${visible.length === 1 ? 'job' : 'jobs'}</span>`
+    + (unsent ? `<button type="button" class="btn" id="send-all">Send all to career-ops (${unsent})</button>` : '');
   if (!DATA.generated && !jobs.length) {
-    $('#list').innerHTML = '<li class="empty"><strong>Noch keine Daten</strong>Oben auf „Neu scrapen“ klicken.</li>';
+    $('#list').innerHTML = '<li class="empty"><strong>No data yet</strong>Click “Scrape now” at the top.</li>';
   } else if (!visible.length) {
-    $('#list').innerHTML = '<li class="empty"><strong>Keine Treffer</strong>Filter lockern oder einen anderen Bereich links wählen.</li>';
+    $('#list').innerHTML = '<li class="empty"><strong>No matches</strong>Loosen the filters or pick another view on the left.</li>';
   } else {
-    const more = visible.length > limit ? `<li><button type="button" class="btn more" id="more">Weitere ${Math.min(PAGE, visible.length - limit)} anzeigen</button></li>` : '';
+    const more = visible.length > limit ? `<li><button type="button" class="btn more" id="more">Show ${Math.min(PAGE, visible.length - limit)} more</button></li>` : '';
     $('#list').innerHTML = visible.slice(0, limit).map(itemHtml).join('') + more;
   }
 }
@@ -430,7 +430,7 @@ function facetHtml(key, title, valuesOf, label, words, cutoff) {
     if (!inTab(j, f.tab) || !passes(j, key, words, cutoff)) continue;
     for (const v of valuesOf(j)) counts.set(v, (counts.get(v) || 0) + 1);
   }
-  const rows = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'de'));
+  const rows = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   if (!rows.length) return '';
   return `<h2>${title}</h2><div class="scroll">${rows.map(([v, n]) => `<label class="opt">
     <input type="checkbox" data-facet="${key}" value="${esc(v)}"${f[key].includes(v) ? ' checked' : ''}>
@@ -447,20 +447,20 @@ function renderFilters() {
     const n = jobs.filter((j) => inTab(j, key)).length;
     return `<button type="button" class="tab" data-tab="${key}" aria-current="${f.tab === key}"><span>${name}</span><span class="n">${n}</span></button>`;
   }).join('');
-  const days = [[0, 'Alle'], [1, '24 h'], [3, '3 Tage'], [7, '7 Tage']]
+  const days = [[0, 'All'], [1, '24 h'], [3, '3 days'], [7, '7 days']]
     .map(([d, name]) => `<button type="button" data-days="${d}" aria-pressed="${f.days === d}">${name}</button>`).join('');
   const active = f.cities.length || f.terms.length || f.sites.length || f.days || f.remote || f.q;
 
   $('#filters').innerHTML = `
-    <h2>Bereich</h2>${tabs}
-    <h2>Veröffentlicht</h2><div class="seg">${days}</div>
-    ${facetHtml('cities', 'Stadt', (j) => [j.city], (v) => v || 'Ohne Ortsangabe', words, cutoff)}
-    ${facetHtml('terms', 'Suchbegriff', (j) => j.terms, (v) => v, words, cutoff)}
-    ${facetHtml('sites', 'Quelle', (j) => j._sites, (v) => SITES[v] || v, words, cutoff)}
-    <h2>Sonstiges</h2>
-    <label class="opt"><input type="checkbox" id="remote"${f.remote ? ' checked' : ''}><span>Nur Remote</span></label>
-    ${active ? '<button type="button" class="btn" id="reset">Filter zurücksetzen</button>' : ''}
-    <p class="keys"><kbd>↑</kbd> <kbd>↓</kbd> blättern · <kbd>O</kbd> öffnen<br><kbd>S</kbd> merken · <kbd>B</kbd> beworben<br><kbd>X</kbd> ausblenden · <kbd>/</kbd> suchen<br><kbd>C</kbd> an career-ops senden</p>`;
+    <h2>View</h2>${tabs}
+    <h2>Posted</h2><div class="seg">${days}</div>
+    ${facetHtml('cities', 'City', (j) => [j.city], (v) => v || 'No location', words, cutoff)}
+    ${facetHtml('terms', 'Search term', (j) => j.terms, (v) => v, words, cutoff)}
+    ${facetHtml('sites', 'Source', (j) => j._sites, (v) => SITES[v] || v, words, cutoff)}
+    <h2>Other</h2>
+    <label class="opt"><input type="checkbox" id="remote"${f.remote ? ' checked' : ''}><span>Remote only</span></label>
+    ${active ? '<button type="button" class="btn" id="reset">Reset filters</button>' : ''}
+    <p class="keys"><kbd>↑</kbd> <kbd>↓</kbd> browse · <kbd>O</kbd> open<br><kbd>S</kbd> save · <kbd>B</kbd> applied<br><kbd>X</kbd> hide · <kbd>/</kbd> search<br><kbd>C</kbd> send to career-ops</p>`;
 
   if (focusKey) {
     const again = [...document.querySelectorAll('#filters input, #filters button')]
@@ -473,37 +473,37 @@ function renderDetail() {
   const j = byId.get(selected);
   const el = $('#detail');
   if (!j) {
-    el.innerHTML = '<div class="empty"><strong>Kein Job ausgewählt</strong>Links einen Eintrag anklicken.</div>';
+    el.innerHTML = '<div class="empty"><strong>No job selected</strong>Pick an entry on the left.</div>';
     return;
   }
   const s = status(j);
   const sent = careerOps.sent.has(j.id);
   const links = Object.entries(j.links || {}).map(([site, url], i) =>
-    `<a class="btn${i ? '' : ' primary'}" href="${safeUrl(url)}" target="_blank" rel="noopener">${i ? '' : 'Anzeige öffnen · '}${esc(SITES[site] || site)} ↗</a>`).join('');
+    `<a class="btn${i ? '' : ' primary'}" href="${safeUrl(url)}" target="_blank" rel="noopener">${i ? '' : 'Open posting · '}${esc(SITES[site] || site)} ↗</a>`).join('');
   const types = String(j.job_type || '').split(',').map((t) => TYPES[t.trim()] || t.trim()).filter(Boolean);
   const level = j.job_level && j.job_level !== 'not applicable' ? j.job_level : '';
   const tags = [
-    relDate(j._date) && `Veröffentlicht ${relDate(j._date)}`,
+    relDate(j._date) && `Posted ${relDate(j._date)}`,
     ...types,
     level,
     j.is_remote && 'Remote',
     j.salary,
-    ...j.terms.map((t) => `Suche: ${t}`),
+    ...j.terms.map((t) => `Search: ${t}`),
   ].filter(Boolean).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
   const toggle = (key, on, off) => `<button type="button" class="btn" data-act="${key}" aria-pressed="${s === key}">${s === key ? on : off}</button>`;
 
   el.innerHTML = `<div class="detail-inner">
-    <button type="button" class="btn back" id="back">← Zur Liste</button>
+    <button type="button" class="btn back" id="back">← Back to list</button>
     <h2>${esc(j.title)}</h2>
-    <p class="company"><b>${esc(j.company || 'Firma unbekannt')}</b>${j.location ? ' · ' + esc(j.location) : ''}</p>
+    <p class="company"><b>${esc(j.company || 'Unknown company')}</b>${j.location ? ' · ' + esc(j.location) : ''}</p>
     <div class="tags">${tags}</div>
     <div class="actions">${links}
-      ${toggle('saved', '★ Gemerkt', '☆ Merken')}
-      ${toggle('applied', '✓ Beworben', 'Als beworben markieren')}
-      ${toggle('hidden', 'Wieder einblenden', 'Ausblenden')}
-      <button type="button" class="btn" data-act="send" aria-pressed="${sent}"${sent ? ' disabled' : ''}>${sent ? '✓ An career-ops gesendet' : 'An career-ops senden'}</button>
+      ${toggle('saved', '★ Saved', '☆ Save')}
+      ${toggle('applied', '✓ Applied', 'Mark as applied')}
+      ${toggle('hidden', 'Unhide', 'Hide')}
+      <button type="button" class="btn" data-act="send" aria-pressed="${sent}"${sent ? ' disabled' : ''}>${sent ? '✓ Sent to career-ops' : 'Send to career-ops'}</button>
     </div>
-    <div class="desc">${j.description ? md(j.description) : '<p class="empty">Für diesen Job wurde keine Beschreibung geladen. Über „Anzeige öffnen“ geht es zur Originalseite.</p>'}</div>
+    <div class="desc">${j.description ? md(j.description) : '<p class="empty">No description was loaded for this job. “Open posting” leads to the original page.</p>'}</div>
   </div>`;
   el.scrollTop = 0;
 }
@@ -620,7 +620,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 const SERVED = location.protocol.startsWith('http');
-const NO_SERVER = 'Der Knopf braucht den lokalen Server: im Terminal „python scraper.py“ starten, dann öffnet sich die Seite mit funktionierendem Knopf.';
+const NO_SERVER = 'This button needs the local server: run “python scraper.py” in a terminal, then the page opens with a working button.';
 let watching = false;
 
 function showProgress(percent, text, kind) {
@@ -641,7 +641,7 @@ async function pollStatus() {
     if (watching) {
       watching = false;
       $('#scrape').disabled = false;
-      showProgress(0, 'Verbindung zum Server verloren. Läuft scraper.py noch?', 'note');
+      showProgress(0, 'Lost the connection to the server. Is scraper.py still running?', 'note');
     }
     return;
   }
@@ -652,8 +652,8 @@ async function pollStatus() {
     setTimeout(pollStatus, 1000);
   } else if (watching) {
     watching = false;
-    if (st.error) showProgress(0, `Fehler beim Scrapen: ${st.error}`, 'note');
-    else showProgress(100, `Fertig: ${st.new} ${st.new === 1 ? 'neuer Job' : 'neue Jobs'}, ${st.total} insgesamt.`, 'done');
+    if (st.error) showProgress(0, `Scraping failed: ${st.error}`, 'note');
+    else showProgress(100, `Done: ${st.new} new ${st.new === 1 ? 'job' : 'jobs'}, ${st.total} in total.`, 'done');
   }
 }
 
@@ -664,7 +664,7 @@ $('#scrape').addEventListener('click', async () => {
     const res = await fetch('/api/scrape', { method: 'POST' });
     if (!res.ok) throw new Error(res.status);
     watching = true;
-    showProgress(0, 'Starte …');
+    showProgress(0, 'Starting …');
     pollStatus();
   } catch {
     $('#scrape').disabled = false;
@@ -689,13 +689,13 @@ async function sendJobs(list) {
     if (!res.ok) throw new Error(res.status);
     state = await res.json();
   } catch {
-    showProgress(0, 'Senden fehlgeschlagen. Bitte scraper.py neu starten.', 'note');
+    showProgress(0, 'Sending failed. Please restart scraper.py.', 'note');
     return;
   }
   setCareerOps(state);
-  if (!state.ready) showProgress(0, 'career-ops wurde nicht gefunden. Der Ordner „career-ops“ muss neben scraper.py liegen.', 'note');
-  else if (state.error) showProgress(0, `Senden fehlgeschlagen: ${state.error}`, 'note');
-  else showProgress(0, `${state.new.length} ${state.new.length === 1 ? 'Job' : 'Jobs'} an career-ops gesendet. Dort mit „/career-ops pipeline“ bewerten.`, 'note');
+  if (!state.ready) showProgress(0, 'career-ops was not found. The “career-ops” folder must sit next to scraper.py.', 'note');
+  else if (state.error) showProgress(0, `Sending failed: ${state.error}`, 'note');
+  else showProgress(0, `Sent ${state.new.length} ${state.new.length === 1 ? 'job' : 'jobs'} to career-ops. Evaluate them there with “/career-ops pipeline”.`, 'note');
 }
 
 function sendSelected() {
@@ -712,9 +712,9 @@ async function loadCareerOps() {
 saveMarks();
 $('#sort').value = sorters[f.sort] ? f.sort : 'date';
 if (DATA.generated) {
-  const stand = new Date(DATA.generated).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const updated = new Date(DATA.generated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const where = (DATA.locations || []).join(', ') + (DATA.radius_km ? ` +${DATA.radius_km} km` : '');
-  $('#meta').textContent = `${DATA.jobs.length} Jobs · ${where} · Stand ${stand}`;
+  $('#meta').textContent = `${DATA.jobs.length} jobs · ${where} · updated ${updated}`;
 }
 update();
 let last = null;

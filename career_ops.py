@@ -2,7 +2,13 @@ import json
 import os
 import re
 
-SITES = {"indeed": "Indeed", "linkedin": "LinkedIn", "glassdoor": "Glassdoor"}
+SITES = {
+    "indeed": "Indeed",
+    "linkedin": "LinkedIn",
+    "glassdoor": "Glassdoor",
+    "arbeitsagentur": "Arbeitsagentur",
+    "stepstone": "StepStone",
+}
 PENDING = ("## Pending", "## Pendientes", "## Offen")
 PROCESSED = ("## Processed", "## Procesadas", "## Verarbeitet")
 SKELETON = (
@@ -11,8 +17,8 @@ SKELETON = (
     "## Pending\n\n"
     "## Processed\n"
 )
-NO_COMPANY = "Firma unbekannt"
-NO_DESCRIPTION = "_Für diesen Job wurde keine Beschreibung geladen. Der Stellentext steht nur auf der Originalseite._"
+NO_COMPANY = "Unknown company"
+NO_DESCRIPTION = "_No description was loaded for this job. The full text is only on the original posting._"
 UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 ID_RE = re.compile(r"[0-9a-f]{12}")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -69,11 +75,11 @@ def jd_name(job):
 def jd_text(job, today):
     links = job["links"]
     facts = [
-        ("Ort", job["location"]),
-        ("Veröffentlicht", job["date_posted"]),
-        ("Gehalt", job["salary"]),
-        ("Art", job["job_type"]),
-        ("Remote", "ja" if job["is_remote"] else ""),
+        ("Location", job["location"]),
+        ("Posted", job["date_posted"]),
+        ("Salary", job["salary"]),
+        ("Type", job["job_type"]),
+        ("Remote", "yes" if job["is_remote"] else ""),
         *((SITES.get(site, site), url) for site, url in links.items()),
     ]
     head = {
