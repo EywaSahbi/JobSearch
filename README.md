@@ -191,7 +191,9 @@ Your own files that career-ops expects:
 | `modes/_profile.md` | your priorities for the evaluation | `modes/_profile.template.md` |
 | `portals.yml` | companies and searches for the built-in scanner | `templates/portals.example.yml` |
 
-On first start the AI CLI asks for this information and creates the files. All paths are relative to `career-ops/`.
+Put existing documents such as your CV as a PDF into `documents/cv/`. `/career-ops intake` reads them and proposes the content for `cv.md`, the profile and `modes/_profile.md`; nothing is written without your confirmation. The `documents/` folder is excluded from Git.
+
+On first start the AI CLI asks for any missing information and creates the files. All paths are relative to `career-ops/`.
 
 ### Commands
 
