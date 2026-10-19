@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import math
 import re
@@ -15,7 +16,14 @@ BA_API = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc"
 BA_KEY = {"X-API-Key": "jobboerse-jobsuche"}
 BA_PAGE = "https://www.arbeitsagentur.de/jobsuche/jobdetail/"
 
+ABSOLVENTA = "https://www.absolventa.de"
+ABSOLVENTA_PAGE_SIZE = 20
+
 STEPSTONE_STATE = re.compile(r'window\.__PRELOADED_STATE__\["app-unifiedResultlist"\]\s*=\s*')
+ABSOLVENTA_CARD = re.compile(r'<a [^>]*id="teaser_job_offer_\d+"[^>]*href="(/stellenangebote/[^"]+)"[^>]*>(.*?)</a>', re.S)
+ABSOLVENTA_TITLE = re.compile(r"<h2[^>]*>(.*?)</h2>", re.S)
+ABSOLVENTA_COMPANY = re.compile(r'<span class="[^"]*\bt-small\b[^"]*">(.*?)</span>', re.S)
+ABSOLVENTA_CITY = re.compile(r"<span><span>(.*?)</span></span>", re.S)
 LD_JSON = re.compile(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S)
 UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 INTERVALS = {"Annually": "yearly", "Monthly": "monthly", "Hourly": "hourly"}
@@ -235,18 +243,29 @@ def stepstone_rows(page, location, stop, names=None):
     return rows
 
 
-def stepstone_fields(page):
+def job_posting(page):
     for block in LD_JSON.findall(page):
         try:
-            data = json.loads(block)
+            data = json.loads(block, strict=False)
         except ValueError:
             continue
         for item in data if isinstance(data, list) else [data]:
             if isinstance(item, dict) and item.get("@type") == "JobPosting" and item.get("description"):
-                kind = item.get("employmentType")
-                kind = kind[0] if isinstance(kind, list) and kind else kind
-                return {"description": markdown(item["description"]), "job_type": EMPLOYMENT.get(kind) if isinstance(kind, str) else None}
-    return {}
+                return item
+    return None
+
+
+def employment(item):
+    kind = item.get("employmentType")
+    kind = kind[0] if isinstance(kind, list) and kind else kind
+    return EMPLOYMENT.get(kind.strip("[]").split(",")[0].strip()) if isinstance(kind, str) else None
+
+
+def stepstone_fields(page):
+    item = job_posting(page)
+    if not item:
+        return {}
+    return {"description": markdown(item["description"]), "job_type": employment(item)}
 
 
 def search_stepstone(term, location, radius_km, hours_old, limit):
@@ -266,11 +285,59 @@ def details_stepstone(url):
     return stepstone_fields(page)
 
 
+def text_of(pattern, fragment):
+    match = pattern.search(fragment)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group(1)))).strip() if match else ""
+
+
+def absolventa_rows(page, names=None):
+    rows = []
+    for href, card in ABSOLVENTA_CARD.findall(page):
+        title = re.sub(r"\s*(\.\.\.|…)$", "", text_of(ABSOLVENTA_TITLE, card))
+        if not title:
+            continue
+        city = text_of(ABSOLVENTA_CITY, card)
+        if names and city and not in_area(city, names) and in_area(city, CITIES):
+            continue
+        rows.append(row(
+            "absolventa", title, text_of(ABSOLVENTA_COMPANY, card), city, ABSOLVENTA + href, None,
+            is_remote="Homeoffice" in card,
+        ))
+    return rows
+
+
+def absolventa_fields(page):
+    item = job_posting(page)
+    if not item:
+        return {}
+    return {
+        "description": markdown(html.unescape(item["description"])),
+        "job_type": employment(item),
+        "date_posted": (item.get("datePosted") or "")[:10] or None,
+    }
+
+
+def search_absolventa(term, location, radius_km, hours_old, limit):
+    names, rows = area(location, radius_km), []
+    for number in range(1, math.ceil(limit / ABSOLVENTA_PAGE_SIZE) + 1):
+        page = get(f"{ABSOLVENTA}/jobs", params={"text": term, "location": location, "page": number}).text
+        rows += absolventa_rows(page, names)
+        if len(ABSOLVENTA_CARD.findall(page)) < ABSOLVENTA_PAGE_SIZE:
+            break
+    return rows[:limit]
+
+
+def details_absolventa(url):
+    return absolventa_fields(get(url).text)
+
+
 SEARCH = {
     "arbeitsagentur": search_arbeitsagentur,
     "stepstone": search_stepstone,
+    "absolventa": search_absolventa,
 }
 DETAILS = {
     "arbeitsagentur": details_arbeitsagentur,
     "stepstone": details_stepstone,
+    "absolventa": details_absolventa,
 }

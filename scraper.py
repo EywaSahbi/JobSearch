@@ -26,7 +26,7 @@ SEARCH_TERMS = [
 LOCATIONS = ["Dortmund", "Essen", "Düsseldorf"]
 RADIUS_KM = 30
 COUNTRY = "Germany"
-SITES = ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone"]
+SITES = ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone", "absolventa"]
 RESULTS_PER_SEARCH = 30
 HOURS_OLD = 168
 KEEP_DAYS = 45
@@ -224,7 +224,7 @@ def fetch_details(db, loaders, limit, progress=no_progress, pause=0.4):
         if fields.get("description"):
             loaded += 1
             streaks[site] = []
-            for key in ("description", "job_level", "job_type"):
+            for key in ("description", "job_level", "job_type", "date_posted"):
                 if fields.get(key) and not job.get(key):
                     job[key] = fields[key]
         else:

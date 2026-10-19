@@ -79,7 +79,7 @@ All settings are constants at the top of `scraper.py`. The values that ship with
 
 - **One job, one entry:** Same title, same company and same city count as the same job, whichever board it came from. This is also how the job ID is built. The links of all boards are collected in that entry.
 - **Failing source:** If a query fails, the run continues. The error is printed in the terminal.
-- **Loading descriptions:** LinkedIn, the Arbeitsagentur and StepStone return no description in their search results. The scraper loads it afterwards, one job at a time, at most twice per job and at most `MAX_DETAILS` jobs per source and run. If a job is listed on several sources, the Arbeitsagentur and StepStone are asked first and LinkedIn last.
+- **Loading descriptions:** LinkedIn, the Arbeitsagentur, StepStone and Absolventa return no description in their search results. The scraper loads it afterwards, one job at a time, at most twice per job and at most `MAX_DETAILS` jobs per source and run. If a job is listed on several sources, the Arbeitsagentur, StepStone and Absolventa are asked first and LinkedIn last. A posting date found on the job page fills in a missing one.
 - **Blocking source:** After five failed requests in a row the scraper leaves that source alone for the rest of the run. The remaining jobs follow on the next run.
 - **JobSpy dependency:** Loading LinkedIn descriptions uses an internal JobSpy function, which may change with a library update. If it does, LinkedIn is skipped when loading descriptions and everything else keeps working.
 - **Checkpoints:** The data is saved once after the search and again after loading descriptions, so an interrupted run loses no results.
@@ -94,13 +94,15 @@ All settings are constants at the top of `scraper.py`. The values that ship with
 | `glassdoor` | glassdoor.com, country from `COUNTRY` | JobSpy | `RADIUS_KM` | in the search results |
 | `arbeitsagentur` | arbeitsagentur.de | job search API | `RADIUS_KM` | loaded afterwards |
 | `stepstone` | stepstone.de | result page | fixed by StepStone, then checked against the city table | loaded afterwards |
+| `absolventa` | absolventa.de | result pages | fixed by Absolventa, then checked against the city table | loaded afterwards |
 
 - **JobSpy:** Indeed, LinkedIn and Glassdoor are queried through the JobSpy library, which supports many countries. It works in miles, so `RADIUS_KM` is converted.
-- **Germany only:** The Arbeitsagentur (the German Federal Employment Agency) and StepStone only list jobs in Germany. Remove them from `SITES` when you search elsewhere.
+- **Germany only:** The Arbeitsagentur (the German Federal Employment Agency), StepStone and Absolventa only list jobs in Germany. Remove them from `SITES` when you search elsewhere.
 - **Arbeitsagentur:** The search uses the API behind the job search on arbeitsagentur.de. It is not officially documented and may change. Apprenticeships are excluded.
 - **StepStone:** There is no API. The scraper reads the first result page per search term and city, so at most 25 jobs, and only requests addresses without query parameters, as StepStone's `robots.txt` allows. If StepStone changes its page layout, the source returns nothing until `sources.py` is updated. Salaries estimated by StepStone are ignored; only salaries stated by the employer are kept.
-- **City table:** StepStone searches with its own fixed radius. `sources.py` therefore holds a table of about 70 cities with coordinates and drops results from known cities outside `RADIUS_KM`. Results from cities not in the table are kept. The table covers North Rhine-Westphalia and can be extended for other regions.
-- **Not included:** Google Jobs currently returns no data through JobSpy, XING requires a login, and Arbeitnow and service.bund.de offer no search and returned very few relevant jobs.
+- **Absolventa:** A job board for graduates and entry-level jobs. There is no API. The scraper reads the result pages per search term and city, 20 jobs per page, and moves on to the next page only while a page is full and `RESULTS_PER_SEARCH` is not reached. Absolventa sorts by distance and shows no posting date in its results, so `--hours` and `HOURS_OLD` do not apply to it; the date is taken from the job page when its description is loaded. A trailing “...” that some advertisers add to their titles is removed.
+- **City table:** StepStone and Absolventa search with their own fixed radius. `sources.py` therefore holds a table of about 70 cities with coordinates and drops results from known cities outside `RADIUS_KM`. Results from cities not in the table are kept. The table covers North Rhine-Westphalia and can be extended for other regions.
+- **Not included:** Google Jobs currently returns no data through JobSpy, XING requires a login, and Arbeitnow and service.bund.de offer no search and returned very few relevant jobs. Berufsstart.de was tested in October 2026: across all search terms it listed at most 33 jobs nationwide and almost none in the Dortmund, Essen and Düsseldorf area.
 
 ## The local server
 

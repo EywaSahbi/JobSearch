@@ -88,6 +88,48 @@ STEPSTONE_JOB = (
 )
 
 
+def absolventa_card(number, title, company, city, badges=()):
+    badge_html = "".join(f'<span class="w-fit"><span class="whitespace-nowrap">{badge}</span></span>' for badge in badges)
+    return (
+        '<li class="relative @container">'
+        f'<a data-turbo="true" id="teaser_job_offer_{number}" class="flex" aria-current="false" href="/stellenangebote/{number}-b-job">'
+        f'<div><h2 class="text-secondary @lg:hidden t-body font-bold">{title}</h2>'
+        f'<div><span class="text-secondary break-words hyphens-auto t-small">{company}</span></div>'
+        f'<h2 class="text-secondary hidden @lg:block t-body font-bold">{title}</h2></div>'
+        f'<ul><li class="flex"><svg><title>Standort</title></svg><span><span>{city}</span></span></li></ul>'
+        f"<div>{badge_html}</div>"
+        "</a></li>"
+    )
+
+
+def absolventa_page(*cards):
+    return "<html><body><ul id=\"job-offers-wrapper\">" + "".join(cards) + "</ul></body></html>"
+
+
+ABSOLVENTA_PAGE = absolventa_page(
+    absolventa_card(13413722, "Junior Softwareentwickler*in (m/w/d) Erforschung KI-Anwendungen", "ITS Informationstechnik Service GmbH", "Dortmund", ["Neu"]),
+    absolventa_card(13413584, "(Junior) Systemadministrator (m/w/d)", "thor consulting GmbH", "Holzwickede", ["Neu", "Homeoffice möglich"]),
+    absolventa_card(13396035, "DATEV Techniker (m/w/d) II netgo tax...", "Netgo Group GMBH", "Waltrop"),
+    absolventa_card(13400000, "Data Engineer (m/w/d)", "Rhein &amp; Ruhr GmbH", "Köln"),
+)
+ABSOLVENTA_JOB = (
+    '<html><head><script type="application/ld+json">'
+    + json.dumps({
+        "@type": "JobPosting",
+        "title": "Junior Softwareentwickler*in (m/w/d) Erforschung KI-Anwendungen",
+        "datePosted": "2026-10-18",
+        "employmentType": "[FULL_TIME]",
+        "description": "Einleitung&lt;br&gt;&lt;h4&gt;Bei uns steht der Mensch im Mittelpunkt.&lt;/h4&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;",
+    })
+    + "</script></head><body></body></html>"
+)
+
+
+class Page:
+    def __init__(self, text):
+        self.text = text
+
+
 class AreaTest(unittest.TestCase):
     def test_area_contains_places_within_the_radius(self):
         names = sources.area("Dortmund", 30)
@@ -218,6 +260,96 @@ class StepstoneTest(unittest.TestCase):
         self.assertEqual(sources.stepstone_fields("<html></html>"), {})
 
 
+class AbsolventaTest(unittest.TestCase):
+    def rows(self, names=None):
+        return sources.absolventa_rows(ABSOLVENTA_PAGE, names)
+
+    def test_rows_come_from_the_result_cards(self):
+        self.assertEqual(len(self.rows()), 4)
+
+    def test_row_fields(self):
+        row = self.rows()[0]
+
+        self.assertEqual(row["site"], "absolventa")
+        self.assertEqual(row["title"], "Junior Softwareentwickler*in (m/w/d) Erforschung KI-Anwendungen")
+        self.assertEqual(row["company"], "ITS Informationstechnik Service GmbH")
+        self.assertEqual(row["location"], "Dortmund, Germany")
+        self.assertEqual(row["job_url"], "https://www.absolventa.de/stellenangebote/13413722-b-job")
+        self.assertIsNone(row["date_posted"])
+        self.assertFalse(row["is_remote"])
+
+    def test_home_office_badge_marks_the_job_as_remote(self):
+        self.assertTrue(self.rows()[1]["is_remote"])
+
+    def test_trailing_dots_are_removed_from_the_title(self):
+        self.assertEqual(self.rows()[2]["title"], "DATEV Techniker (m/w/d) II netgo tax")
+
+    def test_entities_in_names_are_decoded(self):
+        self.assertEqual(self.rows()[3]["company"], "Rhein & Ruhr GmbH")
+
+    def test_jobs_in_a_known_city_outside_the_area_are_dropped(self):
+        titles = [row["title"] for row in self.rows(sources.area("Dortmund", 30))]
+
+        self.assertNotIn("Data Engineer (m/w/d)", titles)
+        self.assertEqual(len(titles), 3)
+
+    def test_page_without_cards_gives_no_rows(self):
+        self.assertEqual(sources.absolventa_rows("<html></html>"), [])
+
+    def test_job_page_gives_description_type_and_date(self):
+        fields = sources.absolventa_fields(ABSOLVENTA_JOB)
+
+        self.assertIn("Bei uns steht der Mensch im Mittelpunkt.", fields["description"])
+        self.assertIn("- Python", fields["description"])
+        self.assertNotIn("&lt;", fields["description"])
+        self.assertNotIn("<li>", fields["description"])
+        self.assertEqual(fields["job_type"], "fulltime")
+        self.assertEqual(fields["date_posted"], "2026-10-18")
+
+    def test_job_page_without_structured_data_gives_nothing(self):
+        self.assertEqual(sources.absolventa_fields("<html></html>"), {})
+
+    def test_raw_line_breaks_inside_the_structured_data_are_accepted(self):
+        page = ABSOLVENTA_JOB.replace("Einleitung", "Einleitung\n\t")
+
+        self.assertIn("Einleitung", sources.absolventa_fields(page)["description"])
+
+    def search(self, pages, limit):
+        calls = []
+        original = sources.get
+        self.addCleanup(setattr, sources, "get", original)
+
+        def fake_get(url, **kwargs):
+            calls.append(kwargs["params"])
+            return Page(pages[len(calls) - 1])
+
+        sources.get = fake_get
+        rows = sources.search_absolventa("Software", "Dortmund", 30, 168, limit)
+        return rows, calls
+
+    def test_search_asks_for_term_location_and_first_page(self):
+        rows, calls = self.search([ABSOLVENTA_PAGE], 30)
+
+        self.assertEqual(calls, [{"text": "Software", "location": "Dortmund", "page": 1}])
+        self.assertEqual(len(rows), 3)
+
+    def test_search_reads_the_next_page_only_when_the_first_is_full(self):
+        full = absolventa_page(*(absolventa_card(n, f"Job {n}", "Firma", "Dortmund") for n in range(sources.ABSOLVENTA_PAGE_SIZE)))
+
+        rows, calls = self.search([full, ABSOLVENTA_PAGE], 30)
+
+        self.assertEqual([call["page"] for call in calls], [1, 2])
+        self.assertEqual(len(rows), 23)
+
+    def test_search_stops_at_the_limit(self):
+        full = absolventa_page(*(absolventa_card(n, f"Job {n}", "Firma", "Dortmund") for n in range(sources.ABSOLVENTA_PAGE_SIZE)))
+
+        rows, calls = self.search([full], 20)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(rows), 20)
+
+
 class ScraperTest(unittest.TestCase):
     def setUp(self):
         quiet = contextlib.redirect_stdout(io.StringIO())
@@ -245,13 +377,14 @@ class ScraperTest(unittest.TestCase):
         self.assertEqual(record["title"], "(untitled)")
 
     def test_new_sources_are_scraped_by_default(self):
-        for site in ("arbeitsagentur", "stepstone"):
+        for site in ("arbeitsagentur", "stepstone", "absolventa"):
             self.assertIn(site, scraper.SITES)
             self.assertIn(site, sources.SEARCH)
+            self.assertIn(site, sources.DETAILS)
 
     def test_only_working_sources_are_offered(self):
-        self.assertEqual(sorted(sources.SEARCH), ["arbeitsagentur", "stepstone"])
-        self.assertEqual(scraper.SITES, ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone"])
+        self.assertEqual(sorted(sources.SEARCH), ["absolventa", "arbeitsagentur", "stepstone"])
+        self.assertEqual(scraper.SITES, ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone", "absolventa"])
 
     def job(self, number, site="arbeitsagentur", **extra):
         return {"id": f"id{number}", "title": f"Job {number}", "links": {site: f"https://example.com/{number}"}, "description": None, **extra}
@@ -269,6 +402,14 @@ class ScraperTest(unittest.TestCase):
         self.assertEqual(seen, ["https://example.com/1"])
         self.assertEqual((db["a"]["description"], db["a"]["job_type"]), ("neu", "fulltime"))
         self.assertEqual(db["b"]["description"], "schon da")
+
+    def test_details_fill_a_missing_posting_date_but_keep_an_existing_one(self):
+        db = {"a": self.job(1, site="absolventa", date_posted=None), "b": self.job(2, site="absolventa", date_posted="2026-10-01")}
+
+        scraper.fetch_details(db, {"absolventa": lambda url: {"description": "x", "date_posted": "2026-10-18"}}, 10, pause=0)
+
+        self.assertEqual(db["a"]["date_posted"], "2026-10-18")
+        self.assertEqual(db["b"]["date_posted"], "2026-10-01")
 
     def test_details_respect_the_limit_per_source(self):
         db = {str(n): self.job(n) for n in range(5)}
