@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Search</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <style>
 :root {
   --bg: #f5f4ef;
@@ -17,6 +18,7 @@
   --star: #b7791f;
   --ok: #2e7d32;
   --hover: #f0eee7;
+  --error: #b42318;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -32,6 +34,7 @@
     --star: #f0b755;
     --ok: #7bc67f;
     --hover: #232521;
+    --error: #f97066;
   }
 }
 * { box-sizing: border-box; }
@@ -210,6 +213,69 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
 .desc hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .scrim { display: none; }
 
+#search-settings {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+}
+#search-settings::backdrop { background: rgb(0 0 0 / 0.45); }
+.ss { display: flex; flex-direction: column; max-height: calc(100vh - 34px); }
+.ss-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.ss-head h2 { margin: 0; font-size: 17px; }
+.ss-x { height: 30px; padding: 0 10px; }
+.ss-body { display: grid; gap: 18px; padding: 16px; overflow-y: auto; }
+.ss-where { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+.ss-map { min-height: 400px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.ss-nomap { padding: 24px; color: var(--muted); text-align: center; }
+.ss-places h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.ss-find { display: flex; gap: 6px; }
+.ss-find input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.ss-hits { margin: 6px 0 0; padding: 4px; list-style: none; border: 1px solid var(--line); border-radius: 8px; }
+.ss-hits button { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none; text-align: left; }
+.ss-hits button:hover { background: var(--hover); }
+.ss-hits span { color: var(--muted); font-size: 12.5px; }
+.ss-hint { margin: 8px 0; color: var(--muted); font-size: 12.5px; }
+.ss-list { display: grid; gap: 6px; max-height: 300px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.ss-place { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.ss-place.on { border-color: var(--accent); background: var(--accent-soft); }
+.ss-place-top { display: flex; align-items: baseline; gap: 6px; }
+.ss-name { padding: 0; border: 0; background: none; font-weight: 600; text-align: left; }
+.ss-region { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ss-del { padding: 0 2px; border: 0; background: none; color: var(--muted); }
+.ss-del:hover { color: var(--error); }
+.ss-radius { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.ss-radius input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.ss-radius output { min-width: 6.5ch; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.ss-skip { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.ss-empty { padding: 12px 4px; color: var(--muted); font-size: 12.5px; }
+.ss-what { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.ss-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.ss-field > span, .ss-field legend { padding: 0; font-weight: 600; }
+.ss-field small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.ss-field textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font: inherit; resize: vertical; }
+.ss-sub { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12.5px; }
+.ss-sources label { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.ss-sources input { margin: 0; accent-color: var(--accent); }
+.ss-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.ss-msg { flex: 1 1 260px; margin: 0; color: var(--muted); font-size: 12.5px; }
+.ss-msg.error { color: var(--error); }
+.ss-foot .btn:disabled { opacity: 0.55; }
+.ss-pin { border: 3px solid var(--panel); border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgb(0 0 0 / 0.45); }
+.ss-map.leaflet-container { font: 12px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.ss-map .leaflet-tile-pane { filter: saturate(0.45) contrast(0.95); }
+@media (prefers-color-scheme: dark) {
+  .ss-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(0.4) brightness(0.85) contrast(0.9); }
+}
+.ss-map .leaflet-control-attribution { background: color-mix(in srgb, var(--panel) 85%, transparent); color: var(--muted); }
+.ss-map .leaflet-control-attribution a { color: var(--accent); }
+.ss-map .leaflet-bar a { border-bottom-color: var(--line); background: var(--panel); color: var(--text); }
+.ss-map .leaflet-bar a:hover { background: var(--hover); }
+
 @media (max-width: 1000px) {
   body { grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); }
   #filter-toggle { display: inline-flex; align-items: center; }
@@ -232,6 +298,12 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
   .back { display: inline-flex; }
   .detail-inner { padding: 16px 16px 48px; }
   .brand span { display: none; }
+  #search-settings { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
+  .ss { height: 100%; max-height: 100dvh; }
+}
+@media (max-width: 860px) {
+  .ss-where, .ss-what { grid-template-columns: minmax(0, 1fr); }
+  .ss-map { min-height: 300px; }
 }
 @media (prefers-reduced-motion: reduce) { aside, .fill { transition: none; } }
 </style>
@@ -246,6 +318,7 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
     <option value="company">Company A–Z</option>
     <option value="title">Title A–Z</option>
   </select>
+  <button id="settings" class="btn" type="button">Search settings</button>
   <button id="scrape" class="btn primary" type="button">Scrape now</button>
   <div id="progress" hidden>
     <span id="ptext" role="status"></span>
@@ -266,6 +339,8 @@ code { padding: 1px 5px; border-radius: 4px; background: var(--hover); font: 12.
 <div class="scrim"></div>
 
 <script src="output/jobs.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="settings.js"></script>
 <script>
 (() => {
 'use strict';
@@ -277,7 +352,7 @@ const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? esc(u) : '#');
 const localDate = (d) => d.toLocaleDateString('sv');
 const TODAY = localDate(new Date());
 
-const SITES = { indeed: 'Indeed', linkedin: 'LinkedIn', glassdoor: 'Glassdoor', arbeitsagentur: 'Arbeitsagentur', stepstone: 'StepStone' };
+const SITES = { indeed: 'Indeed', linkedin: 'LinkedIn', glassdoor: 'Glassdoor', arbeitsagentur: 'Arbeitsagentur', stepstone: 'StepStone', absolventa: 'Absolventa' };
 const TYPES = { fulltime: 'Full-time', parttime: 'Part-time', internship: 'Internship', contract: 'Contract', temporary: 'Temporary' };
 const TABS = [['open', 'Open'], ['new', 'New in last run'], ['saved', 'Saved'], ['applied', 'Applied'], ['hidden', 'Hidden']];
 const PAGE = 300;
@@ -599,7 +674,7 @@ $('#filter-toggle').addEventListener('click', () => document.body.classList.togg
 $('.scrim').addEventListener('click', () => document.body.classList.remove('show-filters'));
 
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
   if (e.target instanceof Element && e.target.matches('input, select, textarea')) {
     if (e.key === 'Escape') e.target.blur();
     return;
@@ -657,7 +732,7 @@ async function pollStatus() {
   }
 }
 
-$('#scrape').addEventListener('click', async () => {
+async function startScrape() {
   if (!SERVED) { showProgress(0, NO_SERVER, 'note'); return; }
   $('#scrape').disabled = true;
   try {
@@ -670,6 +745,12 @@ $('#scrape').addEventListener('click', async () => {
     $('#scrape').disabled = false;
     showProgress(0, NO_SERVER, 'note');
   }
+}
+$('#scrape').addEventListener('click', startScrape);
+$('#settings').addEventListener('click', () => {
+  if (!SERVED) { showProgress(0, NO_SERVER, 'note'); return; }
+  if (!window.SearchSettings) { showProgress(0, 'The settings window could not be loaded. Please restart scraper.py.', 'note'); return; }
+  window.SearchSettings.open((scrape) => (scrape ? startScrape() : location.reload()));
 });
 $('#pdone').addEventListener('click', () => location.reload());
 if (SERVED) pollStatus();
@@ -713,7 +794,8 @@ saveMarks();
 $('#sort').value = sorters[f.sort] ? f.sort : 'date';
 if (DATA.generated) {
   const updated = new Date(DATA.generated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  const where = (DATA.locations || []).join(', ') + (DATA.radius_km ? ` +${DATA.radius_km} km` : '');
+  const where = (DATA.locations || []).map((l) => (typeof l === 'string' ? l : `${l.name} ${l.radius_km} km`)).join(', ')
+    + (DATA.radius_km ? ` +${DATA.radius_km} km` : '');
   $('#meta').textContent = `${DATA.jobs.length} jobs · ${where} · updated ${updated}`;
 }
 update();

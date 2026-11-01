@@ -9,34 +9,20 @@ import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from jobspy import scrape_jobs
+from jobspy.model import Country
 
 import career_ops
+import config
+import places
 import sources
 
-SEARCH_TERMS = [
-    "Software Engineer",
-    "Softwareentwickler",
-    "DevOps",
-    "Systemadministrator",
-    "IT Support",
-    "Fachinformatiker",
-]
-LOCATIONS = ["Dortmund", "Essen", "Düsseldorf"]
-RADIUS_KM = 30
-COUNTRY = "Germany"
-SITES = ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone", "absolventa"]
 RESULTS_PER_SEARCH = 30
 HOURS_OLD = 168
 KEEP_DAYS = 45
 MAX_DETAILS = 200
-
-EXCLUDE_TITLE = [
-    "*ausbildung*", "Auszubildende*", "Azubi*",
-    "Senior", "Sr", "Principal", "Lead", "Head of",
-]
-KEEP_TITLE = ["Junior"]
 
 PORT = 8765
 
@@ -45,9 +31,25 @@ OUTPUT_DIR = ROOT / "output"
 DB_FILE = OUTPUT_DIR / "jobs.json"
 JS_FILE = OUTPUT_DIR / "jobs.js"
 VIEWER = ROOT / "viewer.html"
+SETTINGS_FILE = ROOT / "settings.json"
 CAREER_OPS_DIR = ROOT / "career-ops"
+PLACES = places.Places(OUTPUT_DIR / "places.json")
 
-NO_CITY = {"north rhine-westphalia", "nordrhein-westfalen", "nw", "germany", "deutschland", "de"}
+JOBSPY_COUNTRIES = {
+    country.value[1].split(":")[-1]: country
+    for country in Country
+    if country not in (Country.US_CANADA, Country.WORLDWIDE)
+}
+COUNTRIES = {
+    "indeed": set(JOBSPY_COUNTRIES),
+    "glassdoor": {code for code, country in JOBSPY_COUNTRIES.items() if len(country.value) > 2},
+    **sources.COUNTRIES,
+}
+
+CITY_STATES = {"singapore", "hong kong", "luxembourg"}
+NO_CITY = {"north rhine-westphalia", "nordrhein-westfalen", "nw", "germany", "deutschland", "de"} | {
+    name.strip() for country in Country for name in country.value[0].split(",")
+} - CITY_STATES
 INTERVALS = {"yearly": "year", "monthly": "month", "weekly": "week", "daily": "day", "hourly": "hour"}
 
 
@@ -59,13 +61,14 @@ def title_pattern(words):
     return re.compile("|".join(parts) or r"(?!)", re.IGNORECASE)
 
 
-EXCLUDE_RE = title_pattern(EXCLUDE_TITLE)
-KEEP_RE = title_pattern(KEEP_TITLE)
+def title_rules(settings):
+    return title_pattern(settings["exclude_title"]), title_pattern(settings["keep_title"])
 
 
-def excluded(title):
+def excluded(title, rules):
+    exclude, keep = rules
     title = title or ""
-    return bool(EXCLUDE_RE.search(title)) and not KEEP_RE.search(title)
+    return bool(exclude.search(title)) and not keep.search(title)
 
 
 def city_of(location):
@@ -73,9 +76,13 @@ def city_of(location):
     return "" if first.lower() in NO_CITY else first
 
 
+def normalize(text):
+    text = (text or "").lower()
+    return re.sub(r"[^a-z0-9äöüß]+", " ", text).strip() or re.sub(r"[\W_]+", " ", text).strip()
+
+
 def job_id(title, company, city):
-    parts = (re.sub(r"[^a-z0-9äöüß]+", " ", (s or "").lower()).strip() for s in (title, company, city))
-    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
+    return hashlib.md5("|".join(map(normalize, (title, company, city))).encode("utf-8")).hexdigest()[:12]
 
 
 def salary_of(row):
@@ -122,17 +129,34 @@ def merge(db, rec):
     return False
 
 
-def search(site, term, location, hours_old):
+def covers(site, country):
+    allowed = COUNTRIES.get(site)
+    return allowed is None or country in allowed
+
+
+def plan(settings, sites):
+    groups = []
+    for term in settings["terms"]:
+        for location in settings["locations"]:
+            here = [site for site in sites if covers(site, location["country"])]
+            if here:
+                groups.append((term, location, here))
+    return groups
+
+
+def search(site, term, location, hours_old, inside=None):
     if site in sources.SEARCH:
-        return sources.SEARCH[site](term, location, RADIUS_KM, hours_old, RESULTS_PER_SEARCH)
+        return sources.SEARCH[site](term, location, hours_old, RESULTS_PER_SEARCH, inside)
+    country = JOBSPY_COUNTRIES.get(location["country"])
+    named = site == "linkedin" and location.get("country_name")
     df = scrape_jobs(
         site_name=[site],
         search_term=term,
-        location=location,
-        distance=round(RADIUS_KM / 1.609),
+        location=f"{location['name']}, {location['country_name']}" if named else location["name"],
+        distance=round(location["radius_km"] / 1.609),
         results_wanted=RESULTS_PER_SEARCH,
         hours_old=hours_old,
-        country_indeed=COUNTRY,
+        country_indeed=country.value[0].split(",")[0] if country else "worldwide",
         fetch_description=(site == "glassdoor"),
         description_format="markdown",
         verbose=0,
@@ -144,25 +168,27 @@ def no_progress(phase, done, total, text):
     pass
 
 
-def scrape(db, sites, hours_old, now, progress=no_progress):
+def scrape(db, settings, sites, hours_old, now, progress=no_progress, places=PLACES):
+    rules = title_rules(settings)
+    groups = plan(settings, sites)
+    total = sum(len(here) for _, _, here in groups)
     new = dropped = done = 0
-    total = len(SEARCH_TERMS) * len(LOCATIONS) * len(sites)
-    for term in SEARCH_TERMS:
-        for location in LOCATIONS:
-            counts = []
-            for site in sites:
-                progress("search", done, total, f"Searching: {term} · {location} ({site})")
-                done += 1
-                try:
-                    rows = search(site, term, location, hours_old)
-                except Exception as exc:
-                    counts.append(f"{site}: error ({str(exc)[:60]})")
-                    continue
-                wanted = [row for row in rows if not excluded(row.get("title"))]
-                dropped += len(rows) - len(wanted)
-                new += sum(merge(db, to_record(row, term, now)) for row in wanted)
-                counts.append(f"{site} {len(wanted)}")
-            print(f"[{done:>2}/{total}] {term} · {location}: {', '.join(counts)}", flush=True)
+    for term, location, here in groups:
+        inside = places.within(location)
+        counts = []
+        for site in here:
+            progress("search", done, total, f"Searching: {term} · {location['name']} ({site})")
+            done += 1
+            try:
+                rows = search(site, term, location, hours_old, inside)
+            except Exception as exc:
+                counts.append(f"{site}: error ({str(exc)[:60]})")
+                continue
+            wanted = [row for row in rows if not excluded(row.get("title"), rules)]
+            dropped += len(rows) - len(wanted)
+            new += sum(merge(db, to_record(row, term, now)) for row in wanted)
+            counts.append(f"{site} {len(wanted)}")
+        print(f"[{done:>2}/{total}] {term} · {location['name']}: {', '.join(counts)}", flush=True)
     print(f"{dropped} results dropped by the title filter")
     return new
 
@@ -241,21 +267,20 @@ def fetch_details(db, loaders, limit, progress=no_progress, pause=0.4):
     print(f"  {loaded} descriptions loaded")
 
 
-def read_db():
+def read_db(rules):
     if not DB_FILE.exists():
         return {}, None
     data = json.loads(DB_FILE.read_text(encoding="utf-8"))
     cutoff = (datetime.now() - timedelta(days=KEEP_DAYS)).isoformat()
-    db = {j["id"]: j for j in data["jobs"] if j["first_seen"] >= cutoff and not excluded(j["title"])}
+    db = {j["id"]: j for j in data["jobs"] if j["first_seen"] >= cutoff and not excluded(j["title"], rules)}
     return db, data.get("generated")
 
 
-def save(db, generated):
+def save(db, generated, settings):
     data = {
         "generated": generated,
-        "terms": SEARCH_TERMS,
-        "locations": LOCATIONS,
-        "radius_km": RADIUS_KM,
+        "terms": settings["terms"],
+        "locations": [{"name": place["name"], "radius_km": place["radius_km"]} for place in settings["locations"]],
         "jobs": list(db.values()),
     }
     text = json.dumps(data, ensure_ascii=False)
@@ -264,14 +289,15 @@ def save(db, generated):
     JS_FILE.write_text("window.JOBS_DATA = " + text.replace("</", "<\\/") + ";\n", encoding="utf-8")
 
 
-def run_scrape(sites, hours_old, fast, progress=no_progress):
+def run_scrape(settings, sites, hours_old, fast, progress=no_progress):
     now = datetime.now().isoformat(timespec="seconds")
-    db, _ = read_db()
-    new = scrape(db, sites, hours_old, now, progress)
-    save(db, now)
+    db, _ = read_db(title_rules(settings))
+    PLACES.reset()
+    new = scrape(db, settings, sites, hours_old, now, progress)
+    save(db, now, settings)
     if not fast:
         fetch_details(db, detail_loaders(), MAX_DETAILS, progress)
-        save(db, now)
+        save(db, now, settings)
     print(f"{new} new jobs, {len(db)} in total in {DB_FILE}", flush=True)
     return new, len(db)
 
@@ -285,6 +311,8 @@ def start_scrape(args):
         if STATE["running"]:
             return
         STATE.update(running=True, percent=0, text="Starting …", new=None, total=None, error=None)
+    settings = config.load(SETTINGS_FILE)
+    sites = args.sites or settings["sites"]
 
     def progress(phase, done, total, text):
         share = done / total if total else 1
@@ -293,7 +321,7 @@ def start_scrape(args):
 
     def work():
         try:
-            new, total = run_scrape(args.sites, args.hours, args.fast, progress)
+            new, total = run_scrape(settings, sites, args.hours, args.fast, progress)
             STATE.update(new=new, total=total, percent=100, text="Done")
         except Exception as exc:
             print(f"Scraping failed: {exc!r}", flush=True)
@@ -307,19 +335,34 @@ def start_scrape(args):
 class Handler(BaseHTTPRequestHandler):
     args = None
     career_ops_dir = CAREER_OPS_DIR
+    settings_file = SETTINGS_FILE
+    places = PLACES
     files = {
         "/": (VIEWER, "text/html"),
         "/viewer.html": (VIEWER, "text/html"),
+        "/settings.js": (ROOT / "settings.js", "text/javascript"),
+        "/vendor/leaflet/leaflet.js": (ROOT / "vendor" / "leaflet" / "leaflet.js", "text/javascript"),
+        "/vendor/leaflet/leaflet.css": (ROOT / "vendor" / "leaflet" / "leaflet.css", "text/css"),
         "/output/jobs.js": (JS_FILE, "text/javascript"),
     }
 
-    def reply(self, body, content_type):
-        self.send_response(200)
+    def reply(self, body, content_type, status=200):
+        self.send_response(status)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def reply_json(self, data, status=200):
+        self.reply(json.dumps(data).encode("utf-8"), "application/json", status)
+
+    def read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(length)) if 0 < length <= 1_000_000 else None
+        except ValueError:
+            return None
 
     def is_local(self):
         own = (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
@@ -327,14 +370,20 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") in own and (not origin or origin.removeprefix("http://") in own)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
+        url = urlsplit(self.path)
         if not self.is_local():
             return self.send_error(403)
-        if path == "/api/status":
-            return self.reply(json.dumps(STATE).encode("utf-8"), "application/json")
-        if path == "/api/career-ops":
+        if url.path == "/api/status":
+            return self.reply_json(STATE)
+        if url.path == "/api/career-ops":
             return self.reply_career_ops()
-        file, content_type = self.files.get(path, (None, None))
+        if url.path == "/api/settings":
+            return self.reply_settings()
+        if url.path == "/api/places":
+            return self.find_places(parse_qs(url.query))
+        if url.path == "/api/places/nearest":
+            return self.nearest_place(parse_qs(url.query))
+        file, content_type = self.files.get(url.path, (None, None))
         if file is None or not file.exists():
             return self.send_error(404)
         self.reply(file.read_bytes(), content_type)
@@ -344,22 +393,68 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(403)
         if self.path == "/api/career-ops":
             return self.send_to_career_ops()
+        if self.path == "/api/settings":
+            return self.save_settings()
         if self.path != "/api/scrape":
             return self.send_error(404)
         start_scrape(self.args)
-        self.reply(json.dumps(STATE).encode("utf-8"), "application/json")
+        self.reply_json(STATE)
+
+    def reply_settings(self):
+        offered = [
+            {"name": name, "label": label, "countries": sorted(COUNTRIES[name]) if name in COUNTRIES else None}
+            for name, label in config.SOURCES.items()
+        ]
+        self.reply_json({"settings": config.load(self.settings_file), "sources": offered, "running": STATE["running"]})
+
+    def save_settings(self):
+        data = self.read_json()
+        with STATE_LOCK:
+            if STATE["running"]:
+                return self.reply_json({"errors": ["A scrape is running. Save again when it has finished."]}, 409)
+            settings, errors = config.validate(data)
+            if errors:
+                return self.reply_json({"errors": errors}, 400)
+            try:
+                config.save(self.settings_file, settings)
+                db, generated = read_db(title_rules(settings))
+                if generated:
+                    save(db, generated, settings)
+            except OSError as exc:
+                return self.reply_json({"errors": [f"Saving failed: {exc}"]}, 500)
+        self.reply_json({"settings": settings})
+
+    def find_places(self, query):
+        text = " ".join((query.get("q") or [""])[0].split())
+        if not text or len(text) > config.MAX_TEXT:
+            return self.reply_json({"error": "Type the name of a city."}, 400)
+        try:
+            found = self.places.search(text)
+        except places.PlaceError as exc:
+            return self.reply_json({"error": str(exc)}, 502)
+        self.reply_json({"places": found})
+
+    def nearest_place(self, query):
+        try:
+            lat, lon = float(query["lat"][0]), float(query["lon"][0])
+        except (KeyError, ValueError):
+            lat = lon = float("nan")
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return self.reply_json({"error": "That is not a position on the map."}, 400)
+        try:
+            found = self.places.nearest(lat, lon)
+        except places.PlaceError as exc:
+            return self.reply_json({"error": str(exc)}, 502)
+        self.reply_json({"place": found})
 
     def reply_career_ops(self, **result):
         root = self.career_ops_dir
         ready = career_ops.is_ready(root)
-        state = {"ready": ready, "sent": sorted(career_ops.sent_ids(root)) if ready else [], **result}
-        self.reply(json.dumps(state).encode("utf-8"), "application/json")
+        self.reply_json({"ready": ready, "sent": sorted(career_ops.sent_ids(root)) if ready else [], **result})
 
     def send_to_career_ops(self):
-        try:
-            jobs = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))["jobs"]
-        except (ValueError, KeyError, TypeError):
-            jobs = None
+        data = self.read_json()
+        jobs = data.get("jobs") if isinstance(data, dict) else None
         if not isinstance(jobs, list):
             return self.send_error(400)
         new, error = [], None
@@ -389,9 +484,10 @@ def serve(args):
             webbrowser.open(url)
         return
 
-    db, generated = read_db()
+    settings = config.load(SETTINGS_FILE)
+    db, generated = read_db(title_rules(settings))
     if generated:
-        save(db, generated)
+        save(db, generated, settings)
     print(f"Viewer: {url}  (Ctrl+C to quit)", flush=True)
     if not args.no_open:
         webbrowser.open(url)
@@ -406,7 +502,7 @@ def main():
     p = argparse.ArgumentParser(description="Scrape job boards and browse the results")
     p.add_argument("--scrape", action="store_true", help="scrape in the terminal only, without the viewer")
     p.add_argument("--hours", type=int, default=HOURS_OLD, help="only jobs posted in the last N hours")
-    p.add_argument("--sites", nargs="+", default=SITES, help="sources to query, default: all in SITES")
+    p.add_argument("--sites", nargs="+", help="sources to query, default: those chosen in the search settings")
     p.add_argument("--fast", action="store_true", help="do not load job descriptions after the search")
     p.add_argument("--csv", action="store_true", help="with --scrape: also write output/jobs.csv")
     p.add_argument("--no-open", action="store_true", help="do not open the browser")
@@ -415,10 +511,11 @@ def main():
     if not args.scrape:
         return serve(args)
 
-    run_scrape(args.sites, args.hours, args.fast)
+    settings = config.load(SETTINGS_FILE)
+    run_scrape(settings, args.sites or settings["sites"], args.hours, args.fast)
     if args.csv:
         import pandas as pd
-        db, _ = read_db()
+        db, _ = read_db(title_rules(settings))
         rows = [{**j, "links": " ".join(j["links"].values()), "terms": ", ".join(j["terms"])} for j in db.values()]
         pd.DataFrame(rows).to_csv(OUTPUT_DIR / "jobs.csv", index=False, encoding="utf-8-sig")
 

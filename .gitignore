@@ -1,2 +1,4 @@
 __pycache__/
 career-ops/documents/
+settings.json
+output/places.json

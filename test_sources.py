@@ -4,6 +4,7 @@ import json
 import unittest
 from datetime import datetime, timezone
 
+import config
 import scraper
 import sources
 
@@ -125,29 +126,34 @@ ABSOLVENTA_JOB = (
 )
 
 
+DORTMUND = {"name": "Dortmund", "region": "North Rhine-Westphalia", "country": "de", "country_name": "Germany", "lat": 51.514, "lon": 7.465, "radius_km": 30}
+
+
 class Page:
     def __init__(self, text):
         self.text = text
 
 
-class AreaTest(unittest.TestCase):
-    def test_area_contains_places_within_the_radius(self):
-        names = sources.area("Dortmund", 30)
+class Response:
+    def __init__(self, data):
+        self.data = data
 
-        self.assertTrue(sources.in_area("Bochum", names))
-        self.assertTrue(sources.in_area("44263 Dortmund", names))
-        self.assertFalse(sources.in_area("Köln", names))
-        self.assertFalse(sources.in_area("", names))
+    def json(self):
+        return self.data
 
-    def test_area_matches_short_and_long_forms_of_a_place(self):
-        names = sources.area("Essen", 30)
 
-        self.assertTrue(sources.in_area("45468 Mülheim an der Ruhr", names))
-        self.assertTrue(sources.in_area("Mülheim", names))
+def verdicts(**known):
+    asked = []
 
-    def test_unknown_location_is_its_own_area(self):
-        self.assertTrue(sources.in_area("Kiel", sources.area("Kiel", 30)))
+    def inside(city):
+        asked.append(city)
+        return known.get(city.lower().translate(str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})))
 
+    inside.asked = asked
+    return inside
+
+
+class SlugTest(unittest.TestCase):
     def test_slug_writes_umlauts_out(self):
         self.assertEqual(sources.slug("IT Support"), "it-support")
         self.assertEqual(sources.slug("Düsseldorf"), "duesseldorf")
@@ -181,6 +187,17 @@ class ArbeitsagenturTest(unittest.TestCase):
         url = sources.arbeitsagentur_detail_url("https://www.arbeitsagentur.de/jobsuche/jobdetail/10001-1003815201-S")
 
         self.assertTrue(url.endswith("/v4/jobdetails/MTAwMDEtMTAwMzgxNTIwMS1T"), url)
+
+    def test_search_asks_for_the_place_and_its_radius(self):
+        calls = []
+        original = sources.get
+        self.addCleanup(setattr, sources, "get", original)
+        sources.get = lambda url, **kwargs: calls.append(kwargs["params"]) or Response(BA_SEARCH)
+
+        rows = sources.search_arbeitsagentur("DevOps", {**DORTMUND, "radius_km": 50}, 48, 30)
+
+        self.assertEqual((calls[0]["was"], calls[0]["wo"], calls[0]["umkreis"], calls[0]["size"]), ("DevOps", "Dortmund", 50, 30))
+        self.assertEqual(len(rows), 2)
 
     def test_rows_fit_the_scraper_record(self):
         row = sources.arbeitsagentur_rows(BA_SEARCH)[0]
@@ -218,26 +235,51 @@ class StepstoneTest(unittest.TestCase):
         self.assertEqual(self.rows()[0]["location"], "Dortmund, Germany")
         self.assertEqual(self.rows()[1]["location"], "Lünen, Germany")
 
-    def test_a_city_inside_the_area_wins_when_the_searched_city_is_not_listed(self):
+    def test_a_city_inside_the_radius_wins_when_the_searched_city_is_not_listed(self):
         page = stepstone_page("Köln, Bochum, München")
 
-        row = sources.stepstone_rows(page, "Dortmund", STOP, sources.area("Dortmund", 30))[0]
+        row = sources.stepstone_rows(page, "Dortmund", STOP, verdicts(koeln=False, bochum=True, muenchen=False))[0]
 
         self.assertEqual(row["location"], "Bochum, Germany")
 
-    def test_jobs_in_a_known_city_outside_the_area_are_dropped(self):
+    def test_the_searched_city_is_kept_without_asking_for_its_distance(self):
+        inside = verdicts(luenen=True)
+
+        sources.stepstone_rows(STEPSTONE_PAGE, "Dortmund", STOP, inside)
+
+        self.assertNotIn("Dortmund", inside.asked)
+
+    def test_jobs_in_a_city_outside_the_radius_are_dropped(self):
         page = stepstone_page("Köln")
 
-        rows = sources.stepstone_rows(page, "Dortmund", STOP, sources.area("Dortmund", 30))
+        rows = sources.stepstone_rows(page, "Dortmund", STOP, verdicts(koeln=False, luenen=True))
 
         self.assertEqual([row["title"] for row in rows], ["DevOps Engineer"])
 
-    def test_jobs_in_an_unknown_city_are_kept(self):
+    def test_jobs_in_a_city_of_unknown_distance_are_kept(self):
         page = stepstone_page("Kleinkleckersdorf")
 
-        rows = sources.stepstone_rows(page, "Dortmund", STOP, sources.area("Dortmund", 30))
+        rows = sources.stepstone_rows(page, "Dortmund", STOP, verdicts())
 
         self.assertEqual(rows[0]["location"], "Kleinkleckersdorf, Germany")
+
+    def test_the_first_listed_city_decides_when_none_is_inside(self):
+        dropped = sources.stepstone_rows(stepstone_page("Köln, Kleinkleckersdorf"), "Dortmund", STOP, verdicts(koeln=False))
+        kept = sources.stepstone_rows(stepstone_page("Kleinkleckersdorf, Köln"), "Dortmund", STOP, verdicts(koeln=False))
+
+        self.assertNotIn("Softwareentwickler Java (m/w/d)", [row["title"] for row in dropped])
+        self.assertEqual(kept[0]["location"], "Kleinkleckersdorf, Germany")
+
+    def test_search_reads_the_page_for_term_and_place(self):
+        urls = []
+        original = sources.get
+        self.addCleanup(setattr, sources, "get", original)
+        sources.get = lambda url, **kwargs: urls.append(url) or Page(STEPSTONE_PAGE)
+
+        rows = sources.search_stepstone("IT Support", {**DORTMUND, "name": "Düsseldorf"}, 24 * 3650, 1, verdicts())
+
+        self.assertEqual(urls, ["https://www.stepstone.de/jobs/it-support/in-duesseldorf"])
+        self.assertEqual(len(rows), 1)
 
     def test_only_stated_salaries_are_kept(self):
         guessed, stated = self.rows()
@@ -261,8 +303,8 @@ class StepstoneTest(unittest.TestCase):
 
 
 class AbsolventaTest(unittest.TestCase):
-    def rows(self, names=None):
-        return sources.absolventa_rows(ABSOLVENTA_PAGE, names)
+    def rows(self, inside=None):
+        return sources.absolventa_rows(ABSOLVENTA_PAGE, "Dortmund", inside)
 
     def test_rows_come_from_the_result_cards(self):
         self.assertEqual(len(self.rows()), 4)
@@ -287,14 +329,21 @@ class AbsolventaTest(unittest.TestCase):
     def test_entities_in_names_are_decoded(self):
         self.assertEqual(self.rows()[3]["company"], "Rhein & Ruhr GmbH")
 
-    def test_jobs_in_a_known_city_outside_the_area_are_dropped(self):
-        titles = [row["title"] for row in self.rows(sources.area("Dortmund", 30))]
+    def test_jobs_in_a_city_outside_the_radius_are_dropped(self):
+        titles = [row["title"] for row in self.rows(verdicts(koeln=False, holzwickede=True))]
 
         self.assertNotIn("Data Engineer (m/w/d)", titles)
         self.assertEqual(len(titles), 3)
 
+    def test_the_searched_city_is_kept_without_asking_for_its_distance(self):
+        inside = verdicts()
+
+        self.rows(inside)
+
+        self.assertNotIn("Dortmund", inside.asked)
+
     def test_page_without_cards_gives_no_rows(self):
-        self.assertEqual(sources.absolventa_rows("<html></html>"), [])
+        self.assertEqual(sources.absolventa_rows("<html></html>", "Dortmund"), [])
 
     def test_job_page_gives_description_type_and_date(self):
         fields = sources.absolventa_fields(ABSOLVENTA_JOB)
@@ -324,7 +373,7 @@ class AbsolventaTest(unittest.TestCase):
             return Page(pages[len(calls) - 1])
 
         sources.get = fake_get
-        rows = sources.search_absolventa("Software", "Dortmund", 30, 168, limit)
+        rows = sources.search_absolventa("Software", DORTMUND, 168, limit, verdicts(koeln=False))
         return rows, calls
 
     def test_search_asks_for_term_location_and_first_page(self):
@@ -361,11 +410,12 @@ class ScraperTest(unittest.TestCase):
         original = dict(sources.SEARCH)
         self.addCleanup(lambda: (sources.SEARCH.clear(), sources.SEARCH.update(original)))
         sources.SEARCH["arbeitsagentur"] = lambda *args: calls.append(args) or [{"title": "T"}]
+        inside = verdicts()
 
-        rows = scraper.search("arbeitsagentur", "DevOps", "Essen", 48)
+        rows = scraper.search("arbeitsagentur", "DevOps", DORTMUND, 48, inside)
 
         self.assertEqual(rows, [{"title": "T"}])
-        self.assertEqual(calls, [("DevOps", "Essen", scraper.RADIUS_KM, 48, scraper.RESULTS_PER_SEARCH)])
+        self.assertEqual(calls, [("DevOps", DORTMUND, 48, scraper.RESULTS_PER_SEARCH, inside)])
 
     def test_salaries_are_written_in_english(self):
         self.assertEqual(scraper.salary_of({"min_amount": 50000, "max_amount": 60000, "interval": "yearly"}), "50,000 – 60,000 EUR / year")
@@ -378,13 +428,13 @@ class ScraperTest(unittest.TestCase):
 
     def test_new_sources_are_scraped_by_default(self):
         for site in ("arbeitsagentur", "stepstone", "absolventa"):
-            self.assertIn(site, scraper.SITES)
+            self.assertIn(site, config.DEFAULTS["sites"])
             self.assertIn(site, sources.SEARCH)
             self.assertIn(site, sources.DETAILS)
 
     def test_only_working_sources_are_offered(self):
         self.assertEqual(sorted(sources.SEARCH), ["absolventa", "arbeitsagentur", "stepstone"])
-        self.assertEqual(scraper.SITES, ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone", "absolventa"])
+        self.assertEqual(list(config.SOURCES), ["indeed", "linkedin", "glassdoor", "arbeitsagentur", "stepstone", "absolventa"])
 
     def job(self, number, site="arbeitsagentur", **extra):
         return {"id": f"id{number}", "title": f"Job {number}", "links": {site: f"https://example.com/{number}"}, "description": None, **extra}
