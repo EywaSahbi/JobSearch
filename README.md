@@ -46,8 +46,6 @@ The viewer opens at `http://127.0.0.1:8765`. The “Search settings” button se
 | `sources.py` | sources that do not go through JobSpy |
 | `career_ops.py` | sends jobs to career-ops |
 | `vendor/leaflet/` | the map library, see [Third-party code](#third-party-code) |
-| `test_sources.py` | tests for the sources and for loading descriptions |
-| `test_career_ops.py` | tests for sending to career-ops and for the server routes |
 | `settings.json` | your search settings, written on the first save, not in Git |
 | `output/jobs.json` | all collected jobs |
 | `output/jobs.js` | the same data as a script for the viewer |
@@ -275,15 +273,7 @@ The built-in career-ops updater only works in its own Git checkout and refuses t
 
 ## Tests
 
-```
-python -m unittest
-```
-
-The tests write to a temporary folder and do not touch `career-ops/`. The server tests start the server on a free port and pretend to be its own address, because it rejects other requests.
-
-The source tests use stored sample responses and do not go online. The search settings, the place lookup and the map window have no automated tests.
-
-The career-ops test suite is not included in this repository.
+The project has no automated tests. The career-ops test suite is not included in this repository either.
 
 ## Third-party code
 
@@ -292,4 +282,4 @@ The career-ops test suite is not included in this repository.
 - The map uses [Leaflet](https://leafletjs.com) 1.9.4 (BSD 2-Clause license), stored unchanged in `vendor/leaflet/` together with its license.
 - Map images and place data come from [OpenStreetMap](https://www.openstreetmap.org/copyright) (© OpenStreetMap contributors, Open Database License); the map shows this credit. Places are looked up with OpenStreetMap's Nominatim service under its usage policy.
 
-The scraper, the viewer, the career-ops integration and the tests are this project's own code.
+The scraper, the viewer, the search settings and the career-ops integration are this project's own code.
