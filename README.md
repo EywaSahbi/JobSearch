@@ -9,7 +9,7 @@ This file is the only documentation of the project, including the bundled `caree
 ## How it works
 
 1. **Choose:** In the viewer, “Search settings” sets the places (pins with a radius on a map), the search terms, the title filter and the sources.
-2. **Collect:** `scraper.py` queries the job boards for every search term and place and merges the results.
+2. **Collect:** `scraper.py` queries the job boards for every search term and place and replaces the previous results with what it finds.
 3. **Review:** `viewer.html` lists the jobs with filters, a search box and keyboard shortcuts.
 4. **Evaluate:** One click sends a job and its description to the career-ops inbox, where it is scored against your CV.
 
@@ -79,7 +79,6 @@ The remaining settings are constants at the top of `scraper.py`.
 |---|---|
 | `RESULTS_PER_SEARCH` | results per search term, place and source |
 | `HOURS_OLD` | maximum age of a posting, in hours |
-| `KEEP_DAYS` | after how many days an entry is removed |
 | `MAX_DETAILS` | maximum number of descriptions loaded per source and run |
 | `PORT` | port of the local server |
 | `CAREER_OPS_DIR` | folder that contains career-ops |
@@ -108,7 +107,9 @@ The remaining settings are constants at the top of `scraper.py`.
 - **Blocking source:** After five failed requests in a row the scraper leaves that source alone for the rest of the run. The remaining jobs follow on the next run.
 - **JobSpy dependency:** Loading LinkedIn descriptions uses an internal JobSpy function, which may change with a library update. If it does, LinkedIn is skipped when loading descriptions and everything else keeps working.
 - **Checkpoints:** The data is saved once after the search and again after loading descriptions, so an interrupted run loses no results.
-- **Clean-up:** Entries older than `KEEP_DAYS` are removed when the data is loaded.
+- **Every run replaces the stored jobs:** After a run, `output/jobs.json` holds only the jobs that run found. A job found again keeps its description, so it is not loaded twice, and the time it was first found, so “New in last run” still shows only new jobs. Its links and search terms come from the current run.
+- **Jobs that stay:** Jobs sent to career-ops stay even when a run no longer finds them. If a source fails during a run, for example because there is no connection or LinkedIn blocks, its jobs from the previous run stay as well, so a run without internet deletes nothing. A run that is interrupted before the search has finished leaves the stored jobs unchanged.
+- **Saved, applied and hidden jobs:** Saved and applied jobs stay visible through the copy the viewer keeps, see [The viewer](#the-viewer). Hidden jobs disappear once no run finds them; if one is found again, it is still hidden.
 
 ### Sources
 
@@ -169,7 +170,7 @@ The remaining settings are constants at the top of `scraper.py`.
 - **Data:** The viewer loads `output/jobs.js` as a script, so `viewer.html` also works when opened as a file. The “Search settings”, “Scrape now” and “Send to career-ops” buttons need the running server, though.
 - **Map:** The map images come from the OpenStreetMap tile servers and need an internet connection. They are shown with muted colors, and inverted in dark mode. The keyboard shortcuts are off while the settings window is open.
 - **Your marks:** Saved, applied, hidden and read are stored in the browser's localStorage, so they apply to that browser only.
-- **Removed jobs:** Saved and applied jobs keep a copy in the browser. They stay visible even after the scraper has removed them after `KEEP_DAYS`. If storage runs full, the copies are kept without descriptions.
+- **Jobs no longer found:** Saved and applied jobs keep a copy in the browser, so they stay visible after a run no longer finds them. Every job the last run did not find carries a “No longer listed” tag; the posting has probably been taken down. If storage runs full, the copies are kept without descriptions.
 - **Next job:** When a job leaves the list because you hid it or applied, the next one is selected.
 - **Reload:** After “Show results” the viewer returns to the job you had open.
 - **Descriptions:** Descriptions arrive as Markdown from the job boards. The viewer escapes the whole text first and then builds only a fixed set of formatting. HTML inside a posting is therefore shown as text and never executed.

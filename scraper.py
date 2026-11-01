@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -21,7 +21,6 @@ import sources
 
 RESULTS_PER_SEARCH = 30
 HOURS_OLD = 168
-KEEP_DAYS = 45
 MAX_DETAILS = 200
 
 PORT = 8765
@@ -112,7 +111,35 @@ def to_record(row, term, now):
         "links": {row["site"]: row["job_url"]},
         "terms": [term],
         "first_seen": now,
+        "last_seen": now,
     }
+
+
+def carry(rec, old):
+    if old:
+        rec["first_seen"] = old["first_seen"]
+        for field in ("description", "salary", "job_type", "job_level", "date_posted"):
+            if not rec.get(field) and old.get(field):
+                rec[field] = old[field]
+        if not rec.get("description") and old.get("detail_tries"):
+            rec["detail_tries"] = old["detail_tries"]
+    return rec
+
+
+def retain(db, old, failed, keep_ids, now):
+    kept = 0
+    for job_id, job in old.items():
+        lost = {site: url for site, url in job["links"].items() if site in failed}
+        if job_id in db:
+            for site, url in lost.items():
+                db[job_id]["links"].setdefault(site, url)
+        elif lost:
+            db[job_id] = {**job, "last_seen": now}
+            kept += 1
+        elif job_id in keep_ids:
+            db[job_id] = job
+            kept += 1
+    return kept
 
 
 def merge(db, rec):
@@ -168,10 +195,11 @@ def no_progress(phase, done, total, text):
     pass
 
 
-def scrape(db, settings, sites, hours_old, now, progress=no_progress, places=PLACES):
+def scrape(old, settings, sites, hours_old, now, progress=no_progress, places=PLACES):
     rules = title_rules(settings)
     groups = plan(settings, sites)
     total = sum(len(here) for _, _, here in groups)
+    db, failed = {}, set()
     new = dropped = done = 0
     for term, location, here in groups:
         inside = places.within(location)
@@ -182,15 +210,21 @@ def scrape(db, settings, sites, hours_old, now, progress=no_progress, places=PLA
             try:
                 rows = search(site, term, location, hours_old, inside)
             except Exception as exc:
+                failed.add(site)
                 counts.append(f"{site}: error ({str(exc)[:60]})")
                 continue
             wanted = [row for row in rows if not excluded(row.get("title"), rules)]
             dropped += len(rows) - len(wanted)
-            new += sum(merge(db, to_record(row, term, now)) for row in wanted)
+            for row in wanted:
+                rec = to_record(row, term, now)
+                if rec["id"] not in db:
+                    carry(rec, old.get(rec["id"]))
+                    new += rec["id"] not in old
+                merge(db, rec)
             counts.append(f"{site} {len(wanted)}")
         print(f"[{done:>2}/{total}] {term} · {location['name']}: {', '.join(counts)}", flush=True)
     print(f"{dropped} results dropped by the title filter")
-    return new
+    return db, new, failed
 
 
 def linkedin_loader():
@@ -271,8 +305,7 @@ def read_db(rules):
     if not DB_FILE.exists():
         return {}, None
     data = json.loads(DB_FILE.read_text(encoding="utf-8"))
-    cutoff = (datetime.now() - timedelta(days=KEEP_DAYS)).isoformat()
-    db = {j["id"]: j for j in data["jobs"] if j["first_seen"] >= cutoff and not excluded(j["title"], rules)}
+    db = {j["id"]: j for j in data["jobs"] if not excluded(j["title"], rules)}
     return db, data.get("generated")
 
 
@@ -289,16 +322,21 @@ def save(db, generated, settings):
     JS_FILE.write_text("window.JOBS_DATA = " + text.replace("</", "<\\/") + ";\n", encoding="utf-8")
 
 
+def sent_to_career_ops():
+    return career_ops.sent_ids(CAREER_OPS_DIR) if career_ops.is_ready(CAREER_OPS_DIR) else set()
+
+
 def run_scrape(settings, sites, hours_old, fast, progress=no_progress):
     now = datetime.now().isoformat(timespec="seconds")
-    db, _ = read_db(title_rules(settings))
+    old, _ = read_db(title_rules(settings))
     PLACES.reset()
-    new = scrape(db, settings, sites, hours_old, now, progress)
+    db, new, failed = scrape(old, settings, sites, hours_old, now, progress)
+    kept = retain(db, old, failed, sent_to_career_ops(), now)
     save(db, now, settings)
     if not fast:
         fetch_details(db, detail_loaders(), MAX_DETAILS, progress)
         save(db, now, settings)
-    print(f"{new} new jobs, {len(db)} in total in {DB_FILE}", flush=True)
+    print(f"{new} new jobs, {len(db)} in total in {DB_FILE}, {len(old) + new - len(db)} old jobs removed, {kept} kept", flush=True)
     return new, len(db)
 
 

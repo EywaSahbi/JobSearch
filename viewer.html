@@ -386,6 +386,8 @@ for (const j of jobs) {
   if (m && m.job && known.has(j.id)) m.job = snapshot(j);
 }
 const byId = new Map(jobs.map((j) => [j.id, j]));
+const tracked = DATA.jobs.some((j) => j.last_seen);
+const gone = (j) => Boolean(DATA.generated) && (!known.has(j.id) || (tracked && (j.last_seen || j.first_seen) !== DATA.generated));
 
 const f = Object.assign(
   { tab: 'open', cities: [], terms: [], sites: [], days: 0, remote: false, sort: 'date' },
@@ -471,6 +473,7 @@ function itemHtml(j) {
     j.first_seen === DATA.generated && !m.seen ? '<span class="tag new">New</span>' : '',
     m.s === 'applied' ? '<span class="tag done">Applied</span>' : '',
     careerOps.sent.has(j.id) ? '<span class="tag">career-ops</span>' : '',
+    gone(j) ? '<span class="tag">No longer listed</span>' : '',
     j.is_remote ? '<span class="tag">Remote</span>' : '',
     j.salary ? `<span class="tag">${esc(j.salary)}</span>` : '',
   ].join('');
@@ -558,6 +561,7 @@ function renderDetail() {
   const types = String(j.job_type || '').split(',').map((t) => TYPES[t.trim()] || t.trim()).filter(Boolean);
   const level = j.job_level && j.job_level !== 'not applicable' ? j.job_level : '';
   const tags = [
+    gone(j) && 'No longer listed',
     relDate(j._date) && `Posted ${relDate(j._date)}`,
     ...types,
     level,
