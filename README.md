@@ -4,13 +4,13 @@ Scrapes job boards for your search terms around the places you pick on a map, li
 
 Everything runs on your machine. No account is needed.
 
-This file is the only documentation of the project, including the bundled `career-ops/` folder. The code has no comments.
+This file is the only documentation of the project, including the bundled `app/career-ops/` folder. The code has no comments.
 
 ## How it works
 
 1. **Choose:** In the viewer, “Search settings” sets the places (pins with a radius on a map), the search terms, the title filter and the sources.
-2. **Collect:** `scraper.py` queries the job boards for every search term and place and replaces the previous results with what it finds.
-3. **Review:** `viewer.html` lists the jobs with filters, a search box and keyboard shortcuts.
+2. **Collect:** `app/scraper.py` queries the job boards for every search term and place and replaces the previous results with what it finds.
+3. **Review:** `app/viewer.html` lists the jobs with filters, a search box and keyboard shortcuts.
 4. **Evaluate:** One click sends a job and its description to the career-ops inbox, where it is scored against your CV.
 
 ## Getting started
@@ -19,38 +19,41 @@ Requires Python 3.10 or newer.
 
 ```
 pip install python-jobspy
-python scraper.py
+python jobsearch.py
 ```
 
 The viewer opens at `http://127.0.0.1:8765`. Before the first run, open “Search settings” and add at least one place and one search term. After that the “Scrape now” button starts a run; `Ctrl+C` in the terminal stops the server.
 
 | Command | Effect |
 |---|---|
-| `python scraper.py` | start the viewer |
-| `python scraper.py --scrape` | scrape in the terminal only, without the viewer |
+| `python jobsearch.py` | start the viewer |
+| `python jobsearch.py --scrape` | scrape in the terminal only, without the viewer |
 | `--hours 24` | only jobs posted in the last 24 hours |
 | `--fast` | do not load job descriptions after the search |
 | `--sites indeed linkedin` | query only these sources instead of those chosen in the search settings, see [Sources](#sources) for the names |
-| `--csv` | with `--scrape`: also write `output/jobs.csv` |
+| `--csv` | with `--scrape`: also write `app/output/jobs.csv` |
 | `--no-open` | do not open the browser |
 
 ## Project layout
 
+The top level holds only this README, `jobsearch.py` to start the program and `.gitignore`. Everything else is in `app/`.
+
 | Path | Content |
 |---|---|
-| `scraper.py` | scraper and local server |
-| `viewer.html` | viewer, a single file without a build step |
-| `settings.js` | the “Search settings” window |
-| `config.py` | loads, checks and saves the search settings |
-| `places.py` | place lookup with OpenStreetMap and the distance check |
-| `sources.py` | sources that do not go through JobSpy |
-| `career_ops.py` | sends jobs to career-ops |
-| `vendor/leaflet/` | the map library, see [Third-party code](#third-party-code) |
-| `settings.json` | your search settings, written on the first save, not in Git |
-| `output/jobs.json` | all collected jobs, not in Git |
-| `output/jobs.js` | the same data as a script for the viewer, not in Git |
-| `output/places.json` | places already looked up, not in Git |
-| `career-ops/` | career-ops, see [Third-party code](#third-party-code) |
+| `jobsearch.py` | starts the program |
+| `app/scraper.py` | scraper and local server |
+| `app/viewer.html` | viewer, a single file without a build step |
+| `app/settings.js` | the “Search settings” window |
+| `app/config.py` | loads, checks and saves the search settings |
+| `app/places.py` | place lookup with OpenStreetMap and the distance check |
+| `app/sources.py` | sources that do not go through JobSpy |
+| `app/career_ops.py` | sends jobs to career-ops |
+| `app/vendor/leaflet/` | the map library, see [Third-party code](#third-party-code) |
+| `app/settings.json` | your search settings, written on the first save, not in Git |
+| `app/output/jobs.json` | all collected jobs, not in Git |
+| `app/output/jobs.js` | the same data as a script for the viewer, not in Git |
+| `app/output/places.json` | places already looked up, not in Git |
+| `app/career-ops/` | career-ops, see [Third-party code](#third-party-code) |
 
 ## Your data stays on your machine
 
@@ -58,16 +61,16 @@ The repository contains only the program. Everything you set up or collect is ex
 
 | What | Where |
 |---|---|
-| your search: places, search terms, title filter, sources | `settings.json` |
-| scraped jobs and looked-up places | `output/` |
-| your CV, profile and documents for career-ops | `career-ops/cv.md`, `career-ops/config/profile.yml`, `career-ops/modes/_profile.md`, `career-ops/portals.yml`, `career-ops/documents/` |
-| career-ops inbox, reports, job descriptions and generated CVs | `career-ops/data/`, `career-ops/reports/`, `career-ops/jds/`, `career-ops/output/` |
+| your search: places, search terms, title filter, sources | `app/settings.json` |
+| scraped jobs and looked-up places | `app/output/` |
+| your CV, profile and documents for career-ops | `app/career-ops/cv.md`, `app/career-ops/config/profile.yml`, `app/career-ops/modes/_profile.md`, `app/career-ops/portals.yml`, `app/career-ops/documents/` |
+| career-ops inbox, reports, job descriptions and generated CVs | `app/career-ops/data/`, `app/career-ops/reports/`, `app/career-ops/jds/`, `app/career-ops/output/` |
 
 Saved, applied and hidden marks live in your browser and never reach the repository either.
 
 ## Search settings
 
-The “Search settings” button in the viewer opens a window with a world map. What you set there is saved in `settings.json` next to `scraper.py`, and `python scraper.py --scrape` uses the same file. Without the file no search is set up: there are no places, no search terms and no title filter, and all sources are chosen. Until a place and a search term are saved, “Scrape now” only shows a reminder.
+The “Search settings” button in the viewer opens a window with a world map. What you set there is saved in `app/settings.json` next to `app/scraper.py`, and `python jobsearch.py --scrape` uses the same file. Without the file no search is set up: there are no places, no search terms and no title filter, and all sources are chosen. Until a place and a search term are saved, “Scrape now” only shows a reminder.
 
 | Setting | Meaning |
 |---|---|
@@ -81,12 +84,12 @@ The “Search settings” button in the viewer opens a window with a world map. 
 - **Place names:** The job boards get the name in the place's own language, for example “München” rather than “Munich”.
 - **Searches per run:** The window counts the searches a run makes: search terms times places times the sources that cover each place.
 - **Saving:** “Save” applies from the next run, “Save and scrape” starts one right away. While a run is going, saving is blocked. Settings without a place, a search term or a source are not saved; the window says why.
-- **Broken file:** If `settings.json` cannot be read, the terminal says so and no search is set up until you save again.
+- **Broken file:** If `app/settings.json` cannot be read, the terminal says so and no search is set up until you save again.
 - **Command line:** `--sites` replaces the chosen sources for that run. A viewer started with `--sites` uses it for every run it starts.
 
 ### Other settings
 
-The remaining settings are constants at the top of `scraper.py`.
+The remaining settings are constants at the top of `app/scraper.py`.
 
 | Name | Meaning |
 |---|---|
@@ -108,7 +111,7 @@ The remaining settings are constants at the top of `scraper.py`.
 ### Place lookup
 
 - **Service:** Places are looked up with Nominatim, the free search service of OpenStreetMap. No account is needed. All lookups go through the local server, which names the program and waits at least a second between two lookups, as Nominatim's usage policy requires.
-- **Remembered places:** Every answer, including “not found”, is stored in `output/places.json` and not asked again.
+- **Remembered places:** Every answer, including “not found”, is stored in `app/output/places.json` and not asked again.
 - **Failing lookups:** A failed lookup is not stored and is tried again next time. If Nominatim refuses requests or three lookups in a row fail, the run asks no more for its remaining searches; jobs whose town is unknown are kept.
 
 ## The scraper
@@ -120,7 +123,7 @@ The remaining settings are constants at the top of `scraper.py`.
 - **Blocking source:** After five failed requests in a row the scraper leaves that source alone for the rest of the run. The remaining jobs follow on the next run.
 - **JobSpy dependency:** Loading LinkedIn descriptions uses an internal JobSpy function, which may change with a library update. If it does, LinkedIn is skipped when loading descriptions and everything else keeps working.
 - **Checkpoints:** The data is saved once after the search and again after loading descriptions, so an interrupted run loses no results.
-- **Every run replaces the stored jobs:** After a run, `output/jobs.json` holds only the jobs that run found. A job found again keeps its description, so it is not loaded twice, and the time it was first found, so “New in last run” still shows only new jobs. Its links and search terms come from the current run.
+- **Every run replaces the stored jobs:** After a run, `app/output/jobs.json` holds only the jobs that run found. A job found again keeps its description, so it is not loaded twice, and the time it was first found, so “New in last run” still shows only new jobs. Its links and search terms come from the current run.
 - **Jobs that stay:** Jobs sent to career-ops stay even when a run no longer finds them. If a source fails during a run, for example because there is no connection or LinkedIn blocks, its jobs from the previous run stay as well, so a run without internet deletes nothing. A run that is interrupted before the search has finished leaves the stored jobs unchanged.
 - **Saved, applied and hidden jobs:** Saved and applied jobs stay visible through the copy the viewer keeps, see [The viewer](#the-viewer). Hidden jobs disappear once no run finds them; if one is found again, it is still hidden.
 
@@ -138,7 +141,7 @@ The remaining settings are constants at the top of `scraper.py`.
 - **JobSpy:** Indeed, LinkedIn and Glassdoor are queried through the JobSpy library. Indeed and Glassdoor have one site per country; the scraper uses the site of the place's country and skips the source where JobSpy knows no site. LinkedIn gets the place with its country, for example “Amsterdam, Netherlands”. JobSpy works in miles, so the radius is converted.
 - **Germany only:** The Arbeitsagentur (the German Federal Employment Agency), StepStone and Absolventa only list jobs in Germany and are only asked for places in Germany. The settings window shows for each place which of the chosen sources are skipped there.
 - **Arbeitsagentur:** The search uses the API behind the job search on arbeitsagentur.de. It is not officially documented and may change. Apprenticeships are excluded.
-- **StepStone:** There is no API. The scraper reads the first result page per search term and place, so at most 25 jobs, and only requests addresses without query parameters, as StepStone's `robots.txt` allows. If StepStone changes its page layout, the source returns nothing until `sources.py` is updated. Salaries estimated by StepStone are ignored; only salaries stated by the employer are kept.
+- **StepStone:** There is no API. The scraper reads the first result page per search term and place, so at most 25 jobs, and only requests addresses without query parameters, as StepStone's `robots.txt` allows. If StepStone changes its page layout, the source returns nothing until `app/sources.py` is updated. Salaries estimated by StepStone are ignored; only salaries stated by the employer are kept.
 - **Absolventa:** A job board for graduates and entry-level jobs. There is no API. The scraper reads the result pages per search term and place, 20 jobs per page, and moves on to the next page only while a page is full and `RESULTS_PER_SEARCH` is not reached. Absolventa sorts by distance and shows no posting date in its results, so `--hours` and `HOURS_OLD` do not apply to it; the date is taken from the job page when its description is loaded. A trailing “...” that some advertisers add to their titles is removed.
 - **Distance check:** StepStone and Absolventa search with their own fixed radius. The scraper therefore looks up the town of each of their results, see [Place lookup](#place-lookup), and drops jobs farther from the pin than its radius. A job that names several towns is kept when one of them is inside. Jobs whose town cannot be found are kept.
 - **Not included:** Google Jobs currently returns no data through JobSpy, XING requires a login, and Arbeitnow and service.bund.de offer no search and returned very few relevant jobs. Berufsstart.de was tested in October 2026: across all search terms it listed at most 33 jobs nationwide.
@@ -180,7 +183,7 @@ The remaining settings are constants at the top of `scraper.py`.
 | `C` | send to career-ops |
 | `/` | search |
 
-- **Data:** The viewer loads `output/jobs.js` as a script, so `viewer.html` also works when opened as a file. The “Search settings”, “Scrape now” and “Send to career-ops” buttons need the running server, though.
+- **Data:** The viewer loads `app/output/jobs.js` as a script, so `app/viewer.html` also works when opened as a file. The “Search settings”, “Scrape now” and “Send to career-ops” buttons need the running server, though.
 - **Map:** The map images come from the OpenStreetMap tile servers and need an internet connection. They are shown with muted colors, and inverted in dark mode. The keyboard shortcuts are off while the settings window is open.
 - **Your marks:** Saved, applied, hidden and read are stored in the browser's localStorage, so they apply to that browser only.
 - **Jobs no longer found:** Saved and applied jobs keep a copy in the browser, so they stay visible after a run no longer finds them. Every job the last run did not find carries a “No longer listed” tag; the posting has probably been taken down. If storage runs full, the copies are kept without descriptions.
@@ -194,8 +197,8 @@ career-ops scores a job against your CV, writes an adapted CV and keeps track of
 
 The “Send to career-ops” button (or “Send all to career-ops” in the Saved view) creates two things per job:
 
-- a file `career-ops/jds/<company>-<title>-<id>.md` with the job's details, its links and the full description
-- a line at the end of the “Pending” section of `career-ops/data/pipeline.md` that points to this file
+- a file `app/career-ops/jds/<company>-<title>-<id>.md` with the job's details, its links and the full description
+- a line at the end of the “Pending” section of `app/career-ops/data/pipeline.md` that points to this file
 
 ```
 - [ ] local:jds/<file> | Company | Title | Location | posted: 2026-10-06
@@ -215,14 +218,14 @@ career-ops then reads the description locally and does not have to fetch the pos
 
 ## Using career-ops
 
-career-ops has no user interface of its own. You open Claude Code (or a similar AI command-line tool) in the `career-ops/` folder, and it follows the instructions and runs the scripts there. It never submits an application; it prepares it, and you send it yourself.
+career-ops has no user interface of its own. You open Claude Code (or a similar AI command-line tool) in the `app/career-ops/` folder, and it follows the instructions and runs the scripts there. It never submits an application; it prepares it, and you send it yourself.
 
 ### Setup
 
 Once, with Node.js 22.13 or newer:
 
 ```
-cd career-ops
+cd app/career-ops
 npm install
 npm run doctor
 ```
@@ -240,11 +243,11 @@ Your own files that career-ops expects:
 
 Put existing documents such as your CV as a PDF into `documents/cv/`. `/career-ops intake` reads them and proposes the content for `cv.md`, the profile and `modes/_profile.md`; nothing is written without your confirmation. The `documents/` folder is excluded from Git.
 
-On first start the AI CLI asks for any missing information and creates the files. All paths are relative to `career-ops/`.
+On first start the AI CLI asks for any missing information and creates the files. All paths are relative to `app/career-ops/`.
 
 ### Commands
 
-In Claude Code, in the `career-ops/` folder:
+In Claude Code, in the `app/career-ops/` folder:
 
 | Command | Effect |
 |---|---|
@@ -276,7 +279,7 @@ career-ops ships instructions for several job markets under `modes/<language>/`,
 | `data/pipeline.md` | inbox: pending and processed jobs |
 | `jds/` | stored job descriptions, including those from JobSearch |
 | `reports/` | evaluation reports, one per job, scored from 1 to 5 |
-| `output/` | generated CVs and cover letters |
+| `app/output/` | generated CVs and cover letters |
 | `data/applications.md` | application tracker |
 
 These files, your CV and your profile are excluded by career-ops' `.gitignore`. They stay on your machine and never end up in the repository.
@@ -291,9 +294,9 @@ The project has no automated tests. The career-ops test suite is not included in
 
 ## Third-party code
 
-- The `career-ops/` folder contains the open-source project [career-ops](https://github.com/career-ops-hq/career-ops) by Santiago Fernández de Valderrama, version 1.36.0, under the MIT license, see `career-ops/LICENSE`. Its documentation, images, tests and comments have been removed; the code itself is unchanged. The license files are kept.
+- The `app/career-ops/` folder contains the open-source project [career-ops](https://github.com/career-ops-hq/career-ops) by Santiago Fernández de Valderrama, version 1.36.0, under the MIT license, see `app/career-ops/LICENSE`. Its documentation, images, tests and comments have been removed; the code itself is unchanged. The license files are kept.
 - Job boards are queried with the [JobSpy](https://pypi.org/project/python-jobspy/) library (MIT license).
-- The map uses [Leaflet](https://leafletjs.com) 1.9.4 (BSD 2-Clause license), stored unchanged in `vendor/leaflet/` together with its license.
+- The map uses [Leaflet](https://leafletjs.com) 1.9.4 (BSD 2-Clause license), stored unchanged in `app/vendor/leaflet/` together with its license.
 - Map images and place data come from [OpenStreetMap](https://www.openstreetmap.org/copyright) (© OpenStreetMap contributors, Open Database License); the map shows this credit. Places are looked up with OpenStreetMap's Nominatim service under its usage policy.
 
 The scraper, the viewer, the search settings and the career-ops integration are this project's own code.

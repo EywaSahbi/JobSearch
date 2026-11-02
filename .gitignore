@@ -1,4 +1,4 @@
 __pycache__/
-career-ops/documents/
-settings.json
-output/
+app/settings.json
+app/output/
+app/career-ops/documents/
