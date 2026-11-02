@@ -18,17 +18,18 @@ MAX_WORDS = 100
 MAX_TEXT = 100
 RADIUS_KM = (5, 200)
 
-def nrw(name, lat, lon):
-    return {"name": name, "region": "North Rhine-Westphalia", "country": "de", "country_name": "Germany", "lat": lat, "lon": lon, "radius_km": 30}
-
-
 DEFAULTS = {
-    "locations": [nrw("Dortmund", 51.514, 7.465), nrw("Essen", 51.455, 7.012), nrw("Düsseldorf", 51.227, 6.773)],
-    "terms": ["Software Engineer", "Softwareentwickler", "DevOps", "Systemadministrator", "IT Support", "Fachinformatiker"],
+    "locations": [],
+    "terms": [],
     "sites": list(SOURCES),
-    "exclude_title": ["*ausbildung*", "Auszubildende*", "Azubi*", "Senior", "Sr", "Principal", "Lead", "Head of"],
-    "keep_title": ["Junior"],
+    "exclude_title": [],
+    "keep_title": [],
 }
+NOT_READY = "Set up your search first: open “Search settings”, add at least one place and one search term, and save."
+
+
+def ready(settings):
+    return bool(settings["locations"] and settings["terms"] and settings["sites"])
 
 
 def one_line(value):
@@ -137,7 +138,7 @@ def load(path):
     except (OSError, ValueError) as exc:
         settings, errors = None, [str(exc)]
     if settings is None:
-        print(f"{path.name} could not be used ({errors[0]}), using the example search instead.", flush=True)
+        print(f"{path.name} could not be used ({errors[0]}), so no search is set up until you save new settings.", flush=True)
         return copy.deepcopy(DEFAULTS)
     return settings
 

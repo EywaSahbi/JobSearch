@@ -22,7 +22,7 @@ pip install python-jobspy
 python scraper.py
 ```
 
-The viewer opens at `http://127.0.0.1:8765`. The “Search settings” button sets what to search for, the “Scrape now” button starts a run; `Ctrl+C` in the terminal stops the server.
+The viewer opens at `http://127.0.0.1:8765`. Before the first run, open “Search settings” and add at least one place and one search term. After that the “Scrape now” button starts a run; `Ctrl+C` in the terminal stops the server.
 
 | Command | Effect |
 |---|---|
@@ -47,14 +47,27 @@ The viewer opens at `http://127.0.0.1:8765`. The “Search settings” button se
 | `career_ops.py` | sends jobs to career-ops |
 | `vendor/leaflet/` | the map library, see [Third-party code](#third-party-code) |
 | `settings.json` | your search settings, written on the first save, not in Git |
-| `output/jobs.json` | all collected jobs |
-| `output/jobs.js` | the same data as a script for the viewer |
+| `output/jobs.json` | all collected jobs, not in Git |
+| `output/jobs.js` | the same data as a script for the viewer, not in Git |
 | `output/places.json` | places already looked up, not in Git |
 | `career-ops/` | career-ops, see [Third-party code](#third-party-code) |
 
+## Your data stays on your machine
+
+The repository contains only the program. Everything you set up or collect is excluded from Git, so a fresh clone starts without anybody's search, jobs or CV:
+
+| What | Where |
+|---|---|
+| your search: places, search terms, title filter, sources | `settings.json` |
+| scraped jobs and looked-up places | `output/` |
+| your CV, profile and documents for career-ops | `career-ops/cv.md`, `career-ops/config/profile.yml`, `career-ops/modes/_profile.md`, `career-ops/portals.yml`, `career-ops/documents/` |
+| career-ops inbox, reports, job descriptions and generated CVs | `career-ops/data/`, `career-ops/reports/`, `career-ops/jds/`, `career-ops/output/` |
+
+Saved, applied and hidden marks live in your browser and never reach the repository either.
+
 ## Search settings
 
-The “Search settings” button in the viewer opens a window with a world map. What you set there is saved in `settings.json` next to `scraper.py`, and `python scraper.py --scrape` uses the same file. Without the file an example search applies: Dortmund, Essen and Düsseldorf with 30 km each, some IT job titles and all sources.
+The “Search settings” button in the viewer opens a window with a world map. What you set there is saved in `settings.json` next to `scraper.py`, and `python scraper.py --scrape` uses the same file. Without the file no search is set up: there are no places, no search terms and no title filter, and all sources are chosen. Until a place and a search term are saved, “Scrape now” only shows a reminder.
 
 | Setting | Meaning |
 |---|---|
@@ -68,7 +81,7 @@ The “Search settings” button in the viewer opens a window with a world map. 
 - **Place names:** The job boards get the name in the place's own language, for example “München” rather than “Munich”.
 - **Searches per run:** The window counts the searches a run makes: search terms times places times the sources that cover each place.
 - **Saving:** “Save” applies from the next run, “Save and scrape” starts one right away. While a run is going, saving is blocked. Settings without a place, a search term or a source are not saved; the window says why.
-- **Broken file:** If `settings.json` cannot be read, the terminal says so and the example search applies until you save again.
+- **Broken file:** If `settings.json` cannot be read, the terminal says so and no search is set up until you save again.
 - **Command line:** `--sites` replaces the chosen sources for that run. A viewer started with `--sites` uses it for every run it starts.
 
 ### Other settings
@@ -95,7 +108,7 @@ The remaining settings are constants at the top of `scraper.py`.
 ### Place lookup
 
 - **Service:** Places are looked up with Nominatim, the free search service of OpenStreetMap. No account is needed. All lookups go through the local server, which names the program and waits at least a second between two lookups, as Nominatim's usage policy requires.
-- **Remembered places:** Every answer, including “not found”, is stored in `output/places.json` and not asked again. The 70 or so cities in North Rhine-Westphalia that the project knew before are known from the start.
+- **Remembered places:** Every answer, including “not found”, is stored in `output/places.json` and not asked again.
 - **Failing lookups:** A failed lookup is not stored and is tried again next time. If Nominatim refuses requests or three lookups in a row fail, the run asks no more for its remaining searches; jobs whose town is unknown are kept.
 
 ## The scraper
@@ -128,7 +141,7 @@ The remaining settings are constants at the top of `scraper.py`.
 - **StepStone:** There is no API. The scraper reads the first result page per search term and place, so at most 25 jobs, and only requests addresses without query parameters, as StepStone's `robots.txt` allows. If StepStone changes its page layout, the source returns nothing until `sources.py` is updated. Salaries estimated by StepStone are ignored; only salaries stated by the employer are kept.
 - **Absolventa:** A job board for graduates and entry-level jobs. There is no API. The scraper reads the result pages per search term and place, 20 jobs per page, and moves on to the next page only while a page is full and `RESULTS_PER_SEARCH` is not reached. Absolventa sorts by distance and shows no posting date in its results, so `--hours` and `HOURS_OLD` do not apply to it; the date is taken from the job page when its description is loaded. A trailing “...” that some advertisers add to their titles is removed.
 - **Distance check:** StepStone and Absolventa search with their own fixed radius. The scraper therefore looks up the town of each of their results, see [Place lookup](#place-lookup), and drops jobs farther from the pin than its radius. A job that names several towns is kept when one of them is inside. Jobs whose town cannot be found are kept.
-- **Not included:** Google Jobs currently returns no data through JobSpy, XING requires a login, and Arbeitnow and service.bund.de offer no search and returned very few relevant jobs. Berufsstart.de was tested in October 2026: across all search terms it listed at most 33 jobs nationwide and almost none in the Dortmund, Essen and Düsseldorf area.
+- **Not included:** Google Jobs currently returns no data through JobSpy, XING requires a login, and Arbeitnow and service.bund.de offer no search and returned very few relevant jobs. Berufsstart.de was tested in October 2026: across all search terms it listed at most 33 jobs nationwide.
 
 ## The local server
 

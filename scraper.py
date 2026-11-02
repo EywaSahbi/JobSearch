@@ -327,6 +327,8 @@ def sent_to_career_ops():
 
 
 def run_scrape(settings, sites, hours_old, fast, progress=no_progress):
+    if not config.ready(settings):
+        raise ValueError(config.NOT_READY)
     now = datetime.now().isoformat(timespec="seconds")
     old, _ = read_db(title_rules(settings))
     PLACES.reset()
@@ -435,6 +437,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.save_settings()
         if self.path != "/api/scrape":
             return self.send_error(404)
+        if not config.ready(config.load(self.settings_file)):
+            return self.reply_json({"error": config.NOT_READY}, 409)
         start_scrape(self.args)
         self.reply_json(STATE)
 
@@ -550,6 +554,9 @@ def main():
         return serve(args)
 
     settings = config.load(SETTINGS_FILE)
+    if not config.ready(settings):
+        print(config.NOT_READY)
+        sys.exit(1)
     run_scrape(settings, args.sites or settings["sites"], args.hours, args.fast)
     if args.csv:
         import pandas as pd

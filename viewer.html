@@ -493,7 +493,7 @@ function renderList() {
   $('#count').innerHTML = `<span>${visible.length} ${visible.length === 1 ? 'job' : 'jobs'}</span>`
     + (unsent ? `<button type="button" class="btn" id="send-all">Send all to career-ops (${unsent})</button>` : '');
   if (!DATA.generated && !jobs.length) {
-    $('#list').innerHTML = '<li class="empty"><strong>No data yet</strong>Click “Scrape now” at the top.</li>';
+    $('#list').innerHTML = '<li class="empty"><strong>No data yet</strong>Choose places and search terms in “Search settings”, then click “Scrape now”.</li>';
   } else if (!visible.length) {
     $('#list').innerHTML = '<li class="empty"><strong>No matches</strong>Loosen the filters or pick another view on the left.</li>';
   } else {
@@ -741,6 +741,12 @@ async function startScrape() {
   $('#scrape').disabled = true;
   try {
     const res = await fetch('/api/scrape', { method: 'POST' });
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      $('#scrape').disabled = false;
+      showProgress(0, body.error || 'Set up your search first in “Search settings”.', 'note');
+      return;
+    }
     if (!res.ok) throw new Error(res.status);
     watching = true;
     showProgress(0, 'Starting …');
